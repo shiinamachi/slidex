@@ -320,6 +320,7 @@ Purpose: create the static HTML slide source.
 Required output:
 
 - `${OUT_DIR}/final_deck.html`
+- `${OUT_DIR}/final_deck.generated_baseline.html`
 - update `${OUT_DIR}/notes.md`
 
 Build rules:
@@ -335,6 +336,9 @@ Build rules:
 - Avoid unsupported claims, fake metrics, fake customers, fake product names,
   fake screenshots, and invented technical scope.
 - Document external dependencies in `notes.md`.
+- After writing `final_deck.html`, copy the generated HTML to
+  `final_deck.generated_baseline.html`. This baseline represents the latest
+  approved generated state before any direct user HTML edits.
 
 ### `prompts/04_render_html.md`
 
@@ -349,7 +353,9 @@ Required outputs:
 
 Rendering requirements:
 
-- Use the `codex-business-deck-kit` CLI, headless Chrome, or CDP.
+- Use the required `codex-business-deck-kit render` command. The CLI may use
+  headless Chrome or CDP internally, but prompt files must call the CLI rather
+  than bypassing it for the required production workflow.
 - Wait for `document.fonts.ready`.
 - Capture each `.slide` element, not the full scrolling page.
 - Enforce expected dimensions, default `1920x1080`.
@@ -491,7 +497,7 @@ Recommended field details:
     "qaMontage": "out/qa_montage.png"
   },
   "renderConfig": {
-    "engine": "codex-business-deck-kit-cli | chrome-cdp | other",
+    "engine": "codex-business-deck-kit-cli",
     "slideSelector": ".slide",
     "widthPx": 1920,
     "heightPx": 1080,
@@ -635,6 +641,7 @@ Recommended implementation:
 - PNG file paths and hashes,
 - PDF file path and hash,
 - PDF mode, page count, page size, and image fit,
+- QA montage path, dimensions, and hash,
 - render timestamp,
 - tool name and version,
 - Chrome/Chromium version,
@@ -729,13 +736,19 @@ Implementation requirements:
 10. Re-render images and PDF from the edited HTML.
 11. Rebuild `render_manifest.json`.
 12. Re-run QA and update the report.
-13. Write `html_edit_sync.md` with:
+13. After the edited HTML is accepted and all dependent artifacts are
+    regenerated, update `final_deck.generated_baseline.html` to match the
+    accepted `final_deck.html` and record the new baseline hash in
+    `html_edit_sync.md`.
+14. Write `html_edit_sync.md` with:
    - sync date,
    - detected changes,
    - accepted changes,
    - corrected/rejected changes,
    - derivative files updated,
    - derivative files marked stale,
+   - previous baseline hash,
+   - new baseline hash,
    - files regenerated,
    - remaining risks.
 
@@ -958,6 +971,16 @@ The implementation is complete only when:
   clearly documented Go command path.
 - The CLI provides the minimum required commands: `inspect`, `validate-spec`,
   `render`, `qa`, `sync-html-edits`, and `package`.
+- The required CLI commands are functional, not placeholder stubs:
+  - `inspect` reads a deck workspace and emits a source/output inventory.
+  - `validate-spec` validates `deck_spec.json` against the schema and exits
+    nonzero on invalid specs.
+  - `render` performs the production HTML-to-PNG-to-paginated-PDF workflow.
+  - `qa` runs automated DOM/render/PDF checks and emits machine-readable
+    findings.
+  - `sync-html-edits` detects current HTML changes against the baseline and
+    updates or flags dependent artifacts.
+  - `package` verifies final deliverables and manifest freshness.
 - The `render` command can render HTML `.slide` elements to PNG, create a
   one-slide-per-page PDF, create or support `qa_montage.png`, and write
   `render_manifest.json`.
