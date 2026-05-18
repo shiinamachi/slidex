@@ -1,10 +1,10 @@
 # Deck Brief
 
-## Deck Title
+## Deck ID
 
 -
 
-## Deck ID
+## Deck Title
 
 -
 

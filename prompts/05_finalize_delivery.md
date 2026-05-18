@@ -2,16 +2,21 @@
 
 Finalize the deck delivery without overclaiming.
 
+## Active Deck
+
+First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
+`OUT_DIR` before verifying files or writing final notes.
+
 ## Required Files
 
 Verify that these files exist:
 
-- `out/final_deck.pptx`
-- `out/deck_spec.json`
-- `out/notes.md`
-- `out/qa_report.md`
-- `out/qa_montage.png`
-- rendered slide images
+- `${OUT_DIR}/final_deck.pptx`
+- `${OUT_DIR}/deck_spec.json`
+- `${OUT_DIR}/notes.md`
+- `${OUT_DIR}/qa_report.md`
+- `${OUT_DIR}/qa_montage.png`
+- rendered slide images in `${OUT_DIR}/rendered_slides/`
 
 ## Final Checks
 
@@ -22,15 +27,16 @@ Verify that these files exist:
   unreadable charts remain, unless listed as unresolved risks.
 - Confirm meaningful images have alt text or documented alt text requirements.
 - Confirm generated visual prompts and design notes are documented in
-  `out/notes.md`.
+  `${OUT_DIR}/notes.md`.
 
 ## Output
 
 Write a final delivery summary for the user with:
 
+- Active deck id, active deck directory, and output directory
 - Files created
 - Checks performed
-- How to use the deck
+- How to use the delivered files for this deck
 - Known limitations
 - Unresolved risks
 

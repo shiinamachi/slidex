@@ -6,28 +6,36 @@ Create a complete editable PowerPoint deck from the available brief and source
 materials. Follow the full workflow; do not skip strategy, deck spec, rendering,
 visual QA, revision, or final delivery.
 
+## Active Deck
+
+First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
+`OUT_DIR` before reading deck materials or writing files.
+
 ## Full Workflow
 
-1. Read `brief.md`, brand files, assets, data files, screenshots, PDFs, and
-   source documents.
-2. Inspect `assets/template.pptx` or `assets/reference_deck.pptx` first if
-   present. Match aspect ratio, typography, colors, layout patterns, and brand
-   style. Default to 16:9 only when no source deck or template defines size.
-3. Create `out/strategy.md` with audience, objective, story arc, tone, slide
-   sequence, visual direction, and QA risks.
-4. Create `out/deck_spec.json` following `schemas/deck_spec.schema.json`.
-5. Build `out/final_deck.pptx` with editable PowerPoint text, charts, tables,
-   shapes, and diagrams where practical.
+1. Read `${ACTIVE_DECK_DIR}/brief.md`, brand files, assets, data files,
+   screenshots, PDFs, and source documents from the active deck workspace.
+2. Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx` or
+   `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` first if present. Match
+   aspect ratio, typography, colors, layout patterns, and brand style. Default
+   to 16:9 only when no source deck or template defines size.
+3. Create `${OUT_DIR}/strategy.md` with active deck id and directory, audience,
+   objective, story arc, tone, slide sequence, visual direction, and QA risks.
+4. Create `${OUT_DIR}/deck_spec.json` following
+   `schemas/deck_spec.schema.json`.
+5. Build `${OUT_DIR}/final_deck.pptx` with editable PowerPoint text, charts,
+   tables, shapes, and diagrams where practical.
 6. Use generated visuals only when they support the story. Save generated visual
-   prompts and design notes in `out/notes.md`.
-7. Render every slide to PNG images.
-8. Create `out/qa_montage.png`.
+   prompts and design notes in `${OUT_DIR}/notes.md`.
+7. Render every slide to PNG images in `${OUT_DIR}/rendered_slides/`.
+8. Create `${OUT_DIR}/qa_montage.png`.
 9. Visually inspect the rendered slides and run available validation checks.
-10. Write `out/qa_report.md` with slide-by-slide findings.
+10. Write `${OUT_DIR}/qa_report.md` with slide-by-slide findings.
 11. Fix meaningful issues: layout, overflow, overlap, margins, alignment,
     typography, contrast, text density, chart readability, broken images, and alt
     text.
-12. Re-render slides, recreate the QA montage, and update the QA report.
+12. Re-render slides in `${OUT_DIR}/rendered_slides/`, recreate
+    `${OUT_DIR}/qa_montage.png`, and update `${OUT_DIR}/qa_report.md`.
 13. Repeat revision until the deck is visually acceptable or unresolved risks are
     documented honestly.
 14. Finalize delivery with a summary of files created, checks performed, and

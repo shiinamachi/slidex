@@ -5,10 +5,13 @@
     "owner": "Customer Success Strategy",
     "date": "2026-05-18",
     "version": "0.1",
+    "deckId": "customer-retention-2026-h1",
+    "activeDeckDir": "decks/customer-retention-2026-h1",
+    "outputDir": "decks/customer-retention-2026-h1/out",
     "sourceFiles": [
-      "examples/sample_brief.md",
-      "data/retention_by_segment.csv",
-      "data/support_response_time.xlsx"
+      "decks/customer-retention-2026-h1/brief.md",
+      "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
+      "decks/customer-retention-2026-h1/data/support_response_time.xlsx"
     ]
   },
   "audience": "CEO, CFO, CRO, 고객 성공 리더십",
@@ -110,7 +113,7 @@
       "speakerNotes": "차트의 핵심은 절대 하락폭과 매출 영향이 동시에 큰 세그먼트다.",
       "chartInstructions": {
         "chartType": "line",
-        "dataSource": "data/retention_by_segment.csv",
+        "dataSource": "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
         "message": "Segment retention trend by quarter, with mid-market highlighted.",
         "labels": "Direct-label each segment at the line end.",
         "nativePowerPointChart": true,

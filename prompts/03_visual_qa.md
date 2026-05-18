@@ -3,21 +3,28 @@
 Run visual QA on the generated deck. Do not claim QA passed unless rendered
 slides were inspected.
 
+## Active Deck
+
+First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
+`OUT_DIR` before reading inputs or writing files.
+
 ## Inputs
 
 Read:
 
-- `out/final_deck.pptx`
-- `out/deck_spec.json`
-- `out/notes.md`
+- `${OUT_DIR}/final_deck.pptx`
+- `${OUT_DIR}/deck_spec.json`
+- `${OUT_DIR}/notes.md`
 - `checklists/design_qa.md`
 - `checklists/accessibility_qa.md`
 - `checklists/delivery_qa.md`
 
 ## Tasks
 
-1. Render every slide in `out/final_deck.pptx` to PNG images.
-2. Create `out/qa_montage.png` as a contact sheet or montage of all slides.
+1. Render every slide in `${OUT_DIR}/final_deck.pptx` to PNG images in
+   `${OUT_DIR}/rendered_slides/`.
+2. Create `${OUT_DIR}/qa_montage.png` as a contact sheet or montage of all
+   slides.
 3. Inspect the rendered slides visually.
 4. Run any available validation checks for the PPTX and generated images.
 5. Check for:
@@ -39,8 +46,9 @@ no renderer is available, stop, report the blocker, and do not mark QA as passed
 
 ## Output
 
-Create `out/qa_report.md` with:
+Create `${OUT_DIR}/qa_report.md` with:
 
+- Active deck id, active deck directory, and output directory
 - Render method and files created
 - Overall QA status
 - Slide-by-slide findings

@@ -2,19 +2,24 @@
 
 Create a structured deck specification. Do not create a PPTX in this stage.
 
+## Active Deck
+
+First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
+`OUT_DIR` before reading inputs or writing files.
+
 ## Inputs
 
 Read:
 
-- `brief.md`
-- `out/strategy.md`
-- `brand/guidelines.md`
-- `brand/colors.json`
-- `assets/template.pptx`
-- `assets/reference_deck.pptx`
-- `data/*.csv`
-- `data/*.xlsx`
-- source documents, screenshots, and PDFs
+- `${ACTIVE_DECK_DIR}/brief.md`
+- `${OUT_DIR}/strategy.md`
+- `${ACTIVE_DECK_DIR}/brand/guidelines.md`
+- `${ACTIVE_DECK_DIR}/brand/colors.json`
+- `${ACTIVE_DECK_DIR}/assets/template.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/data/*.csv`
+- `${ACTIVE_DECK_DIR}/data/*.xlsx`
+- source documents, screenshots, and PDFs in the active deck workspace
 - `schemas/deck_spec.schema.json`
 
 If a template or reference deck exists, preserve its aspect ratio and match its
@@ -22,8 +27,10 @@ brand style unless the brief explicitly says otherwise.
 
 ## Requirements
 
-- Create `out/deck_spec.json`.
+- Create `${OUT_DIR}/deck_spec.json`.
 - Follow `schemas/deck_spec.schema.json`.
+- Include active deck id, active deck directory, and output directory in
+  metadata when available.
 - Give every slide one clear message.
 - Use action headlines rather than generic titles.
 - Keep slide messages concise.
@@ -41,4 +48,4 @@ The JSON must parse cleanly. After writing it, validate that it is valid JSON.
 If a JSON Schema validator is available, also validate it against
 `schemas/deck_spec.schema.json`.
 
-Do not create `out/final_deck.pptx` in this stage.
+Do not create `${OUT_DIR}/final_deck.pptx` in this stage.

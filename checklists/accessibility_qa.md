@@ -16,7 +16,7 @@
 
 - Meaningful images have alt text.
 - Decorative images are marked or documented as decorative.
-- Generated visuals have clear descriptions in `out/notes.md`.
+- Generated visuals have clear descriptions in `${OUT_DIR}/notes.md`.
 
 ## Reading Order
 

@@ -2,12 +2,14 @@
 
 ## Final Files
 
-- `out/final_deck.pptx` exists.
-- `out/deck_spec.json` exists.
-- `out/notes.md` exists.
-- `out/qa_report.md` exists.
-- `out/qa_montage.png` exists.
-- Rendered slide images exist.
+- Active deck id and `ACTIVE_DECK_DIR` are documented.
+- `${OUT_DIR}/final_deck.pptx` exists.
+- `${OUT_DIR}/deck_spec.json` exists.
+- `${OUT_DIR}/notes.md` exists.
+- `${OUT_DIR}/qa_report.md` exists.
+- `${OUT_DIR}/qa_montage.png` exists.
+- Rendered slide images exist in `${OUT_DIR}/rendered_slides/`.
+- No generated outputs were written to another deck workspace.
 
 ## PPTX Integrity
 

@@ -4,6 +4,10 @@
 
 2026년 상반기 고객 유지율 개선 전략
 
+## Deck ID
+
+customer-retention-2026-h1
+
 ## Audience
 
 CEO, CFO, CRO, 고객 성공 리더십
@@ -48,8 +52,8 @@ CEO, CFO, CRO, 고객 성공 리더십
 
 ## Data Sources
 
-- `data/retention_by_segment.csv`
-- `data/support_response_time.xlsx`
+- `decks/customer-retention-2026-h1/data/retention_by_segment.csv`
+- `decks/customer-retention-2026-h1/data/support_response_time.xlsx`
 
 ## Visual Preferences
 

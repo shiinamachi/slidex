@@ -13,6 +13,22 @@ or deck generator program. The workspace provides durable instructions,
 templates, schemas, staged prompts, and QA checklists for future deck production
 runs.
 
+## Deck Workspace Model
+
+This repository supports multiple deck workspaces under `decks/<deck_id>/`.
+Before every deck run, resolve the active deck directory using
+`prompts/_active_deck_context.md` and keep inputs and generated outputs scoped to
+that directory.
+
+- Preferred active deck path: `decks/<deck_id>/`
+- Per-deck output path: `${ACTIVE_DECK_DIR}/out/`
+- Legacy root-level `brief.md`, `assets/`, `brand/`, `data/`, and `out/` are
+  supported only for single-deck compatibility.
+- Do not mix materials from multiple deck workspaces unless the user explicitly
+  asks for a combined or comparative deck.
+- Use `shared/brand/`, `shared/assets/`, or `shared/data/` only when explicitly
+  referenced or clearly needed as shared defaults.
+
 ## Git Workflow
 
 - Create a Git commit directly after each small, coherent change.
@@ -33,17 +49,18 @@ runs.
 
 ## Inputs To Inspect
 
-For every future deck run, inspect available inputs before making design
-decisions:
+For every future deck run, inspect available inputs in the active deck
+workspace before making design decisions:
 
-- `brief.md`
-- `assets/template.pptx`
-- `assets/reference_deck.pptx`
-- `assets/logo.png` and other image assets
-- `brand/guidelines.md`
-- `brand/colors.json`
-- `data/*.csv`
-- `data/*.xlsx`
+- `${ACTIVE_DECK_DIR}/brief.md`
+- `${ACTIVE_DECK_DIR}/assets/template.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/assets/logo.png` and other image assets
+- `${ACTIVE_DECK_DIR}/brand/guidelines.md`
+- `${ACTIVE_DECK_DIR}/brand/colors.json`
+- `${ACTIVE_DECK_DIR}/data/*.csv`
+- `${ACTIVE_DECK_DIR}/data/*.xlsx`
+- `${ACTIVE_DECK_DIR}/source/`
 - screenshots, PDFs, notes, or source documents supplied by the user
 
 If a template or reference deck exists, inspect it first and match its aspect
@@ -56,9 +73,10 @@ Every future deck production run must follow this sequence:
 
 1. Intake the brief and source materials.
 2. Extract deck strategy: audience, objective, story arc, tone, and slide plan.
-3. Create a structured `out/deck_spec.json` that follows
+3. Create a structured `${OUT_DIR}/deck_spec.json` that follows
    `schemas/deck_spec.schema.json`.
-4. Build an editable `out/final_deck.pptx` using native PowerPoint objects.
+4. Build an editable `${OUT_DIR}/final_deck.pptx` using native PowerPoint
+   objects.
 5. Generate or source visuals only when they improve the story.
 6. Render slides to images.
 7. Create a QA montage or contact sheet.
@@ -109,7 +127,7 @@ final delivery.
   illustrations, or decorative assets that support the story.
 - Do not invent a fake brand.
 - Save generated visual prompts, image usage decisions, and design notes in
-  `out/notes.md`.
+  `${OUT_DIR}/notes.md`.
 - Add alt text for meaningful images.
 
 ## Data Visualization Rules
@@ -130,7 +148,7 @@ final delivery.
 ## QA And Validation Rules
 
 - Render all slides before final delivery.
-- Create `out/qa_montage.png` or an equivalent contact sheet.
+- Create `${OUT_DIR}/qa_montage.png` or an equivalent contact sheet.
 - Visually inspect the rendered slides before claiming QA passed.
 - Check for text overflow, object overlap, inconsistent margins, poor alignment,
   font substitution, low contrast, unreadable charts, excessive text density,
@@ -142,13 +160,13 @@ final delivery.
 
 Expected final outputs are:
 
-- `out/strategy.md`
-- `out/deck_spec.json`
-- `out/final_deck.pptx`
-- `out/notes.md`
-- rendered slide images
-- `out/qa_montage.png`
-- `out/qa_report.md`
+- `${OUT_DIR}/strategy.md`
+- `${OUT_DIR}/deck_spec.json`
+- `${OUT_DIR}/final_deck.pptx`
+- `${OUT_DIR}/notes.md`
+- rendered slide images in `${OUT_DIR}/rendered_slides/`
+- `${OUT_DIR}/qa_montage.png`
+- `${OUT_DIR}/qa_report.md`
 - final delivery summary with any unresolved risks
 
 ## Do Not Do

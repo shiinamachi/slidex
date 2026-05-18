@@ -59,6 +59,18 @@
           "type": "string",
           "minLength": 1
         },
+        "deckId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "activeDeckDir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outputDir": {
+          "type": "string",
+          "minLength": 1
+        },
         "sourceFiles": {
           "type": "array",
           "items": {

@@ -2,30 +2,35 @@
 
 Use $slides and $imagegen.
 
-Build the editable PowerPoint deck from `out/deck_spec.json`.
+Build the editable PowerPoint deck from `${OUT_DIR}/deck_spec.json`.
+
+## Active Deck
+
+First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
+`OUT_DIR` before reading inputs or writing files.
 
 ## Inputs
 
 Read:
 
-- `out/deck_spec.json`
+- `${OUT_DIR}/deck_spec.json`
 - `schemas/deck_spec.schema.json`
-- `out/strategy.md`
-- `brand/guidelines.md`
-- `brand/colors.json`
-- `assets/template.pptx`
-- `assets/reference_deck.pptx`
-- `assets/logo.png`
-- other available assets and data files
+- `${OUT_DIR}/strategy.md`
+- `${ACTIVE_DECK_DIR}/brand/guidelines.md`
+- `${ACTIVE_DECK_DIR}/brand/colors.json`
+- `${ACTIVE_DECK_DIR}/assets/template.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/assets/logo.png`
+- other available assets and data files in the active deck workspace
 
-Inspect `assets/template.pptx` or `assets/reference_deck.pptx` first if present.
-Match source aspect ratio, typography, color system, layout rhythm, page density,
-and brand style. Default to 16:9 only when no template or reference deck defines
-the size.
+Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx` or
+`${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` first if present. Match source
+aspect ratio, typography, color system, layout rhythm, page density, and brand
+style. Default to 16:9 only when no template or reference deck defines the size.
 
 ## Build Rules
 
-- Create `out/final_deck.pptx`.
+- Create `${OUT_DIR}/final_deck.pptx`.
 - Keep all text editable as PowerPoint text.
 - Use native PowerPoint charts where practical.
 - Use native PowerPoint tables, shapes, connectors, icons, and diagrams where
@@ -44,8 +49,9 @@ the size.
 
 ## Notes
 
-Create or update `out/notes.md` with:
+Create or update `${OUT_DIR}/notes.md` with:
 
+- Active deck id, active deck directory, and output directory
 - Design decisions
 - Template or reference deck observations
 - Generated visual prompts
