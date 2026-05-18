@@ -30,6 +30,11 @@ Verify that these files exist:
 - Confirm meaningful images have alt text or documented alt text requirements.
 - Confirm generated visual prompts and design notes are documented in
   `${OUT_DIR}/notes.md`.
+- Confirm every material template, legacy reference deck, and
+  `assets/reference_decks/` file is listed in `deck_spec.json`
+  `metadata.referenceFiles` or documented as intentionally unused.
+- Confirm reference deck influence, conflicts, ignored patterns, and unresolved
+  risks are documented in `${OUT_DIR}/notes.md` or `${OUT_DIR}/qa_report.md`.
 - If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, confirm its source path, applied
   directives, and any ignored or conflicting directives are documented in
   `${OUT_DIR}/deck_spec.json`, `${OUT_DIR}/notes.md`, or
@@ -42,6 +47,7 @@ Write a final delivery summary for the user with:
 - Active deck id, active deck directory, and output directory
 - Files created
 - Checks performed
+- Reference deck usage summary when reference decks were provided
 - DESIGN.md usage summary when a deck-specific design prompt exists
 - How to use the delivered files for this deck
 - Known limitations

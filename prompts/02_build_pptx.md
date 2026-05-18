@@ -22,14 +22,21 @@ Read:
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`
 - `${ACTIVE_DECK_DIR}/brand/colors.json`
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`
-- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` for legacy single-reference
+  compatibility
+- `${ACTIVE_DECK_DIR}/assets/reference_decks/` for any number of reference decks
 - `${ACTIVE_DECK_DIR}/assets/logo.png`
 - other available assets and data files in the active deck workspace
 
-Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx` or
-`${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` first if present. Match source
+Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx`, legacy
+`${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`, and all files under
+`${ACTIVE_DECK_DIR}/assets/reference_decks/` first if present. Match source
 aspect ratio, typography, color system, layout rhythm, page density, and brand
-style. Default to 16:9 only when no template or reference deck defines the size.
+style according to the approved template and the documented reference influence.
+Default to 16:9 only when no template or reference deck in the set defines the
+size. When references conflict, follow the brief, approved template, brand,
+accessibility, and editability constraints first; document any ignored reference
+patterns.
 If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, apply its distilled directives from
 `deck_spec.json` and re-check the original file for any important nuance that
 was missed.
@@ -64,7 +71,8 @@ Create or update `${OUT_DIR}/notes.md` with:
 - Design decisions
 - Design prompt source, interpretation, applied directives, and any ignored or
   conflicting directives
-- Template or reference deck observations
+- Template and reference deck observations, including per-reference influence,
+  conflicts, and ignored patterns
 - Generated visual prompts
 - Image source notes
 - Any assumptions or unresolved implementation risks

@@ -14,6 +14,9 @@ decks/
     assets/
       template.pptx
       reference_deck.pptx
+      reference_decks/
+        benchmark-board-deck.pptx
+        product-launch-style.pptx
       logo.png
     brand/
       guidelines.md
@@ -41,7 +44,9 @@ decks/
 2. `decks/<deck_id>/brief.md`를 작성합니다.
 3. 특정 스타일을 적용하려면 `decks/<deck_id>/DESIGN.md`에 덱별 스타일
    프롬프트를 작성합니다.
-4. 필요한 템플릿, 참고 덱, 로고, 데이터, 원문 자료를 덱 폴더 안에 넣습니다.
+4. 필요한 템플릿, 참고 덱들, 로고, 데이터, 원문 자료를 덱 폴더 안에 넣습니다.
+   참고 덱은 `assets/reference_decks/`에 원하는 만큼 넣을 수 있고, 기존
+   `assets/reference_deck.pptx` 단일 파일명도 하위 호환으로 지원됩니다.
 5. 여러 덱이 있으면 실행 전에 대상 덱을 명시합니다.
 
 예:

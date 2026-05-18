@@ -55,7 +55,9 @@ workspace before making design decisions:
 - `${ACTIVE_DECK_DIR}/brief.md`
 - `${ACTIVE_DECK_DIR}/DESIGN.md`
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`
-- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` for legacy single-reference
+  compatibility
+- `${ACTIVE_DECK_DIR}/assets/reference_decks/` for any number of reference decks
 - `${ACTIVE_DECK_DIR}/assets/logo.png` and other image assets
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`
 - `${ACTIVE_DECK_DIR}/brand/colors.json`
@@ -64,11 +66,15 @@ workspace before making design decisions:
 - `${ACTIVE_DECK_DIR}/source/`
 - screenshots, PDFs, notes, or source documents supplied by the user
 
-If a template or reference deck exists, inspect it first and match its aspect
-ratio, typography, color system, layout patterns, visual density, and brand
-style. Default to 16:9 only when no source deck or template defines the size.
+If a template, legacy reference deck, or files under `assets/reference_decks/`
+exist, inspect them first and match their aspect ratio, typography, color
+system, layout patterns, visual density, and brand style. Default to 16:9 only
+when no template or reference deck in the set defines the size. If multiple
+reference decks conflict, follow explicit user instructions, the approved
+template, brand constraints, and accessibility requirements first; then document
+which reference patterns were applied or ignored.
 If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific style
-prompt. Apply it after the brief, approved template, reference deck, brand
+prompt. Apply it after the brief, approved template, reference deck set, brand
 guidelines, and brand colors, but before general design defaults. Document its
 source, applied directives, and any conflicts in the relevant strategy, spec,
 notes, QA, or delivery outputs.

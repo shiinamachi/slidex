@@ -19,14 +19,18 @@ Read:
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`
 - `${ACTIVE_DECK_DIR}/brand/colors.json`
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`
-- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` for legacy single-reference
+  compatibility
+- `${ACTIVE_DECK_DIR}/assets/reference_decks/` for any number of reference decks
 - `${ACTIVE_DECK_DIR}/data/*.csv`
 - `${ACTIVE_DECK_DIR}/data/*.xlsx`
 - source documents, screenshots, and PDFs in the active deck workspace
 - `schemas/deck_spec.schema.json`
 
-If a template or reference deck exists, preserve its aspect ratio and match its
-brand style unless the brief explicitly says otherwise.
+If a template, legacy reference deck, or files under `assets/reference_decks/`
+exist, preserve the approved aspect ratio and match the relevant brand and
+style patterns unless the brief explicitly says otherwise. When references
+conflict, document which inputs controlled the spec and why.
 
 If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, apply it as deck-specific style
 direction within the priority rules in `prompts/_design_prompt_context.md`.
@@ -37,6 +41,9 @@ direction within the priority rules in `prompts/_design_prompt_context.md`.
 - Follow `schemas/deck_spec.schema.json`.
 - Include active deck id, active deck directory, and output directory in
   metadata when available.
+- Include every template, legacy reference deck, and `assets/reference_decks/`
+  file that materially affects the deck in `metadata.referenceFiles`, with its
+  path, kind, role, priority, and notes when useful.
 - Include the design prompt source path in metadata when
   `${ACTIVE_DECK_DIR}/DESIGN.md` exists.
 - Capture the distilled design prompt interpretation in `designSystem`, including

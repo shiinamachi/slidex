@@ -77,6 +77,13 @@
             "type": "string"
           }
         },
+        "referenceFiles": {
+          "type": "array",
+          "description": "Templates, reference decks, visual references, and other inputs that materially influence deck style or structure.",
+          "items": {
+            "$ref": "#/$defs/referenceFile"
+          }
+        },
         "designPromptFile": {
           "type": "string",
           "minLength": 1
@@ -205,6 +212,40 @@
     }
   },
   "$defs": {
+    "referenceFile": {
+      "type": "object",
+      "required": [
+        "path",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Examples: template, reference_deck, visual_reference, brand_reference, data_source, source_document, design_prompt, other."
+        },
+        "role": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "required",
+            "primary",
+            "supporting",
+            "background"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
     "slide": {
       "type": "object",
       "required": [

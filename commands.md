@@ -66,7 +66,8 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 2. `decks/<deck_id>/brief.md`를 작성합니다.
 3. 필요한 경우 `decks/<deck_id>/DESIGN.md`에 덱별 스타일 프롬프트를
    작성합니다.
-4. 필요한 브랜드, 데이터, 참고 덱, 템플릿 파일을 덱 폴더에 추가합니다.
+4. 필요한 브랜드, 데이터, 참고 덱들, 템플릿 파일을 덱 폴더에 추가합니다.
+   여러 참고 덱은 `assets/reference_decks/`에 원하는 만큼 넣습니다.
 5. Codex CLI를 열고 현재 저장소를 작업 디렉터리로 둡니다.
 6. 대상 덱이 여러 개라면 “`decks/<deck_id>`를 활성 덱으로 사용”이라고 먼저 지시합니다.
 7. 먼저 전략 프롬프트를 실행하거나 붙여넣습니다.

@@ -12,8 +12,24 @@
     "sourceFiles": [
       "decks/customer-retention-2026-h1/DESIGN.md",
       "decks/customer-retention-2026-h1/brief.md",
+      "decks/customer-retention-2026-h1/assets/reference_decks/executive_qbr_structure.pptx",
+      "decks/customer-retention-2026-h1/assets/reference_decks/retention_metrics_visual_style.pptx",
       "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
       "decks/customer-retention-2026-h1/data/support_response_time.xlsx"
+    ],
+    "referenceFiles": [
+      {
+        "path": "decks/customer-retention-2026-h1/assets/reference_decks/executive_qbr_structure.pptx",
+        "kind": "reference_deck",
+        "role": "Executive pacing, section flow, and decision-oriented slide hierarchy",
+        "priority": "primary"
+      },
+      {
+        "path": "decks/customer-retention-2026-h1/assets/reference_decks/retention_metrics_visual_style.pptx",
+        "kind": "reference_deck",
+        "role": "Chart treatment, KPI density, and retention-momentum visual language",
+        "priority": "supporting"
+      }
     ]
   },
   "audience": "CEO, CFO, CRO, 고객 성공 리더십",

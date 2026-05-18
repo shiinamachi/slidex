@@ -26,8 +26,11 @@
   reflected in `deck_spec.json`.
 - Rendered slides match the design prompt's intended tone, density, composition,
   imagery, chart style, and avoid list where practical.
-- Conflicts between DESIGN.md, the brief, template, reference deck, brand
+- Conflicts between DESIGN.md, the brief, template, reference deck set, brand
   guidelines, accessibility, or editability are documented rather than hidden.
+- Multiple reference decks are inventoried, and the applied or ignored influence
+  of each material reference is documented in strategy, spec metadata, notes, or
+  QA findings.
 
 ## Typography
 

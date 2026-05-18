@@ -19,7 +19,9 @@ Read available inputs from `ACTIVE_DECK_DIR` before making recommendations:
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`
 - `${ACTIVE_DECK_DIR}/brand/colors.json`
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`
-- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` for legacy single-reference
+  compatibility
+- `${ACTIVE_DECK_DIR}/assets/reference_decks/` for any number of reference decks
 - `${ACTIVE_DECK_DIR}/assets/logo.png`
 - `${ACTIVE_DECK_DIR}/assets/`
 - `${ACTIVE_DECK_DIR}/data/*.csv`
@@ -44,11 +46,12 @@ reasonable assumptions.
 
 1. Summarize the user brief in plain language.
 2. Identify missing or ambiguous information without stopping the work.
-3. Inspect any template or reference deck first if present, and note aspect
-   ratio, typography, color style, layout patterns, and brand cues.
+3. Inspect any template, legacy reference deck, or `assets/reference_decks/`
+   files first if present, and note aspect ratio, typography, color style,
+   layout patterns, visual density, brand cues, and conflicts by reference.
 4. Interpret `${ACTIVE_DECK_DIR}/DESIGN.md` when present and reconcile it with
-   the brief, template, reference deck, brand guidelines, accessibility, and
-   editability requirements.
+   the brief, template, reference deck set, brand guidelines, accessibility,
+   and editability requirements.
 5. Define the target audience, objective, desired outcome, tone, and decision
    context.
 6. Propose a story arc with one clear role for each section.
@@ -70,6 +73,7 @@ Create `${OUT_DIR}/strategy.md` with these sections:
 - Story arc
 - Recommended slide sequence
 - Brand and design direction
+- Reference deck inventory and influence
 - Design prompt interpretation
 - Data and evidence plan
 - Visual direction

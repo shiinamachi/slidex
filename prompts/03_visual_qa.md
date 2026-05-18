@@ -18,6 +18,9 @@ Read:
 - `${OUT_DIR}/deck_spec.json`
 - `${OUT_DIR}/notes.md`
 - `${ACTIVE_DECK_DIR}/DESIGN.md`
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` and
+  `${ACTIVE_DECK_DIR}/assets/reference_decks/` when present, for the documented
+  reference influence only
 - `checklists/design_qa.md`
 - `checklists/accessibility_qa.md`
 - `checklists/delivery_qa.md`
@@ -42,6 +45,8 @@ Read:
    - broken images
    - missing alt text for meaningful images
    - mismatch with `${ACTIVE_DECK_DIR}/DESIGN.md` style directives when present
+   - meaningful mismatch with the documented reference deck influence in
+     `deck_spec.json` or `${OUT_DIR}/notes.md`
 
 Use the best available rendering method in the environment, such as a $slides
 render/export capability, LibreOffice headless export, PowerPoint/Keynote export,
@@ -58,6 +63,8 @@ Create `${OUT_DIR}/qa_report.md` with:
 - Slide-by-slide findings
 - Accessibility findings
 - Design and consistency findings
+- Reference deck alignment findings, including any unresolved conflict between
+  multiple reference decks
 - DESIGN.md alignment findings when a deck-specific design prompt exists
 - Required revisions
 - Unresolved risks

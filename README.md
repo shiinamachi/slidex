@@ -21,6 +21,9 @@ decks/<deck_id>/
   assets/
     template.pptx
     reference_deck.pptx
+    reference_decks/
+      benchmark-board-deck.pptx
+      product-launch-style.pptx
     logo.png
   brand/
     guidelines.md
@@ -62,17 +65,22 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_i
 - `${ACTIVE_DECK_DIR}/brief.md`: 덱 목적, 청중, 메시지, 제약
 - `${ACTIVE_DECK_DIR}/DESIGN.md`: 이 덱에만 적용할 스타일 프롬프트
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`: 반드시 따라야 할 템플릿
-- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`: 참고할 기존 덱
+- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`: 기존 단일 참고 덱 파일명
+  (하위 호환)
+- `${ACTIVE_DECK_DIR}/assets/reference_decks/`: 원하는 만큼 넣는 참고 덱 폴더
 - `${ACTIVE_DECK_DIR}/assets/logo.png`: 로고나 브랜드 이미지
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`: 브랜드 가이드
 - `${ACTIVE_DECK_DIR}/brand/colors.json`: 브랜드 컬러
 - `${ACTIVE_DECK_DIR}/data/*.csv`, `${ACTIVE_DECK_DIR}/data/*.xlsx`: 차트와 표에 사용할 데이터
 - `${ACTIVE_DECK_DIR}/source/`: PDF, 스크린샷, 원문 문서 등 기타 참고 자료
 
-템플릿이나 참고 덱이 있으면 향후 작업은 먼저 그것을 검사하고 화면비, 글꼴,
-컬러, 레이아웃 패턴을 맞춰야 합니다. 없을 때만 기본 16:9를 사용합니다.
-`DESIGN.md`가 있으면 덱별 스타일 방향으로 적용하되, 승인된 템플릿, 참고 덱,
-브랜드 가이드, 접근성, 편집 가능성 요구사항보다 우선하지 않습니다. 적용한
+템플릿이나 참고 덱 세트가 있으면 향후 작업은 먼저 그것들을 검사하고 화면비,
+글꼴, 컬러, 레이아웃 패턴을 맞춰야 합니다. 참고 덱은
+`assets/reference_decks/`에 원하는 수만큼 둘 수 있으며, 기존
+`assets/reference_deck.pptx`도 하위 호환으로 함께 검사합니다. 없을 때만 기본
+16:9를 사용합니다. `DESIGN.md`가 있으면 덱별 스타일 방향으로 적용하되,
+승인된 템플릿, 참고 덱 세트, 브랜드 가이드, 접근성, 편집 가능성 요구사항보다
+우선하지 않습니다. 적용한
 스타일 지시와 충돌 사항은 `strategy.md`, `deck_spec.json`, `notes.md`,
 `qa_report.md`에 필요한 수준으로 기록합니다.
 

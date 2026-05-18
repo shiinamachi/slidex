@@ -30,13 +30,17 @@ Read:
 3. Correct meaningful mismatches with `${ACTIVE_DECK_DIR}/DESIGN.md` when a
    deck-specific design prompt exists, unless doing so would violate brand,
    accessibility, editability, or readability requirements.
-4. Preserve editable PowerPoint text, charts, tables, shapes, and diagrams.
-5. Update `${OUT_DIR}/notes.md` with revision decisions and any design prompt
-   directives that remain partially applied or intentionally ignored.
-6. Re-render all slides to PNG in `${OUT_DIR}/rendered_slides/`.
-7. Recreate `${OUT_DIR}/qa_montage.png`.
-8. Update `${OUT_DIR}/qa_report.md` with the new inspection result.
-9. Repeat revision and re-rendering until the deck is visually acceptable or
+4. Correct meaningful mismatches with the documented reference deck influence
+   from `deck_spec.json` or `${OUT_DIR}/notes.md`, unless doing so would violate
+   higher-priority inputs or create visual QA issues.
+5. Preserve editable PowerPoint text, charts, tables, shapes, and diagrams.
+6. Update `${OUT_DIR}/notes.md` with revision decisions and any design prompt or
+   reference deck directives that remain partially applied or intentionally
+   ignored.
+7. Re-render all slides to PNG in `${OUT_DIR}/rendered_slides/`.
+8. Recreate `${OUT_DIR}/qa_montage.png`.
+9. Update `${OUT_DIR}/qa_report.md` with the new inspection result.
+10. Repeat revision and re-rendering until the deck is visually acceptable or
    unresolved risks are explicitly documented.
 
 Do not flatten slides into images to hide layout issues. Do not claim completion

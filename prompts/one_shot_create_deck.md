@@ -18,16 +18,22 @@ is applied through the full workflow.
 1. Read `${ACTIVE_DECK_DIR}/brief.md`, `${ACTIVE_DECK_DIR}/DESIGN.md` when
    present, brand files, assets, data files,
    screenshots, PDFs, and source documents from the active deck workspace.
-2. Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx` or
-   `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` first if present. Match
-   aspect ratio, typography, colors, layout patterns, and brand style. Default
-   to 16:9 only when no source deck or template defines size.
+2. Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx`, legacy
+   `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`, and all files under
+   `${ACTIVE_DECK_DIR}/assets/reference_decks/` first if present. Match aspect
+   ratio, typography, colors, layout patterns, visual density, and brand style
+   according to the approved template and documented reference influence.
+   Default to 16:9 only when no template or reference deck in the set defines
+   size. Document conflicting reference patterns and which ones were applied or
+   ignored.
 3. Create `${OUT_DIR}/strategy.md` with active deck id and directory, audience,
-   objective, story arc, tone, slide sequence, design prompt interpretation,
-   visual direction, and QA risks.
+   objective, story arc, tone, slide sequence, reference deck inventory and
+   influence, design prompt interpretation, visual direction, and QA risks.
 4. Create `${OUT_DIR}/deck_spec.json` following
    `schemas/deck_spec.schema.json`, including the design prompt source and
-   distilled style directives when `${ACTIVE_DECK_DIR}/DESIGN.md` exists.
+   distilled style directives when `${ACTIVE_DECK_DIR}/DESIGN.md` exists, plus
+   `metadata.referenceFiles` for every template or reference file that
+   materially influences the deck.
 5. Build `${OUT_DIR}/final_deck.pptx` with editable PowerPoint text, charts,
    tables, shapes, and diagrams where practical, applying DESIGN.md style
    guidance within brand, accessibility, and editability constraints.
@@ -65,6 +71,9 @@ is applied through the full workflow.
 - Apply `${ACTIVE_DECK_DIR}/DESIGN.md` as a deck-specific style prompt when
   present, but do not let it override approved brand, template, accessibility,
   or editability requirements.
+- Support any number of reference decks under
+  `${ACTIVE_DECK_DIR}/assets/reference_decks/`; preserve
+  `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` only as a legacy input.
 
 Do not claim final delivery is complete unless rendering, QA montage creation,
 visual inspection, revision, and final file verification have all happened.

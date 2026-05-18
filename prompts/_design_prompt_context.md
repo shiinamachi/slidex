@@ -27,7 +27,7 @@ Use `DESIGN.md` to extract concrete presentation style guidance, such as:
 Reconcile the design prompt with other inputs using this priority:
 
 1. The user's explicit request and the deck brief.
-2. Approved template, reference deck, brand guidelines, and brand colors.
+2. Approved template, reference deck set, brand guidelines, and brand colors.
 3. Deck-specific `DESIGN.md` style guidance.
 4. General repository design, accessibility, QA, and editability rules.
 
@@ -35,6 +35,11 @@ Do not let `DESIGN.md` override factual content, approved brand constraints,
 PowerPoint editability, accessibility, or visual QA requirements. If it
 conflicts with a higher-priority input, follow the higher-priority input and
 document the conflict.
+
+When multiple reference decks are available, treat them as a reference set
+rather than a single source of truth. Follow explicit user priority notes first,
+then the approved template and brand constraints, and document any reference
+patterns that are applied, blended, or ignored.
 
 ## Required Documentation
 
