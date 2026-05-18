@@ -8,6 +8,8 @@ First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before verifying files or writing final notes.
 Then read `prompts/_design_prompt_context.md` so final delivery can report any
 deck-specific design prompt that was used.
+If candidate outputs were compared or influenced the final deck, also read
+`prompts/_candidate_output_context.md`.
 
 ## Required Files
 
@@ -39,6 +41,11 @@ Verify that these files exist:
   directives, and any ignored or conflicting directives are documented in
   `${OUT_DIR}/deck_spec.json`, `${OUT_DIR}/notes.md`, or
   `${OUT_DIR}/qa_report.md`.
+- If candidate outputs influenced the deck, confirm adopted, adapted, and
+  rejected patterns are documented, and that unsupported candidate claims did not
+  enter the final deck.
+- If HTML outputs exist, confirm HTML slide count, slide order, headlines, and
+  key messages match `deck_spec.json`, or document why HTML and PPTX/spec differ.
 
 ## Output
 
@@ -49,6 +56,7 @@ Write a final delivery summary for the user with:
 - Checks performed
 - Reference deck usage summary when reference decks were provided
 - DESIGN.md usage summary when a deck-specific design prompt exists
+- Candidate-output comparison summary when candidate outputs influenced the deck
 - How to use the delivered files for this deck
 - Known limitations
 - Unresolved risks

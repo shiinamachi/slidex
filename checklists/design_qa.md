@@ -12,6 +12,11 @@
 - The most important element is visually dominant.
 - Supporting content is clearly secondary.
 - Dense paragraphs are replaced with concise bullets or visuals.
+- Each slide has one dominant visual idea; secondary cards, chips, and footers
+  do not compete with the headline.
+- No dense card grid forces body copy below readable presentation size.
+- Accent color is used for one clear emphasis system per slide, not scattered
+  decoration.
 
 ## Layout Consistency
 
@@ -31,6 +36,19 @@
 - Multiple reference decks are inventoried, and the applied or ignored influence
   of each material reference is documented in strategy, spec metadata, notes, or
   QA findings.
+
+## Candidate Output Comparison
+
+- Candidate outputs are compared for reusable hierarchy, composition, and copy
+  patterns when the user asks for comparison or multiple outputs influence the
+  revision.
+- Visually attractive candidate patterns are rejected when they introduce
+  unsupported claims, invented metrics, fake product names, or inaccessible
+  density.
+- Adopted candidate patterns are documented as adopted, adapted, or rejected in
+  strategy, spec, notes, or QA findings.
+- Final deck copy remains traceable to the brief, source documents, brand files,
+  or explicit user evidence.
 
 ## Typography
 

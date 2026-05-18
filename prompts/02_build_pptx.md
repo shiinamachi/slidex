@@ -10,6 +10,8 @@ First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
 Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
 is applied consistently during the build.
+If candidate outputs are being used as comparison references, also read
+`prompts/_candidate_output_context.md`.
 
 ## Inputs
 
@@ -27,6 +29,8 @@ Read:
 - `${ACTIVE_DECK_DIR}/assets/reference_decks/` for any number of reference decks
 - `${ACTIVE_DECK_DIR}/assets/logo.png`
 - other available assets and data files in the active deck workspace
+- prior model-generated candidate outputs in `${OUT_DIR}` when the user asks to
+  compare or improve from them
 
 Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx`, legacy
 `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`, and all files under
@@ -62,6 +66,18 @@ was missed.
 - Apply deck-specific `DESIGN.md` style directives to typography, spacing,
   composition, imagery, iconography, charts, and visual density unless they
   conflict with higher-priority inputs or QA requirements.
+- Run an enterprise copy edit before building slides. Remove or rewrite
+  unsupported superlatives, invented metrics, unverifiable outcomes, and salesy
+  transformation language. Forbidden unless explicitly sourced: `No.1`, `best`,
+  `only`, `proven`, `deployed`, `commercialized`, `ROI`, percentage reduction,
+  revenue/profit improvement, time saved, customer scale claims, and completed
+  result language.
+- Prefer precise B2B wording such as `supports`, `enables`,
+  `is designed to`, `helps standardize`, `provides a path for`, and
+  `applies to`. Keep action titles specific, but do not overclaim.
+- When a candidate output has stronger visual hierarchy, adopt its reusable
+  layout patterns only after stripping unsupported copy and checking the pattern
+  against the brief, brand, accessibility, and editability requirements.
 
 ## Notes
 
@@ -73,6 +89,8 @@ Create or update `${OUT_DIR}/notes.md` with:
   conflicting directives
 - Template and reference deck observations, including per-reference influence,
   conflicts, and ignored patterns
+- Candidate-output comparison observations, adopted/adapted/rejected patterns,
+  and claim-control decisions when applicable
 - Generated visual prompts
 - Image source notes
 - Any assumptions or unresolved implementation risks

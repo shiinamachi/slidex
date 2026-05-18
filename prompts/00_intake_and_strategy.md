@@ -9,6 +9,8 @@ First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before inspecting deck materials or writing files.
 Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
 is handled consistently.
+If the user asks to compare prior outputs or multiple candidate outputs exist in
+`${OUT_DIR}`, also read `prompts/_candidate_output_context.md`.
 
 ## Inputs
 
@@ -29,6 +31,9 @@ Read available inputs from `ACTIVE_DECK_DIR` before making recommendations:
 - `${ACTIVE_DECK_DIR}/source/`
 - screenshots, PDFs, notes, and other supplied source documents in the active
   deck workspace
+- prior model-generated candidate outputs in `${OUT_DIR}` such as
+  `final_deck.html`, `final_deck_*.html`, screenshots, rendered slide images, or
+  QA montages when the user asks to compare or improve from them
 
 Use `shared/brand/`, `shared/assets/`, or `shared/data/` only according to the
 isolation rules in `prompts/_active_deck_context.md`.
@@ -52,13 +57,17 @@ reasonable assumptions.
 4. Interpret `${ACTIVE_DECK_DIR}/DESIGN.md` when present and reconcile it with
    the brief, template, reference deck set, brand guidelines, accessibility,
    and editability requirements.
-5. Define the target audience, objective, desired outcome, tone, and decision
+5. If candidate outputs are present and relevant, compare them slide by slide as
+   design/copy hypotheses rather than factual sources. Identify patterns to
+   adopt, adapt, or reject; reject unsupported claims, invented metrics, fake
+   product names, or copy that violates the brief.
+6. Define the target audience, objective, desired outcome, tone, and decision
    context.
-6. Propose a story arc with one clear role for each section.
-7. Recommend a slide sequence with slide type, action title, key message, and
+7. Propose a story arc with one clear role for each section.
+8. Recommend a slide sequence with slide type, action title, key message, and
    likely visual treatment.
-8. Identify source data or evidence needed for charts, tables, and claims.
-9. List design risks and QA risks to watch later, including any risk that the
+9. Identify source data or evidence needed for charts, tables, and claims.
+10. List design risks and QA risks to watch later, including any risk that the
    design prompt may conflict with brand, accessibility, or readability.
 
 ## Output
@@ -75,6 +84,7 @@ Create `${OUT_DIR}/strategy.md` with these sections:
 - Brand and design direction
 - Reference deck inventory and influence
 - Design prompt interpretation
+- Candidate output comparison, when applicable
 - Data and evidence plan
 - Visual direction
 - QA risks

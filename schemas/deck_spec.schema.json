@@ -191,6 +191,13 @@
         }
       }
     },
+    "candidateOutputComparison": {
+      "type": "array",
+      "description": "Comparison notes for prior model-generated candidate outputs used as design or copy hypotheses.",
+      "items": {
+        "$ref": "#/$defs/candidateOutputComparison"
+      }
+    },
     "storyArc": {
       "type": "array",
       "items": {
@@ -227,7 +234,7 @@
         "kind": {
           "type": "string",
           "minLength": 1,
-          "description": "Examples: template, reference_deck, visual_reference, brand_reference, data_source, source_document, design_prompt, other."
+          "description": "Examples: template, reference_deck, visual_reference, brand_reference, data_source, source_document, design_prompt, candidate_output, html_output, model_output_comparison, other."
         },
         "role": {
           "type": "string"
@@ -242,6 +249,52 @@
           ]
         },
         "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "candidateOutputComparison": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelOrSource": {
+          "type": "string"
+        },
+        "strengthsToAdopt": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "patternsToAdapt": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "risksToReject": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "copyRisks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "visualHierarchyNotes": {
+          "type": "string"
+        },
+        "sourceFaithfulnessNotes": {
           "type": "string"
         }
       }

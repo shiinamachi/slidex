@@ -8,6 +8,8 @@ First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
 Then read `prompts/_design_prompt_context.md` so any deck-specific design prompt
 is captured in the structured spec.
+If candidate outputs are being compared, also read
+`prompts/_candidate_output_context.md`.
 
 ## Inputs
 
@@ -25,6 +27,8 @@ Read:
 - `${ACTIVE_DECK_DIR}/data/*.csv`
 - `${ACTIVE_DECK_DIR}/data/*.xlsx`
 - source documents, screenshots, and PDFs in the active deck workspace
+- prior model-generated candidate outputs in `${OUT_DIR}` when the user asks to
+  compare or improve from them
 - `schemas/deck_spec.schema.json`
 
 If a template, legacy reference deck, or files under `assets/reference_decks/`
@@ -60,6 +64,15 @@ direction within the priority rules in `prompts/_design_prompt_context.md`.
 - Prefer native PowerPoint charts, tables, shapes, and editable diagrams.
 - Use generated visuals only when they improve the story.
 - Include alt text guidance for meaningful images.
+- Include a copy provenance pass: every material claim, metric, customer
+  statement, technology capability, and outcome must be traceable to the brief,
+  brand file, source document, or explicit user-provided evidence. Unsupported
+  claims must be removed or rewritten as conservative capability language.
+- When candidate outputs are compared, include
+  `candidateOutputComparison` entries that summarize which visual/copy patterns
+  are adopted, adapted, or rejected. Do not let a visually stronger candidate
+  override source truth, brand constraints, accessibility, editability, or
+  enterprise copy standards.
 
 ## Output Standards
 

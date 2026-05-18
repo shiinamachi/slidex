@@ -26,11 +26,24 @@
 - Charts are readable.
 - Tables fit and remain editable.
 
+## HTML Deck Parity
+
+- If HTML output exists, slide count, order, headlines, and key messages match
+  `deck_spec.json`, or the spec is updated to match the approved final
+  structure.
+- HTML render screenshots exist for every slide.
+- HTML has no unintended external dependencies unless documented.
+- HTML does not introduce unsupported claims that are absent from the approved
+  spec.
+- Korean text wraps by word or phrase, not mid-word.
+
 ## Documentation
 
 - Generated visual prompts are documented.
 - Design decisions are documented.
 - DESIGN.md usage, applied directives, and unresolved style prompt conflicts are
   documented when a deck-specific design prompt exists.
+- Candidate-output comparison decisions are documented when candidate outputs
+  influenced the deck.
 - Data sources and assumptions are noted.
 - Unresolved risks are listed honestly.

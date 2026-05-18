@@ -125,6 +125,20 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 원샷 프롬프트도 전략, 덱 스펙, PPTX 제작, 렌더링, QA, 수정, 최종 확인을 모두
 요구합니다.
 
+## 후보 산출물 비교
+
+같은 brief와 `DESIGN.md`로 여러 모델이 만든 후보 결과물이 있으면
+`${OUT_DIR}`에 함께 두고 비교 지시를 할 수 있습니다. 예를 들어
+`final_deck.html`과 `final_deck_gemini.html`을 비교해 최종 HTML 또는 PPTX를
+개선할 수 있습니다.
+
+후보 산출물은 사실 출처가 아니라 디자인/카피 가설로만 취급합니다. 프롬프트는
+후보별 장점을 `adopt`, `adapt`, `reject`로 나누고, 근거 없는 지표,
+슈퍼라티브, 완료된 성과 표현, 가짜 제품명, 미제공 기술 범위는 버리도록
+설계되어 있습니다. 비교 결과를 반영한 뒤에는 `deck_spec.json`, 렌더링 이미지,
+`qa_montage.png`, `qa_report.md`, `notes.md`가 최종 슬라이드 수와 순서를
+같이 보도록 동기화해야 합니다.
+
 ## 브랜드와 공유 자료
 
 - 덱별 브랜드 파일은 `${ACTIVE_DECK_DIR}/brand/`에 둡니다.

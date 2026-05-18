@@ -9,6 +9,8 @@ First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
 Then read `prompts/_design_prompt_context.md` so deck-specific style intent is
 included in QA.
+If candidate outputs were compared or remain in `${OUT_DIR}`, also read
+`prompts/_candidate_output_context.md`.
 
 ## Inputs
 
@@ -24,6 +26,8 @@ Read:
 - `checklists/design_qa.md`
 - `checklists/accessibility_qa.md`
 - `checklists/delivery_qa.md`
+- candidate HTML/PPTX outputs, rendered images, screenshots, or QA montages in
+  `${OUT_DIR}` when they influenced the final deck
 
 ## Tasks
 
@@ -47,6 +51,16 @@ Read:
    - mismatch with `${ACTIVE_DECK_DIR}/DESIGN.md` style directives when present
    - meaningful mismatch with the documented reference deck influence in
      `deck_spec.json` or `${OUT_DIR}/notes.md`
+   - HTML/PPTX/spec parity when HTML deck outputs exist: slide count, order,
+     headlines, key messages, required constraints, and removed/added slides
+   - unsupported claims introduced by HTML or candidate outputs
+   - external dependencies, hidden raster slide images, broken font loading,
+     mid-word Korean wrapping, overflow, or element collisions in HTML outputs
+
+If multiple candidate outputs exist, include a comparison finding: which output
+has stronger visual hierarchy, which has safer copy, which violates source
+truth, and which reusable patterns should or should not carry into the final
+deck.
 
 Use the best available rendering method in the environment, such as a $slides
 render/export capability, LibreOffice headless export, PowerPoint/Keynote export,
@@ -66,6 +80,9 @@ Create `${OUT_DIR}/qa_report.md` with:
 - Reference deck alignment findings, including any unresolved conflict between
   multiple reference decks
 - DESIGN.md alignment findings when a deck-specific design prompt exists
+- Candidate-output comparison findings when applicable, including adopted,
+  adapted, and rejected patterns
+- HTML/PPTX/spec parity findings when HTML outputs exist
 - Required revisions
 - Unresolved risks
 

@@ -12,6 +12,8 @@ First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading deck materials or writing files.
 Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
 is applied through the full workflow.
+If the user asks to compare prior model outputs or candidate outputs already
+exist in `${OUT_DIR}`, also read `prompts/_candidate_output_context.md`.
 
 ## Full Workflow
 
@@ -28,12 +30,14 @@ is applied through the full workflow.
    ignored.
 3. Create `${OUT_DIR}/strategy.md` with active deck id and directory, audience,
    objective, story arc, tone, slide sequence, reference deck inventory and
-   influence, design prompt interpretation, visual direction, and QA risks.
+   influence, design prompt interpretation, candidate-output comparison when
+   applicable, visual direction, and QA risks.
 4. Create `${OUT_DIR}/deck_spec.json` following
    `schemas/deck_spec.schema.json`, including the design prompt source and
    distilled style directives when `${ACTIVE_DECK_DIR}/DESIGN.md` exists, plus
    `metadata.referenceFiles` for every template or reference file that
-   materially influences the deck.
+   materially influences the deck. When candidate outputs are compared, include
+   adopted/adapted/rejected findings in `candidateOutputComparison`.
 5. Build `${OUT_DIR}/final_deck.pptx` with editable PowerPoint text, charts,
    tables, shapes, and diagrams where practical, applying DESIGN.md style
    guidance within brand, accessibility, and editability constraints.
@@ -46,7 +50,8 @@ is applied through the full workflow.
 11. Fix meaningful issues: layout, overflow, overlap, margins, alignment,
     typography, contrast, text density, chart readability, broken images, and alt
     text, plus any meaningful mismatch with DESIGN.md when a deck-specific
-    design prompt exists.
+    design prompt exists. If candidate outputs were compared, carry forward only
+    source-faithful hierarchy/copy improvements and reject unsupported claims.
 12. Re-render slides in `${OUT_DIR}/rendered_slides/`, recreate
     `${OUT_DIR}/qa_montage.png`, and update `${OUT_DIR}/qa_report.md`.
 13. Repeat revision until the deck is visually acceptable or unresolved risks are
@@ -74,6 +79,12 @@ is applied through the full workflow.
 - Support any number of reference decks under
   `${ACTIVE_DECK_DIR}/assets/reference_decks/`; preserve
   `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` only as a legacy input.
+- When comparing candidate outputs, treat them as design/copy hypotheses rather
+  than factual sources. Adopt useful hierarchy, grid, component, or case-study
+  patterns only after claim provenance and QA checks.
+- After HTML-only or candidate-output-driven revisions, synchronize
+  `deck_spec.json`, notes, rendered images, QA montage, and QA report with the
+  approved final slide count, order, headlines, and key messages.
 
 Do not claim final delivery is complete unless rendering, QA montage creation,
 visual inspection, revision, and final file verification have all happened.
