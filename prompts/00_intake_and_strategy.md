@@ -1,6 +1,6 @@
 # Deprecated Prompt
 
-This PPTX-era prompt has been replaced by:
+This legacy prompt has been replaced by:
 
 - `prompts/00_start_business_doc.md`
 - `prompts/01_create_business_strategy.md`

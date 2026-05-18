@@ -71,8 +71,11 @@
 ## Final Deliverables
 
 - HTML source
+- generated baseline HTML
 - rendered slide images
 - paginated PDF
 - render manifest
+- QA montage
 - QA report
+- notes
 - delivery summary

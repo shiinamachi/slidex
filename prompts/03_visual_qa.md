@@ -1,6 +1,6 @@
 # Deprecated Prompt
 
-This PPTX-era visual QA prompt has been replaced by:
+This legacy visual QA prompt has been replaced by:
 
 - `prompts/05_business_visual_qa.md`
 

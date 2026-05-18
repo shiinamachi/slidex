@@ -1,6 +1,6 @@
 # Deprecated Prompt
 
-This PPTX-era revision prompt has been replaced by:
+This legacy revision prompt has been replaced by:
 
 - `prompts/06_revise_html_deck.md`
 - `prompts/07_sync_user_html_edits.md`

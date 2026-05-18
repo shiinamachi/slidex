@@ -1,6 +1,6 @@
 # Deprecated Prompt
 
-This PPTX-era one-shot prompt has been replaced by:
+This legacy one-shot prompt has been replaced by:
 
 - `prompts/one_shot_create_business_doc.md`
 

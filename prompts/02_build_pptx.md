@@ -1,7 +1,7 @@
 # Deprecated Prompt
 
 This prompt is intentionally retired. The future production workflow builds
-static HTML and a paginated PDF, not PowerPoint.
+static HTML and a paginated PDF.
 
 Use:
 

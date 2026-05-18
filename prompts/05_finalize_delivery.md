@@ -1,6 +1,6 @@
 # Deprecated Prompt
 
-This PPTX-era finalization prompt has been replaced by:
+This legacy finalization prompt has been replaced by:
 
 - `prompts/08_finalize_business_delivery.md`
 

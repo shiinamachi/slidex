@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -378,6 +379,11 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 	}
 
 	var findings []qaFinding
+	if schema, err := loadSpecSchema(); err != nil {
+		findings = append(findings, qaFinding{Severity: "warn", Check: "schema.load", Message: "could not load schemas/deck_spec.schema.json for full schema validation: " + err.Error(), Path: path})
+	} else {
+		findings = append(findings, validateJSONSchema(spec, schema, schema, "$", path)...)
+	}
 	required := []string{
 		"metadata", "documentType", "audience", "objective", "desiredOutcome", "tone",
 		"sourceInventory", "intakeStatus", "outputContract", "renderConfig", "pdfConfig",
@@ -452,6 +458,191 @@ func numberAsInt(v any) (int, bool) {
 		return int(n), true
 	case int:
 		return n, true
+	default:
+		return 0, false
+	}
+}
+
+func loadSpecSchema() (map[string]any, error) {
+	cwd, _ := os.Getwd()
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, "schemas", "deck_spec.schema.json")
+		raw, err := os.ReadFile(candidate)
+		if err == nil {
+			var schema map[string]any
+			if err := json.Unmarshal(raw, &schema); err != nil {
+				return nil, err
+			}
+			return schema, nil
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	return nil, errors.New("schemas/deck_spec.schema.json not found from current working directory")
+}
+
+func validateJSONSchema(value any, schema map[string]any, root map[string]any, path string, sourcePath string) []qaFinding {
+	if ref, _ := schema["$ref"].(string); ref != "" {
+		resolved, err := resolveJSONPointer(root, ref)
+		if err != nil {
+			return []qaFinding{fail("schema.$ref", err.Error(), sourcePath)}
+		}
+		return validateJSONSchema(value, resolved, root, path, sourcePath)
+	}
+
+	var findings []qaFinding
+	if enumValues, ok := schema["enum"].([]any); ok {
+		matched := false
+		for _, allowed := range enumValues {
+			if reflect.DeepEqual(value, allowed) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			findings = append(findings, fail("schema.enum", fmt.Sprintf("%s value %q is not in enum", path, value), sourcePath))
+		}
+	}
+	if constValue, ok := schema["const"]; ok && !reflect.DeepEqual(value, constValue) {
+		findings = append(findings, fail("schema.const", fmt.Sprintf("%s value %q does not match const %q", path, value, constValue), sourcePath))
+	}
+
+	schemaType, _ := schema["type"].(string)
+	switch schemaType {
+	case "object":
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return append(findings, fail("schema.type", path+" must be object", sourcePath))
+		}
+		if required, ok := schema["required"].([]any); ok {
+			for _, rawKey := range required {
+				key, _ := rawKey.(string)
+				if key != "" {
+					if _, exists := obj[key]; !exists {
+						findings = append(findings, fail("schema.required", path+" missing required field "+key, sourcePath))
+					}
+				}
+			}
+		}
+		props := map[string]any{}
+		if rawProps, ok := schema["properties"].(map[string]any); ok {
+			props = rawProps
+			for key, childSchema := range rawProps {
+				if child, exists := obj[key]; exists {
+					if childMap, ok := childSchema.(map[string]any); ok {
+						findings = append(findings, validateJSONSchema(child, childMap, root, path+"."+key, sourcePath)...)
+					}
+				}
+			}
+		}
+		if additional, exists := schema["additionalProperties"]; exists {
+			switch add := additional.(type) {
+			case bool:
+				if !add {
+					for key := range obj {
+						if _, allowed := props[key]; !allowed {
+							findings = append(findings, fail("schema.additionalProperties", path+" has unsupported field "+key, sourcePath))
+						}
+					}
+				}
+			case map[string]any:
+				for key, child := range obj {
+					if _, known := props[key]; !known {
+						findings = append(findings, validateJSONSchema(child, add, root, path+"."+key, sourcePath)...)
+					}
+				}
+			}
+		}
+	case "array":
+		arr, ok := value.([]any)
+		if !ok {
+			return append(findings, fail("schema.type", path+" must be array", sourcePath))
+		}
+		if min, ok := numberAsFloat(schema["minItems"]); ok && float64(len(arr)) < min {
+			findings = append(findings, fail("schema.minItems", fmt.Sprintf("%s must have at least %.0f items", path, min), sourcePath))
+		}
+		if itemSchema, ok := schema["items"].(map[string]any); ok {
+			for i, item := range arr {
+				findings = append(findings, validateJSONSchema(item, itemSchema, root, fmt.Sprintf("%s[%d]", path, i), sourcePath)...)
+			}
+		}
+	case "string":
+		s, ok := value.(string)
+		if !ok {
+			return append(findings, fail("schema.type", path+" must be string", sourcePath))
+		}
+		if min, ok := numberAsFloat(schema["minLength"]); ok && float64(len(s)) < min {
+			findings = append(findings, fail("schema.minLength", fmt.Sprintf("%s must be at least %.0f characters", path, min), sourcePath))
+		}
+		if pattern, _ := schema["pattern"].(string); pattern != "" {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				findings = append(findings, fail("schema.pattern", "invalid schema pattern at "+path+": "+err.Error(), sourcePath))
+			} else if !re.MatchString(s) {
+				findings = append(findings, fail("schema.pattern", path+" does not match pattern "+pattern, sourcePath))
+			}
+		}
+	case "integer":
+		n, ok := value.(float64)
+		if !ok || math.Trunc(n) != n {
+			return append(findings, fail("schema.type", path+" must be integer", sourcePath))
+		}
+		findings = append(findings, validateNumberBounds(n, schema, path, sourcePath)...)
+	case "number":
+		n, ok := value.(float64)
+		if !ok {
+			return append(findings, fail("schema.type", path+" must be number", sourcePath))
+		}
+		findings = append(findings, validateNumberBounds(n, schema, path, sourcePath)...)
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return append(findings, fail("schema.type", path+" must be boolean", sourcePath))
+		}
+	}
+	return findings
+}
+
+func resolveJSONPointer(root map[string]any, ref string) (map[string]any, error) {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil, fmt.Errorf("unsupported ref: %s", ref)
+	}
+	var cur any = root
+	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("ref %s cannot resolve through non-object", ref)
+		}
+		next, ok := obj[part]
+		if !ok {
+			return nil, fmt.Errorf("ref %s missing part %s", ref, part)
+		}
+		cur = next
+	}
+	resolved, ok := cur.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("ref %s did not resolve to schema object", ref)
+	}
+	return resolved, nil
+}
+
+func validateNumberBounds(n float64, schema map[string]any, path string, sourcePath string) []qaFinding {
+	var findings []qaFinding
+	if min, ok := numberAsFloat(schema["minimum"]); ok && n < min {
+		findings = append(findings, fail("schema.minimum", fmt.Sprintf("%s must be >= %v", path, min), sourcePath))
+	}
+	if min, ok := numberAsFloat(schema["exclusiveMinimum"]); ok && n <= min {
+		findings = append(findings, fail("schema.exclusiveMinimum", fmt.Sprintf("%s must be > %v", path, min), sourcePath))
+	}
+	return findings
+}
+
+func numberAsFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
 	default:
 		return 0, false
 	}
@@ -1008,12 +1199,52 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 		fillDependency(&dep, base, ref)
 		assets = append(assets, dep)
 	}
-	fonts = append(fonts, dependency{
-		ID:   fontPreset,
-		Kind: "font_preset",
-		Risk: "remote webfont CSS or system font availability must be checked during visual QA when not vendored locally",
-	})
+	fontURLRe := regexp.MustCompile(`(?is)@font-face\s*{.*?url\(\s*["']?([^'")]+)["']?\s*\).*?}`)
+	for i, m := range fontURLRe.FindAllStringSubmatch(src, -1) {
+		ref := strings.TrimSpace(m[1])
+		if ref == "" || strings.HasPrefix(ref, "data:") {
+			continue
+		}
+		dep := dependency{ID: fmt.Sprintf("font_face_%02d", i+1), Kind: "font_file"}
+		fillDependency(&dep, base, ref)
+		fonts = append(fonts, dep)
+	}
+	fonts = append(fonts, fontPresetDependency(fontPreset))
 	return styles, assets, fonts
+}
+
+func fontPresetDependency(fontPreset string) dependency {
+	dep := dependency{
+		ID:        fontPreset,
+		Kind:      "font_preset",
+		Version:   "codex-business-deck-kit-preset-v1",
+		Retrieved: time.Now().UTC().Format(time.RFC3339),
+	}
+	switch fontPreset {
+	case "pretendard":
+		dep.URL = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable.css"
+		dep.Version = "remote-css-unpinned"
+		dep.Risk = "remote Pretendard CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
+	case "noto-sans-kr":
+		dep.URL = "https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
+		dep.Version = "google-fonts-css-unpinned"
+		dep.Risk = "remote Google Fonts CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
+	case "noto-sans-cjk-kr":
+		dep.Risk = "system/local Noto Sans CJK KR availability must be verified on the render machine"
+	case "ibm-plex-sans-kr":
+		dep.URL = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap"
+		dep.Version = "google-fonts-css-unpinned"
+		dep.Risk = "remote Google Fonts CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
+	case "suit":
+		dep.URL = "https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/variable/woff2/SUIT-Variable.css"
+		dep.Version = "remote-css-unpinned"
+		dep.Risk = "remote SUIT CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
+	case "custom":
+		dep.Risk = "custom font preset must be backed by brand/guidelines.md, brand/fonts, or deck_spec.json and verified during QA"
+	default:
+		dep.Risk = "unknown font preset; verify CSS and rendered output manually"
+	}
+	return dep
 }
 
 func fillDependency(dep *dependency, base, ref string) {
@@ -1377,12 +1608,62 @@ func writeQAReport(path string, result qaResult) error {
 			b.WriteString("\n")
 		}
 	}
+	b.WriteString("\n## Slide-By-Slide Findings\n\n")
+	if result.SlideCount == 0 {
+		b.WriteString("- No HTML slides detected.\n")
+	} else {
+		for i := 1; i <= result.SlideCount; i++ {
+			b.WriteString(fmt.Sprintf("- Slide %02d: automated render/spec parity checks completed; manual visual inspection required.\n", i))
+		}
+	}
+	b.WriteString("\n## Business Logic Findings\n\n")
+	writeFindingsForPrefix(&b, result.Findings, []string{"schema.", "claimProvenance.", "business"})
+	b.WriteString("\n## Claim Provenance Findings\n\n")
+	writeFindingsForPrefix(&b, result.Findings, []string{"claimProvenance.", "schema.claim"})
+	b.WriteString("\n## Visual And Accessibility Findings\n\n")
+	writeFindingsForPrefix(&b, result.Findings, []string{"html.", "png.", "font.", "manifest.", "parity.html_png"})
+	b.WriteString("\n## PDF Findings\n\n")
+	writeFindingsForPrefix(&b, result.Findings, []string{"pdf.", "parity.html_pdf"})
+	b.WriteString("\n## User-Edit Sync Findings\n\n")
+	writeFindingsForPrefix(&b, result.Findings, []string{"sync.", "package.manifest_freshness"})
+	b.WriteString("\n## Required Revisions\n\n")
+	if hasFailures(result.Findings) {
+		b.WriteString("- Resolve all `fail` findings above, re-render from current HTML, rebuild PDF and montage, and rerun QA.\n")
+	} else {
+		b.WriteString("- No automated blocking revisions. Complete manual visual/business review before final delivery.\n")
+	}
+	b.WriteString("\n## Unresolved Risks\n\n")
+	if hasWarnings(result.Findings) {
+		b.WriteString("- Review all `warn` findings above and decide whether to fix or explicitly accept them.\n")
+	} else {
+		b.WriteString("- Manual visual inspection, business meaning review, and claim provenance review remain required workflow gates.\n")
+	}
 	b.WriteString("\n## Visual Inspection\n\n")
 	b.WriteString("- Manual inspection of rendered slides and montage must be recorded by the Codex workflow before final delivery.\n")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func writeFindingsForPrefix(b *strings.Builder, findings []qaFinding, prefixes []string) {
+	wrote := false
+	for _, f := range findings {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(f.Check, prefix) {
+				b.WriteString(fmt.Sprintf("- `%s` `%s`: %s", f.Severity, f.Check, f.Message))
+				if f.Path != "" {
+					b.WriteString(fmt.Sprintf(" (`%s`)", f.Path))
+				}
+				b.WriteString("\n")
+				wrote = true
+				break
+			}
+		}
+	}
+	if !wrote {
+		b.WriteString("- No automated findings in this category.\n")
+	}
 }
 
 func runSyncHTMLEdits(args []string) error {
@@ -1427,17 +1708,47 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	previousBaselineHash := baseHash
 	newBaselineHash := baseHash
 	currentSlides := extractSlides(string(currentRaw))
+	baselineSource := baselinePath
 	baselineSlides := extractSlides(string(baseRaw))
-	changes := compareSlides(baselineSlides, currentSlides)
 	if baseErr != nil {
-		changes = append(changes, "No generated baseline was available; compared HTML against spec where possible.")
+		baselineSource = specPath
+		baselineSlides = slidesFromSpec(specPath)
 	}
+	changes := compareSlides(baselineSlides, currentSlides)
+	if baseErr == nil {
+		changes = append(changes, compareHTMLMetadata(baselinePath, string(baseRaw), htmlPath, string(currentRaw))...)
+	} else {
+		changes = append(changes, compareHTMLMetadata("", "", htmlPath, string(currentRaw))...)
+	}
+	if baseErr != nil {
+		changes = append(changes, "No generated baseline was available; compared HTML against deck_spec.json.")
+	}
+	changes = uniqueStrings(changes)
 
 	backupPath := ""
+	specBackupPath := ""
+	notesBackupPath := ""
+	var acceptedChanges []string
+	var correctedOrRejected []string
+	var derivativeUpdated []string
+	var derivativeStale []string
+	changeDetected := currentHash != baseHash || baseErr != nil
 	if currentHash != baseHash {
 		backupPath = filepath.Join(outDir, "final_deck.pre_sync_"+time.Now().Format("20060102_150405")+".html")
 		if err := copyFile(htmlPath, backupPath); err != nil {
 			return nil, err
+		}
+		specBackupPath = filepath.Join(outDir, "deck_spec.pre_sync_"+time.Now().Format("20060102_150405")+".json")
+		if _, err := os.Stat(specPath); err == nil {
+			if err := copyFile(specPath, specBackupPath); err != nil {
+				return nil, err
+			}
+		}
+		notesBackupPath = filepath.Join(outDir, "notes.pre_sync_"+time.Now().Format("20060102_150405")+".md")
+		if _, err := os.Stat(notesPath); err == nil {
+			if err := copyFile(notesPath, notesBackupPath); err != nil {
+				return nil, err
+			}
 		}
 		if err := updateSpecFromHTML(specPath, currentSlides); err != nil {
 			return nil, err
@@ -1445,13 +1756,14 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		if err := appendNotes(notesPath, "HTML edit sync", changes); err != nil {
 			return nil, err
 		}
+		derivativeUpdated = append(derivativeUpdated, "deck_spec.json", "notes.md")
 	}
 
 	renderStatus := "not_needed"
 	qaStatus := "not_run"
 	var renderErr string
 	var qaErr string
-	if currentHash != baseHash {
+	if changeDetected {
 		cfg, err := renderConfigFromFlags(htmlPath, filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", width, height, fontPreset, chromePath)
 		if err != nil {
 			renderStatus = "failed"
@@ -1461,6 +1773,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 			renderErr = err.Error()
 		} else {
 			renderStatus = "completed"
+			derivativeUpdated = append(derivativeUpdated, "rendered_slides/*.png", "final_deck.pdf", "render_manifest.json", "qa_montage.png")
 			if qa, err := qaDeck(deckAbs, true); err != nil && qa.Status == "fail" {
 				qaStatus = qa.Status
 				qaErr = err.Error()
@@ -1471,25 +1784,47 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 				qaStatus = qa.Status
 			}
 			if qaStatus == "pass" || qaStatus == "pass_with_risks" {
+				acceptedChanges = changes
+				derivativeUpdated = append(derivativeUpdated, "qa_report.md", "final_deck.generated_baseline.html")
 				if err := copyFile(htmlPath, baselinePath); err != nil {
 					return nil, err
 				}
 				baseRaw, _ = os.ReadFile(baselinePath)
 				newBaselineHash = sha256Bytes(baseRaw)
+			} else {
+				correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because render or QA did not pass.")
+				if specBackupPath != "" {
+					_ = copyFile(specBackupPath, specPath)
+				}
+				if notesBackupPath != "" {
+					_ = copyFile(notesBackupPath, notesPath)
+				}
 			}
 		}
+	}
+	if len(acceptedChanges) == 0 && changeDetected && len(correctedOrRejected) == 0 {
+		correctedOrRejected = append(correctedOrRejected, "HTML edits require review because render or QA did not complete.")
+	}
+	if containsMeaningChange(changes) {
+		derivativeStale = append(derivativeStale, "brief.md: HTML text changed; confirm whether brief facts, audience, objective, or desired outcome changed.")
+		derivativeStale = append(derivativeStale, "strategy.md: HTML story or slide structure changed; strategy may need a human update.")
+		derivativeStale = append(derivativeStale, "source_inventory.md: asset, dependency, or evidence references may need refresh.")
+		derivativeStale = append(derivativeStale, "delivery_summary.md: final delivery summary must be regenerated after accepted edits.")
 	}
 	report := map[string]any{
 		"toolName":             toolName,
 		"version":              toolVersion,
 		"deckDir":              deckAbs,
 		"syncReport":           syncPath,
+		"comparisonSource":     baselineSource,
 		"currentHtmlHash":      currentHash,
 		"previousBaselineHash": previousBaselineHash,
 		"newBaselineHash":      newBaselineHash,
 		"changes":              changes,
-		"acceptedChanges":      changes,
-		"correctedOrRejected":  []string{},
+		"acceptedChanges":      acceptedChanges,
+		"correctedOrRejected":  correctedOrRejected,
+		"derivativeUpdated":    uniqueStrings(derivativeUpdated),
+		"derivativeStale":      uniqueStrings(derivativeStale),
 		"backup":               backupPath,
 		"renderStatus":         renderStatus,
 		"renderError":          renderErr,
@@ -1543,6 +1878,116 @@ func compareSlides(oldSlides, newSlides []slideInfo) []string {
 		changes = append(changes, "No HTML changes detected against baseline.")
 	}
 	return uniqueStrings(changes)
+}
+
+func slidesFromSpec(specPath string) []slideInfo {
+	raw, err := os.ReadFile(specPath)
+	if err != nil {
+		return nil
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return nil
+	}
+	arr, _ := spec["slides"].([]any)
+	slides := make([]slideInfo, 0, len(arr))
+	for _, item := range arr {
+		obj, _ := item.(map[string]any)
+		id, _ := obj["htmlId"].(string)
+		if id == "" {
+			id, _ = obj["id"].(string)
+		}
+		headline, _ := obj["headline"].(string)
+		text := headline
+		if body, ok := obj["bodyContent"].([]any); ok {
+			for _, part := range body {
+				text += " " + fmt.Sprint(part)
+			}
+		}
+		slides = append(slides, slideInfo{ID: id, Headline: headline, Text: normalizeText(text)})
+	}
+	return slides
+}
+
+func compareHTMLMetadata(oldPath, oldHTML, newPath, newHTML string) []string {
+	var changes []string
+	if oldHTML != "" {
+		oldS, oldA, oldF := collectDependencies(oldPath, oldHTML, "unknown")
+		newS, newA, newF := collectDependencies(newPath, newHTML, "unknown")
+		changes = append(changes, compareDependencySet("stylesheet", dependencySignatures(oldS), dependencySignatures(newS))...)
+		changes = append(changes, compareDependencySet("asset", dependencySignatures(oldA), dependencySignatures(newA))...)
+		changes = append(changes, compareDependencySet("font", dependencySignatures(oldF), dependencySignatures(newF))...)
+		if oldCount, newCount := countQARequired(oldHTML), countQARequired(newHTML); newCount < oldCount {
+			changes = append(changes, fmt.Sprintf("Removed QA-required elements: count changed from %d to %d.", oldCount, newCount))
+		}
+	} else {
+		_, assets, fonts := collectDependencies(newPath, newHTML, "unknown")
+		if len(assets) > 0 {
+			changes = append(changes, fmt.Sprintf("Asset dependencies present in current HTML: %d.", len(assets)))
+		}
+		if len(fonts) > 0 {
+			changes = append(changes, fmt.Sprintf("Font dependencies present in current HTML: %d.", len(fonts)))
+		}
+	}
+	if oldFont, newFont := extractFontFamilies(oldHTML), extractFontFamilies(newHTML); oldHTML != "" && oldFont != newFont {
+		changes = append(changes, "Font-family declarations changed.")
+	}
+	return changes
+}
+
+func dependencySignatures(deps []dependency) map[string]bool {
+	out := map[string]bool{}
+	for _, dep := range deps {
+		key := dep.Kind + "|" + dep.ID + "|" + dep.Path + "|" + dep.URL + "|" + dep.SHA256
+		out[key] = true
+	}
+	return out
+}
+
+func compareDependencySet(kind string, oldSet, newSet map[string]bool) []string {
+	var changes []string
+	for key := range newSet {
+		if !oldSet[key] {
+			changes = append(changes, strings.Title(kind)+" dependency added or changed: "+key)
+		}
+	}
+	for key := range oldSet {
+		if !newSet[key] {
+			changes = append(changes, strings.Title(kind)+" dependency removed or changed: "+key)
+		}
+	}
+	return changes
+}
+
+func countQARequired(html string) int {
+	return strings.Count(html, "data-qa-required") + strings.Count(html, "data-claim-id") + strings.Count(html, "aria-label")
+}
+
+func extractFontFamilies(html string) string {
+	re := regexp.MustCompile(`(?is)font-family\s*:\s*([^;}]+)`)
+	matches := re.FindAllStringSubmatch(html, -1)
+	var families []string
+	for _, m := range matches {
+		families = append(families, normalizeText(m[1]))
+	}
+	sort.Strings(families)
+	return strings.Join(families, "|")
+}
+
+func containsMeaningChange(changes []string) bool {
+	for _, c := range changes {
+		lower := strings.ToLower(c)
+		if strings.Contains(lower, "headline") ||
+			strings.Contains(lower, "body") ||
+			strings.Contains(lower, "slide count") ||
+			strings.Contains(lower, "slide order") ||
+			strings.Contains(lower, "asset") ||
+			strings.Contains(lower, "font") ||
+			strings.Contains(lower, "dependency") {
+			return true
+		}
+	}
+	return false
 }
 
 func updateSpecFromHTML(specPath string, slides []slideInfo) error {
@@ -1645,6 +2090,7 @@ func writeSyncReport(path string, report map[string]any) error {
 	b.WriteString("# HTML Edit Sync\n\n")
 	b.WriteString(fmt.Sprintf("- Sync date: %s\n", time.Now().UTC().Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", toolName, toolVersion))
+	b.WriteString(fmt.Sprintf("- Comparison source: `%s`\n", report["comparisonSource"]))
 	b.WriteString(fmt.Sprintf("- Current HTML hash: `%s`\n", report["currentHtmlHash"]))
 	b.WriteString(fmt.Sprintf("- Previous baseline hash: `%s`\n", report["previousBaselineHash"]))
 	b.WriteString(fmt.Sprintf("- New baseline hash: `%s`\n", report["newBaselineHash"]))
@@ -1680,8 +2126,22 @@ func writeSyncReport(path string, report map[string]any) error {
 		b.WriteString("- None recorded by automated sync. QA findings must be reviewed before final delivery.\n")
 	}
 	b.WriteString("\n## Derivative Files\n\n")
-	b.WriteString("- Updated or checked: `deck_spec.json`, `notes.md`, `render_manifest.json`, `qa_report.md`, rendered slide PNGs, `final_deck.pdf`, `qa_montage.png` when render completed.\n")
-	b.WriteString("- Potentially stale if the edit changed objective, audience, or evidence: `brief.md`, `strategy.md`, `source_inventory.md`, `delivery_summary.md`.\n")
+	b.WriteString("### Updated\n\n")
+	if files, ok := report["derivativeUpdated"].([]string); ok && len(files) > 0 {
+		for _, f := range files {
+			b.WriteString("- `" + f + "`\n")
+		}
+	} else {
+		b.WriteString("- None\n")
+	}
+	b.WriteString("\n### Marked Stale\n\n")
+	if files, ok := report["derivativeStale"].([]string); ok && len(files) > 0 {
+		for _, f := range files {
+			b.WriteString("- " + f + "\n")
+		}
+	} else {
+		b.WriteString("- None\n")
+	}
 	b.WriteString("\n## Remaining Risks\n\n")
 	b.WriteString("- Manual review is required for business meaning changes, claim provenance, and visual inspection of the regenerated montage.\n")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1725,6 +2185,7 @@ func packageDeck(deck string) (map[string]any, error) {
 		"qa_montage.png",
 		"qa_report.md",
 		"notes.md",
+		"delivery_summary.md",
 	}
 	var findings []qaFinding
 	for _, rel := range required {
@@ -1733,7 +2194,9 @@ func packageDeck(deck string) (map[string]any, error) {
 			findings = append(findings, fail("package.required_file", "missing required delivery file", path))
 		}
 	}
-	if pngs, _ := filepath.Glob(filepath.Join(outDir, "rendered_slides", "slide_*.png")); len(pngs) == 0 {
+	pngs, _ := filepath.Glob(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
+	sort.Strings(pngs)
+	if len(pngs) == 0 {
 		findings = append(findings, fail("package.rendered_slides", "missing rendered slide images", filepath.Join(outDir, "rendered_slides")))
 	}
 	manifestPath := filepath.Join(outDir, "render_manifest.json")
@@ -1744,6 +2207,42 @@ func packageDeck(deck string) (map[string]any, error) {
 			findings = append(findings, fail("package.manifest_parse", err.Error(), manifestPath))
 		} else if hash, err := sha256File(htmlPath); err == nil && hash != manifest.SourceHTML.SHA256 {
 			findings = append(findings, fail("package.manifest_freshness", "manifest source HTML hash is stale", manifestPath))
+		} else {
+			if len(manifest.PNGFiles) != len(pngs) {
+				findings = append(findings, fail("package.png_count", fmt.Sprintf("manifest PNG count %d does not match files %d", len(manifest.PNGFiles), len(pngs)), manifestPath))
+			}
+			for _, img := range manifest.PNGFiles {
+				if hash, err := sha256File(img.Path); err != nil {
+					findings = append(findings, fail("package.png_hash", "manifest PNG file missing: "+err.Error(), img.Path))
+				} else if hash != img.SHA256 {
+					findings = append(findings, fail("package.png_hash", "PNG hash does not match manifest", img.Path))
+				}
+				if dim, blank, err := validatePNG(img.Path, manifest.ExpectedDimensions.Width, manifest.ExpectedDimensions.Height); err != nil {
+					findings = append(findings, fail("package.png_valid", err.Error(), img.Path))
+				} else if blank {
+					findings = append(findings, fail("package.png_blank", "rendered PNG appears blank", img.Path))
+				} else if dim.Width != img.Dimensions.Width || dim.Height != img.Dimensions.Height {
+					findings = append(findings, fail("package.png_dimensions", "PNG dimensions differ from manifest", img.Path))
+				}
+			}
+			if hash, err := sha256File(manifest.PDF.Path); err != nil {
+				findings = append(findings, fail("package.pdf_hash", "manifest PDF missing: "+err.Error(), manifest.PDF.Path))
+			} else if hash != manifest.PDF.SHA256 {
+				findings = append(findings, fail("package.pdf_hash", "PDF hash does not match manifest", manifest.PDF.Path))
+			}
+			if pages, err := countPDFPages(manifest.PDF.Path); err != nil {
+				findings = append(findings, fail("package.pdf_pages", err.Error(), manifest.PDF.Path))
+			} else if pages != manifest.PDFPageCount || pages != len(manifest.PNGFiles) {
+				findings = append(findings, fail("package.pdf_pages", fmt.Sprintf("PDF pages=%d manifestPages=%d pngs=%d", pages, manifest.PDFPageCount, len(manifest.PNGFiles)), manifest.PDF.Path))
+			}
+			if manifest.PDFPageSizePoints.Width <= 0 || manifest.PDFPageSizePoints.Height <= 0 {
+				findings = append(findings, fail("package.pdf_page_size", "manifest PDF page size is missing", manifestPath))
+			}
+			if hash, err := sha256File(manifest.QAMontage.Path); err != nil {
+				findings = append(findings, fail("package.montage_hash", "manifest montage missing: "+err.Error(), manifest.QAMontage.Path))
+			} else if hash != manifest.QAMontage.SHA256 {
+				findings = append(findings, fail("package.montage_hash", "QA montage hash does not match manifest", manifest.QAMontage.Path))
+			}
 		}
 	}
 	status := statusFromFindings(findings)
