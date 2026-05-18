@@ -33,7 +33,7 @@ Read:
 Run CLI QA when available:
 
 ```bash
-codex-business-deck-kit qa --deck ${ACTIVE_DECK_DIR}
+mise exec -- slidex qa --deck ${ACTIVE_DECK_DIR}
 ```
 
 ## QA Coverage
@@ -62,6 +62,7 @@ Create or update `${OUT_DIR}/qa_report.md` covering:
 - accessibility,
 - reference and DESIGN.md alignment,
 - user-edit sync findings when relevant,
+- exact runtime/library/font/CDN version pinning,
 - required revisions,
 - unresolved risks.
 

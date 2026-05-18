@@ -9,8 +9,8 @@
     "activeDeckDir": "decks/customer-retention-2026-h1",
     "outputDir": "decks/customer-retention-2026-h1/out",
     "designPromptFile": "decks/customer-retention-2026-h1/DESIGN.md",
-    "schemaVersion": "codex-business-deck-kit.deck_spec.v1",
-    "toolName": "codex-business-deck-kit",
+    "schemaVersion": "slidex.deck_spec.v1",
+    "toolName": "slidex",
     "referenceFiles": [
       {
         "path": "decks/customer-retention-2026-h1/source/customer_interviews.pdf",
@@ -62,7 +62,7 @@
     "deliverySummary": "out/delivery_summary.md"
   },
   "renderConfig": {
-    "engine": "codex-business-deck-kit-cli",
+    "engine": "slidex-cli",
     "preset": "wide-1080p",
     "slideSelector": ".slide",
     "widthPx": 1920,

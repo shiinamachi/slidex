@@ -1,6 +1,6 @@
 # Global Business Document Rules
 
-These rules apply to every `codex-business-deck-kit` run unless a higher
+These rules apply to every `slidex` run unless a higher
 priority user instruction, approved source, or brand guide explicitly overrides
 them.
 
@@ -18,6 +18,21 @@ them.
   page.
 - Do not embed rendered full-slide PNGs as the HTML slide content.
 - Hide page-level scrollbars in the captured surface.
+
+## Runtime And Dependency Pinning
+
+Use mise-managed runtimes for local automation. Runtime and library versions
+must be exact pins, not ranges or floating labels.
+
+- Keep Go pinned exactly in `.mise.toml` and the `go.mod` `go` directive.
+- Do not use `latest`, `main`, `master`, `HEAD`, `>=`, `<=`, `>`, `<`, `^`,
+  `~`, `x`, or `*` for runtime, library, font, CDN, or renderer versions.
+- Remote CSS, fonts, scripts, image assets, browser/render tools, and other
+  dependencies must be vendored locally with SHA-256 or referenced by an exact
+  immutable version.
+- Record exact versions, SHA-256 values when available, and unresolved
+  dependency risks in `deck_spec.json`, `render_manifest.json`, `qa_report.md`,
+  or `notes.md` as appropriate.
 
 ## Korean Text Wrapping
 

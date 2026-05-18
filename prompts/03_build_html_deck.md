@@ -38,15 +38,16 @@ Read:
   `<section class="slide" data-slide-id="slide_01">`.
 - Do not embed rendered full-slide PNGs as slide content.
 - Use CSS variables for design tokens and font preset.
-- Load webfonts or local fonts predictably and document dependencies.
+- Load webfonts or local fonts predictably. Use exact immutable versions or
+  local vendored files with SHA-256; never use floating CDN/font references.
 - Use fixed production slide dimensions, default `1920x1080`.
 - Ensure all slide content is visible inside the fixed slide viewport.
 - Apply Korean wrapping rules from `_global_presentation_rules.md`.
 - Keep copy concise, concrete, and business-grade.
 - Avoid unsupported claims, fake metrics, fake customers, fake product names,
   fake screenshots, and invented technical scope.
-- Document external dependencies, generated image decisions, and risks in
-  `${OUT_DIR}/notes.md`.
+- Document exact-pinned external dependencies, generated image decisions, and
+  risks in `${OUT_DIR}/notes.md`.
 
 After writing `final_deck.html`, copy the generated HTML to
 `final_deck.generated_baseline.html`. This baseline represents the latest

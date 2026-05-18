@@ -25,7 +25,7 @@ Resolve `ACTIVE_DECK_DIR` and `OUT_DIR`.
 Use the CLI for the production workflow:
 
 ```bash
-codex-business-deck-kit render \
+mise exec -- slidex render \
   --html ${OUT_DIR}/final_deck.html \
   --out ${OUT_DIR}/rendered_slides \
   --pdf ${OUT_DIR}/final_deck.pdf \
@@ -52,5 +52,9 @@ requires a different preset.
 - Build PDF from current rendered images, one slide image per PDF page.
 - Record tool versions, dimensions, hashes, slide ids, created files, PDF page
   count and size, dependencies, and warnings in `render_manifest.json`.
+- Runtime, renderer, font, CDN, and library dependencies must be exact-pinned.
+  Do not use floating labels or ranges such as `latest`, `main`, `>=`, `^`,
+  `~`, `x`, or `*`. Vendor remote dependencies locally or use immutable exact
+  versions and record them in the manifest.
 
 Do not bypass the CLI for required production rendering.

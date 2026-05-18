@@ -1,6 +1,6 @@
 # One-Shot Create Business Doc
 
-Run the full `codex-business-deck-kit` workflow only after the intake gate is
+Run the full `slidex` workflow only after the intake gate is
 complete. If material intake questions remain, stop and ask them in Korean.
 
 ## Context
@@ -25,7 +25,7 @@ Resolve `ACTIVE_DECK_DIR` and `OUT_DIR`.
 6. Build `final_deck.html`.
 7. Save `final_deck.generated_baseline.html`.
 8. Render `.slide` elements to `rendered_slides/*.png` with
-   `codex-business-deck-kit render`.
+   `mise exec -- slidex render`.
 9. Generate `final_deck.pdf`, `render_manifest.json`, and `qa_montage.png`.
 10. Run business visual QA and create `qa_report.md`.
 11. Revise HTML/spec/notes, re-render, and rerun QA until material issues are
@@ -41,5 +41,7 @@ Resolve `ACTIVE_DECK_DIR` and `OUT_DIR`.
   fake logos, and invented technical scope.
 - Use static HTML/CSS with fixed slide dimensions and Korean-capable font
   presets.
+- Keep runtime, renderer, library, CDN, and font dependencies exact-pinned.
+  Do not use `latest`, `main`, range operators, `^`, `~`, `x`, or `*`.
 - Render current HTML to PNG and PDF before QA.
 - Do not generate or deliver legacy presentation-file output.

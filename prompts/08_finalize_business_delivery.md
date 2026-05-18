@@ -44,11 +44,13 @@ If direct HTML edits occurred, also verify `${OUT_DIR}/html_edit_sync.md`.
 - Verify PDF has one slide per page.
 - Verify claim provenance, DESIGN.md alignment, font loading, Korean wrapping,
   accessibility, and delivery risks are documented.
+- Verify runtime, renderer, library, CDN, and font dependencies use exact
+  pinned versions or local SHA-256 records.
 
 CLI package check:
 
 ```bash
-codex-business-deck-kit package --deck ${ACTIVE_DECK_DIR}
+mise exec -- slidex package --deck ${ACTIVE_DECK_DIR}
 ```
 
 ## Output

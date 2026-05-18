@@ -1,6 +1,6 @@
 # 00 Start Business Doc
 
-Begin a `codex-business-deck-kit` document run from sparse or rich materials.
+Begin a `slidex` document run from sparse or rich materials.
 Do not build final HTML, rendered images, or PDF until intake is complete.
 
 ## Context

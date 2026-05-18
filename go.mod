@@ -1,3 +1,3 @@
-module codex-business-deck-kit
+module slidex
 
-go 1.22
+go 1.26.3

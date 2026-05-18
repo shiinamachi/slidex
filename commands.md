@@ -1,6 +1,6 @@
 # 명령어 가이드
 
-이 문서는 `codex-business-deck-kit` 프롬프트 시스템과 로컬 CLI를 사용해
+이 문서는 `slidex` 프롬프트 시스템과 로컬 CLI를 사용해
 HTML-first 비즈니스 문서와 페이지형 PDF를 만드는 명령을 정리합니다.
 
 ## 작업공간 만들기
@@ -12,6 +12,17 @@ cp -R decks/_template decks/customer-retention
 그 뒤 `decks/customer-retention/brief.md`를 작성하고 필요한 `assets/`,
 `brand/`, `data/`, `source/` 자료를 추가합니다. 스타일 방향이 있으면
 `decks/customer-retention/DESIGN.md`에 작성합니다.
+
+## 런타임 준비
+
+Go 런타임은 mise로 exact pin합니다. 현재 핀은 `.mise.toml`과 `go.mod`의
+`go` 지시문에 기록된 `1.26.3`입니다.
+
+```bash
+mise install
+mise exec -- go version
+mise exec -- go install ./cmd/slidex
+```
 
 ## 단계별 프롬프트
 
@@ -42,7 +53,7 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 ## CLI 렌더링
 
 ```bash
-codex-business-deck-kit render \
+mise exec -- slidex render \
   --html decks/customer-retention/out/final_deck.html \
   --out decks/customer-retention/out/rendered_slides \
   --pdf decks/customer-retention/out/final_deck.pdf \
@@ -57,16 +68,15 @@ codex-business-deck-kit render \
 ## CLI 명령
 
 ```bash
-codex-business-deck-kit inspect --deck decks/customer-retention
-codex-business-deck-kit validate-spec --spec decks/customer-retention/out/deck_spec.json
-codex-business-deck-kit render --html decks/customer-retention/out/final_deck.html --pdf decks/customer-retention/out/final_deck.pdf
-codex-business-deck-kit qa --deck decks/customer-retention
-codex-business-deck-kit sync-html-edits --deck decks/customer-retention
-codex-business-deck-kit package --deck decks/customer-retention
+mise exec -- slidex inspect --deck decks/customer-retention
+mise exec -- slidex validate-spec --spec decks/customer-retention/out/deck_spec.json
+mise exec -- slidex render --html decks/customer-retention/out/final_deck.html --pdf decks/customer-retention/out/final_deck.pdf
+mise exec -- slidex qa --deck decks/customer-retention
+mise exec -- slidex sync-html-edits --deck decks/customer-retention
+mise exec -- slidex package --deck decks/customer-retention
 ```
 
-`business-deck-kit` 같은 짧은 실행 파일명은 별도 alias로만 사용할 수 있습니다.
-문서와 acceptance 기준의 canonical 이름은 `codex-business-deck-kit`입니다.
+문서와 acceptance 기준의 canonical 이름은 `slidex`입니다.
 
 ## 샌드박스
 

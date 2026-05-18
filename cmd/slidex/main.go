@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	toolName    = "codex-business-deck-kit"
+	toolName    = "slidex"
 	toolVersion = "0.1.0"
 )
 
@@ -415,8 +415,8 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 		}
 	}
 	if rc, ok := obj["renderConfig"].(map[string]any); ok {
-		if engine, _ := rc["engine"].(string); engine != "codex-business-deck-kit-cli" {
-			findings = append(findings, fail("schema.renderConfig.engine", "renderConfig.engine must be codex-business-deck-kit-cli", path))
+		if engine, _ := rc["engine"].(string); engine != "slidex-cli" {
+			findings = append(findings, fail("schema.renderConfig.engine", "renderConfig.engine must be slidex-cli", path))
 		}
 		if width, ok := numberAsInt(rc["widthPx"]); !ok || width <= 0 {
 			findings = append(findings, fail("schema.renderConfig.widthPx", "widthPx must be positive", path))
@@ -776,7 +776,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	}
 
 	head := extractHead(string(raw))
-	tmpDir, err := os.MkdirTemp("", "codex-business-deck-kit-render-*")
+	tmpDir, err := os.MkdirTemp("", "slidex-render-*")
 	if err != nil {
 		return renderManifest{}, err
 	}
@@ -949,7 +949,7 @@ func buildSlideWrapper(head, slideHTML string, width, height int, fontPreset str
 <html lang="ko">
 <head>
 %s
-<style id="codex-business-deck-kit-render-wrapper">
+<style id="slidex-render-wrapper">
 :root { --slide-width: %dpx; --slide-height: %dpx; --font-body: %s; }
 html, body { margin: 0 !important; padding: 0 !important; width: %dpx !important; height: %dpx !important; overflow: hidden !important; background: #fff; }
 body { font-family: var(--font-body); }
@@ -959,7 +959,7 @@ body { font-family: var(--font-body); }
 *::-webkit-scrollbar { display: none !important; }
 </style>
 <script>
-async function codexBusinessDeckKitReady() {
+async function slidexReady() {
   if (document.fonts && document.fonts.ready) {
     await document.fonts.ready;
   }
@@ -986,12 +986,12 @@ async function codexBusinessDeckKitReady() {
     }
   });
   const report = document.createElement('script');
-  report.id = 'codex-overflow-data';
+  report.id = 'slidex-overflow-data';
   report.type = 'application/json';
   report.textContent = JSON.stringify(issues);
   document.body.appendChild(report);
 }
-document.addEventListener('DOMContentLoaded', () => { codexBusinessDeckKitReady(); });
+document.addEventListener('DOMContentLoaded', () => { slidexReady(); });
 </script>
 </head>
 <body><div class="deck">%s</div></body>
@@ -1082,7 +1082,7 @@ func checkOverflowWithChrome(chromePath, htmlPath string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
 	}
-	re := regexp.MustCompile(`(?is)<script id="codex-overflow-data" type="application/json">(.*?)</script>`)
+	re := regexp.MustCompile(`(?is)<script id="slidex-overflow-data" type="application/json">(.*?)</script>`)
 	m := re.FindStringSubmatch(string(out))
 	if len(m) < 2 {
 		return nil, errors.New("overflow report missing from dumped DOM")
@@ -1222,28 +1222,16 @@ func fontPresetDependency(fontPreset string) dependency {
 	dep := dependency{
 		ID:        fontPreset,
 		Kind:      "font_preset",
-		Version:   "codex-business-deck-kit-preset-v1",
+		Version:   "slidex-preset-v1",
 		Retrieved: time.Now().UTC().Format(time.RFC3339),
 	}
 	switch fontPreset {
 	case "pretendard":
-		dep.URL = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable.css"
-		dep.Version = "remote-css-unpinned"
-		dep.Risk = "remote Pretendard CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
 	case "noto-sans-kr":
-		dep.URL = "https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
-		dep.Version = "google-fonts-css-unpinned"
-		dep.Risk = "remote Google Fonts CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
 	case "noto-sans-cjk-kr":
 		dep.Risk = "system/local Noto Sans CJK KR availability must be verified on the render machine"
 	case "ibm-plex-sans-kr":
-		dep.URL = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap"
-		dep.Version = "google-fonts-css-unpinned"
-		dep.Risk = "remote Google Fonts CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
 	case "suit":
-		dep.URL = "https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/variable/woff2/SUIT-Variable.css"
-		dep.Version = "remote-css-unpinned"
-		dep.Risk = "remote SUIT CSS is documented but not downloaded or hashed by default; vendor locally for deterministic offline rendering"
 	case "custom":
 		dep.Risk = "custom font preset must be backed by brand/guidelines.md, brand/fonts, or deck_spec.json and verified during QA"
 	default:
@@ -1255,8 +1243,11 @@ func fontPresetDependency(fontPreset string) dependency {
 func fillDependency(dep *dependency, base, ref string) {
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		dep.URL = ref
+		dep.Version = inferRemoteVersion(ref)
 		dep.Retrieved = time.Now().UTC().Format(time.RFC3339)
-		dep.Risk = "remote dependency cannot be hashed deterministically by offline render manifest"
+		if dep.Version == "" {
+			dep.Risk = "remote dependency must use an exact pinned version or be vendored locally"
+		}
 		return
 	}
 	cleanRef := strings.Split(ref, "#")[0]
@@ -1271,6 +1262,81 @@ func fillDependency(dep *dependency, base, ref string) {
 	} else {
 		dep.Risk = "local dependency missing or unreadable: " + err.Error()
 	}
+}
+
+func inferRemoteVersion(ref string) string {
+	if u, err := url.Parse(ref); err == nil {
+		for _, key := range []string{"version", "ver", "v"} {
+			if value := u.Query().Get(key); isExactVersion(value) {
+				return value
+			}
+		}
+	}
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`@((?:v)?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?)`),
+		regexp.MustCompile(`/(v?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?)(?:/|$)`),
+	}
+	for _, pattern := range patterns {
+		if match := pattern.FindStringSubmatch(ref); len(match) > 1 && isExactVersion(match[1]) {
+			return match[1]
+		}
+	}
+	return ""
+}
+
+func dependencyPinFindings(check string, deps []dependency, sourcePath string) []qaFinding {
+	var findings []qaFinding
+	for _, dep := range deps {
+		where := dependencyLocation(dep, sourcePath)
+		if dep.Version != "" && !isExactVersion(dep.Version) {
+			findings = append(findings, fail(check, "dependency version must be exact, not a range or floating label: "+dep.Version, where))
+		}
+		if dep.URL != "" && dep.Version == "" {
+			findings = append(findings, fail(check, "remote dependency must record an exact pinned version or be vendored locally", where))
+		}
+	}
+	return findings
+}
+
+func dependencyLocation(dep dependency, fallback string) string {
+	return firstNonEmpty(dep.Path, dep.URL, dep.ID, fallback)
+}
+
+func isExactVersion(version string) bool {
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return false
+	}
+	lower := strings.ToLower(v)
+	if strings.Contains(lower, "latest") ||
+		strings.Contains(lower, "unpinned") ||
+		strings.Contains(lower, "range") ||
+		strings.Contains(lower, "main") ||
+		strings.Contains(lower, "master") ||
+		strings.Contains(lower, "head") ||
+		strings.Contains(lower, "nightly") ||
+		strings.Contains(lower, "snapshot") ||
+		strings.Contains(lower, "dev") ||
+		strings.Contains(lower, "*") ||
+		strings.Contains(lower, "||") ||
+		strings.Contains(lower, " - ") ||
+		strings.ContainsAny(lower, "<>^~") {
+		return false
+	}
+	if regexp.MustCompile(`(^|[._-])x([._-]|$)`).MatchString(lower) {
+		return false
+	}
+	return true
+}
+
+func hasExactVersionToken(version string) bool {
+	matches := regexp.MustCompile(`\b[0-9]+(?:\.[0-9]+){2,3}\b`).FindAllString(version, -1)
+	for _, match := range matches {
+		if isExactVersion(match) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1508,11 +1574,13 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 		if len(htmlSlides) == 0 {
 			result.Findings = append(result.Findings, fail("html.slides", "no .slide elements found", htmlPath))
 		}
-		for _, dep := range localDependencies(htmlPath, htmlString) {
+		htmlDeps := localDependencies(htmlPath, htmlString)
+		for _, dep := range htmlDeps {
 			if dep.Risk != "" {
 				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.dependency", Message: dep.Risk, Path: dep.Path})
 			}
 		}
+		result.Findings = append(result.Findings, dependencyPinFindings("html.dependency_pin", htmlDeps, htmlPath)...)
 		if !strings.Contains(htmlString, "word-break: keep-all") {
 			result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.korean_wrapping", Message: "CSS does not explicitly include word-break: keep-all", Path: htmlPath})
 		}
@@ -1539,12 +1607,18 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 				result.Findings = append(result.Findings, fail("manifest.freshness", "current HTML hash does not match render manifest", htmlPath))
 			}
 			result.RenderMethod = manifest.RenderMethod
+			if !hasExactVersionToken(manifest.ChromeVersion) {
+				result.Findings = append(result.Findings, fail("runtime.chrome_version", "render manifest must record an exact Chrome/Chromium version", manifestPath))
+			}
 			if manifest.PDFPageSizePoints.Width <= 0 || manifest.PDFPageSizePoints.Height <= 0 {
 				result.Findings = append(result.Findings, fail("pdf.page_size", "render manifest is missing PDF page size", manifestPath))
 			}
 			if manifest.FontPreset == "" {
 				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "font.preset", Message: "render manifest does not record a font preset", Path: manifestPath})
 			}
+			result.Findings = append(result.Findings, dependencyPinFindings("manifest.stylesheet_pin", manifest.Stylesheets, manifestPath)...)
+			result.Findings = append(result.Findings, dependencyPinFindings("manifest.asset_pin", manifest.Assets, manifestPath)...)
+			result.Findings = append(result.Findings, dependencyPinFindings("manifest.font_pin", manifest.Fonts, manifestPath)...)
 		}
 	}
 	for _, p := range pngs {
@@ -2257,6 +2331,9 @@ func packageDeck(deck string) (map[string]any, error) {
 		} else if hash, err := sha256File(htmlPath); err == nil && hash != manifest.SourceHTML.SHA256 {
 			findings = append(findings, fail("package.manifest_freshness", "manifest source HTML hash is stale", manifestPath))
 		} else {
+			if !hasExactVersionToken(manifest.ChromeVersion) {
+				findings = append(findings, fail("package.runtime_chrome_version", "manifest must record an exact Chrome/Chromium version", manifestPath))
+			}
 			if currentHTML, err := os.ReadFile(htmlPath); err == nil {
 				currentStyles, currentAssets, currentFonts := collectDependencies(htmlPath, string(currentHTML), manifest.FontPreset)
 				findings = append(findings, verifyManifestDependencies("stylesheet", manifest.Stylesheets, currentStyles, manifestPath)...)
@@ -2313,6 +2390,7 @@ func packageDeck(deck string) (map[string]any, error) {
 
 func verifyManifestDependencies(kind string, manifestDeps []dependency, currentDeps []dependency, manifestPath string) []qaFinding {
 	var findings []qaFinding
+	findings = append(findings, dependencyPinFindings("package."+kind+"_pin", manifestDeps, manifestPath)...)
 	manifestSet := map[string]dependency{}
 	for _, dep := range manifestDeps {
 		manifestSet[dependencyFreshnessKey(dep)] = dep

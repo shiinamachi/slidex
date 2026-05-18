@@ -1,4 +1,4 @@
-# codex-business-deck-kit Workspace
+# slidex Workspace
 
 ## Communication
 
@@ -37,6 +37,20 @@ Before every run, resolve the active deck directory using
 - Do not include unrelated user changes or generated artifacts unless required
   for the task.
 - Write commit messages using Conventional Commits.
+
+## Runtime And Dependency Pinning
+
+- Manage runtimes with mise.
+- Pin Go exactly in `.mise.toml` and in the `go.mod` `go` directive. Keep
+  those values synchronized.
+- Pin every runtime and library version to an exact version. Do not use version
+  ranges or floating labels such as `latest`, `main`, `master`, `HEAD`, `>=`,
+  `<=`, `>`, `<`, `^`, `~`, `x`, or `*`.
+- Remote CSS, fonts, browser/render dependencies, and image-processing tools
+  must either be vendored locally with SHA-256 recorded or referenced with an
+  exact immutable version in the manifest and notes.
+- When adding or updating dependencies, update the relevant lockfile, manifest,
+  documentation, and validation checks in the same coherent change.
 
 ## Model And Sub-Agent Selection
 
@@ -92,7 +106,7 @@ Every future production run must follow this sequence:
 8. Copy the latest generated HTML to
    `${OUT_DIR}/final_deck.generated_baseline.html`.
 9. Render every `.slide` to `${OUT_DIR}/rendered_slides/*.png` using
-   `codex-business-deck-kit render`.
+   `slidex render`.
 10. Generate `${OUT_DIR}/final_deck.pdf`, one rendered slide image per page.
 11. Create `${OUT_DIR}/render_manifest.json`.
 12. Create `${OUT_DIR}/qa_montage.png`.

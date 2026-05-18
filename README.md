@@ -1,6 +1,6 @@
-# codex-business-deck-kit
+# slidex
 
-`codex-business-deck-kit`은 Codex CLI가 비즈니스급 문서를 만들 때 사용하는
+`slidex`은 Codex CLI가 비즈니스급 문서를 만들 때 사용하는
 파일 기반 프롬프트 시스템과 로컬 자동화 키트입니다. 대상 산출물은
 PowerPoint가 아니라 HTML을 시각 원본으로 삼아 렌더링한 페이지형 PDF입니다.
 
@@ -84,7 +84,7 @@ PDF는 일반 프레젠테이션 내보내기처럼 한 슬라이드가 한 PDF 
 7. 정적 HTML/CSS 슬라이드 원본 `${OUT_DIR}/final_deck.html`을 작성합니다.
 8. 같은 내용을 `${OUT_DIR}/final_deck.generated_baseline.html`에 기준선으로
    저장합니다.
-9. `codex-business-deck-kit render`로 `.slide` 요소를 PNG로 렌더링하고,
+9. `slidex render`로 `.slide` 요소를 PNG로 렌더링하고,
    `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`를 생성합니다.
 10. 비즈니스 논리, claim provenance, 시각 품질, HTML/PDF 무결성, 접근성을 QA합니다.
 11. QA 이슈를 HTML/spec/notes에 반영하고 다시 렌더링합니다.
@@ -115,12 +115,11 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 
 ## 로컬 CLI
 
-표준 렌더링과 검증에는 canonical CLI 이름 `codex-business-deck-kit`을 사용합니다.
-짧은 이름을 만들 수는 있지만 문서와 acceptance 기준의 기준 이름은 항상
-`codex-business-deck-kit`입니다.
+표준 렌더링과 검증에는 canonical CLI 이름 `slidex`을 사용합니다. 문서와
+acceptance 기준의 기준 이름은 항상 `slidex`입니다.
 
 ```bash
-codex-business-deck-kit render \
+mise exec -- slidex render \
   --html decks/customer-retention/out/final_deck.html \
   --out decks/customer-retention/out/rendered_slides \
   --pdf decks/customer-retention/out/final_deck.pdf \
@@ -143,6 +142,24 @@ codex-business-deck-kit render \
 - `sync-html-edits`: 사용자가 직접 수정한 HTML을 baseline과 비교하고 spec/notes/QA
   stale 상태를 동기화합니다.
 - `package`: 최종 산출물 존재와 manifest freshness를 확인합니다.
+
+## 런타임과 버전 고정
+
+런타임 관리는 mise를 사용합니다. 이 저장소의 Go 버전은 `.mise.toml`과
+`go.mod`의 `go` 지시문에서 모두 `1.26.3`으로 exact pin합니다.
+
+```bash
+mise install
+mise exec -- go version
+mise exec -- go install ./cmd/slidex
+mise exec -- go test ./...
+```
+
+라이브러리와 런타임 버전은 항상 exact version으로 기록합니다. `latest`,
+`main`, `master`, `HEAD`, `>=`, `<=`, `>`, `<`, `^`, `~`, `x`, `*` 같은 range 또는
+floating 표기는 사용하지 않습니다. 외부 CDN, 원격 CSS, 폰트, 이미지 처리 도구,
+브라우저/렌더러 버전도 exact version을 기록하거나 로컬에 vendoring하고
+`render_manifest.json`에 버전 또는 SHA-256을 남겨야 합니다.
 
 ## HTML 기준
 

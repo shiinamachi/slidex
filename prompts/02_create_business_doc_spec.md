@@ -44,6 +44,7 @@ The spec must include:
 - render config,
 - PDF config,
 - design system and font preset,
+- exact-pinned runtime, renderer, font, CDN, and library dependency notes,
 - story arc,
 - slide list,
 - HTML implementation notes,
@@ -59,7 +60,10 @@ Every slide must include `htmlId`, `sectionRole`, `headline`, `keyMessage`,
 Validate the JSON. If the local CLI is available, run:
 
 ```bash
-codex-business-deck-kit validate-spec --spec ${OUT_DIR}/deck_spec.json
+mise exec -- slidex validate-spec --spec ${OUT_DIR}/deck_spec.json
 ```
+
+Do not use version ranges or floating labels such as `latest`, `main`, `>=`,
+`^`, `~`, `x`, or `*` in dependency, runtime, renderer, CDN, or font notes.
 
 Do not create HTML, rendered images, or PDF in this stage.

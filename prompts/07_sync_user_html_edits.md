@@ -38,5 +38,5 @@ Resolve `ACTIVE_DECK_DIR` and `OUT_DIR`.
 CLI path:
 
 ```bash
-codex-business-deck-kit sync-html-edits --deck ${ACTIVE_DECK_DIR}
+mise exec -- slidex sync-html-edits --deck ${ACTIVE_DECK_DIR}
 ```

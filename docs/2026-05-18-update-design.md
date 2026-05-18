@@ -1,15 +1,15 @@
-# 2026-05-18 Update Design: codex-business-deck-kit
+# 2026-05-18 Update Design: slidex
 
 Status: Final design approved after user Q&A and reviewer sign-off on
 2026-05-18.
 
-This document is the implementation design for changing the current
-`codex-pptx-system` prompt workspace into `codex-business-deck-kit`.
+This document is the implementation design for changing the legacy deck prompt
+workspace into `slidex`.
 It is intentionally detailed so a future Codex CLI session can use this file as
 its `/goal` objective and implement the update without leaving known gaps.
 
 The implementation target includes both prompt-system updates and a required Go
-CLI named `codex-business-deck-kit`.
+CLI named `slidex`.
 
 ## Non-Negotiable Goal
 
@@ -137,7 +137,7 @@ configurable presets.
 
 ## Target System Name
 
-Use `codex-business-deck-kit` as the system name everywhere user-facing.
+Use `slidex` as the system name everywhere user-facing.
 
 Implementation must update references in:
 
@@ -353,7 +353,7 @@ Required outputs:
 
 Rendering requirements:
 
-- Use the required `codex-business-deck-kit render` command. The CLI may use
+- Use the required `slidex render` command. The CLI may use
   headless Chrome or CDP internally, but prompt files must call the CLI rather
   than bypassing it for the required production workflow.
 - Wait for `document.fonts.ready`.
@@ -455,7 +455,7 @@ Important rule:
 
 Replace or version `schemas/deck_spec.schema.json`. A compatible path is
 preferred, but the schema title and description must reflect
-`codex-business-deck-kit`.
+`slidex`.
 
 Required top-level fields:
 
@@ -497,7 +497,7 @@ Recommended field details:
     "qaMontage": "out/qa_montage.png"
   },
   "renderConfig": {
-    "engine": "codex-business-deck-kit-cli",
+    "engine": "slidex-cli",
     "slideSelector": ".slide",
     "widthPx": 1920,
     "heightPx": 1080,
@@ -609,10 +609,10 @@ Required rendering behavior:
 
 Recommended implementation:
 
-- Add a local CLI program named `codex-business-deck-kit`.
-- The shorter executable name `business-deck-kit` may exist only as an alias,
+- Add a local CLI program named `slidex`.
+- The shorter executable name `slidex` may exist only as an alias,
   but all documentation and acceptance criteria must use
-  `codex-business-deck-kit` as the canonical CLI name.
+  `slidex` as the canonical CLI name.
 - Recommended implementation language: Go.
 - Use headless Chrome through Chrome DevTools Protocol for HTML inspection,
   element screenshots, and PDF-related browser behavior.
@@ -636,8 +636,8 @@ Recommended implementation:
 - referenced local asset hashes,
 - font preset, font dependency identifiers, and SHA-256 hashes for local font
   files or downloaded webfont CSS/font files,
-- when a remote webfont cannot be hashed deterministically, its URL, declared
-  version, retrieval timestamp, and unresolved dependency risk,
+- when a remote webfont cannot be hashed deterministically, its URL, exact
+  pinned version, retrieval timestamp, and unresolved dependency risk,
 - slide selector,
 - ordered slide IDs,
 - expected and actual slide image dimensions,
@@ -652,8 +652,8 @@ Recommended implementation:
 - unresolved render warnings.
 
 For CSS, asset, and font dependency lists, use structured entries with
-`path` or `url`, `id`, `kind`, `version` when available, `sha256` when
-deterministic, and `risk` when a hash cannot be produced.
+`path` or `url`, `id`, `kind`, exact `version`, `sha256` when deterministic,
+and `risk` when a hash cannot be produced.
 
 If `sharp` remains in the toolchain, it should be used only for image
 composition, montage generation, or image-to-PDF assembly. It must not be the
@@ -840,7 +840,7 @@ The one-shot prompt must stop for Q&A if the intake gate is incomplete.
 Document CLI commands such as:
 
 ```bash
-codex-business-deck-kit render \
+slidex render \
   --html decks/customer-retention/out/final_deck.html \
   --out decks/customer-retention/out/rendered_slides \
   --pdf decks/customer-retention/out/final_deck.pdf \
@@ -914,7 +914,7 @@ Reasons:
 ### Suggested Go Layout
 
 ```text
-cmd/codex-business-deck-kit/
+cmd/slidex/
   main.go
 internal/config/
 internal/deck/
@@ -929,12 +929,12 @@ internal/schema/
 Suggested commands:
 
 ```bash
-codex-business-deck-kit inspect --deck decks/<deck_id>
-codex-business-deck-kit validate-spec --spec decks/<deck_id>/out/deck_spec.json
-codex-business-deck-kit render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
-codex-business-deck-kit qa --deck decks/<deck_id>
-codex-business-deck-kit sync-html-edits --deck decks/<deck_id>
-codex-business-deck-kit package --deck decks/<deck_id>
+slidex inspect --deck decks/<deck_id>
+slidex validate-spec --spec decks/<deck_id>/out/deck_spec.json
+slidex render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
+slidex qa --deck decks/<deck_id>
+slidex sync-html-edits --deck decks/<deck_id>
+slidex package --deck decks/<deck_id>
 ```
 
 Suggested responsibilities:
@@ -971,10 +971,10 @@ For future runs:
 
 The implementation is complete only when:
 
-- The system name is changed to `codex-business-deck-kit` in user-facing docs.
-- The canonical CLI binary is `codex-business-deck-kit`; any shorter executable
-  name is documented only as an alias.
-- A Go CLI skeleton exists at `cmd/codex-business-deck-kit/` or an equivalent
+- The system name is changed to `slidex` in user-facing docs.
+- The canonical CLI binary is `slidex`; any alternate executable name is
+  documented only as an alias.
+- A Go CLI skeleton exists at `cmd/slidex/` or an equivalent
   clearly documented Go command path.
 - The CLI provides the minimum required commands: `inspect`, `validate-spec`,
   `render`, `qa`, `sync-html-edits`, and `package`.

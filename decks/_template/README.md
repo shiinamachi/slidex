@@ -1,6 +1,6 @@
 # 비즈니스 문서 작업공간 템플릿
 
-이 폴더를 복사해 새 `codex-business-deck-kit` 작업공간을 만듭니다.
+이 폴더를 복사해 새 `slidex` 작업공간을 만듭니다.
 
 ```bash
 cp -R decks/_template decks/<deck_id>

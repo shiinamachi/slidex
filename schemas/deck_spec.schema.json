@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/codex-business-deck-kit.deck_spec.schema.json",
-  "title": "codex-business-deck-kit Document Specification",
+  "$id": "https://example.com/schemas/slidex.deck_spec.schema.json",
+  "title": "slidex Document Specification",
   "description": "Structured specification for an HTML-first business document rendered to a paginated PDF.",
   "type": "object",
   "required": [
@@ -103,7 +103,7 @@
       "required": ["engine", "slideSelector", "widthPx", "heightPx", "deviceScaleFactor", "waitForFonts", "captureElementOnly"],
       "additionalProperties": false,
       "properties": {
-        "engine": {"type": "string", "const": "codex-business-deck-kit-cli"},
+        "engine": {"type": "string", "const": "slidex-cli"},
         "preset": {"type": "string", "enum": ["wide-1080p", "wide-720p", "wide-900p", "wide-1440p", "custom"]},
         "slideSelector": {"type": "string"},
         "widthPx": {"type": "integer", "minimum": 1},
