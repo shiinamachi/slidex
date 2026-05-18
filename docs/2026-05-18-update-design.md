@@ -1,7 +1,7 @@
 # 2026-05-18 Update Design: codex-business-deck-kit
 
-Status: Draft with 2026-05-18 user Q&A round 1 incorporated; pending
-reviewer sign-off.
+Status: Final design approved after user Q&A and reviewer sign-off on
+2026-05-18.
 
 This document is the implementation design for changing the current
 `codex-pptx-system` prompt workspace into `codex-business-deck-kit`.
@@ -651,6 +651,10 @@ Recommended implementation:
 - operating system,
 - unresolved render warnings.
 
+For CSS, asset, and font dependency lists, use structured entries with
+`path` or `url`, `id`, `kind`, `version` when available, `sha256` when
+deterministic, and `risk` when a hash cannot be produced.
+
 If `sharp` remains in the toolchain, it should be used only for image
 composition, montage generation, or image-to-PDF assembly. It must not be the
 primary slide layout renderer.
@@ -1032,10 +1036,11 @@ Recommended order:
 8. Run repository-wide search for stale PPTX-first required-delivery language.
 9. Review against acceptance criteria.
 
-## Finalization Gate For This Design Document
+## Finalization Record
 
-This design document itself is not final until:
+This design document is final for the requested 2026-05-18 update plan.
 
-- a separate review agent inspects this document,
-- all reviewer-identified gaps are fixed,
-- the final document no longer labels required decisions as unresolved.
+- User Q&A decisions are incorporated.
+- Separate review agents inspected the document.
+- Reviewer-identified gaps were fixed.
+- The final reviewer reported: `부족한 항목 없음`.
