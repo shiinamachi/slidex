@@ -1,40 +1,35 @@
 # Accessibility QA Checklist
 
-## Text Size
+## Text And Reading
 
-- Body text is generally at least 18pt.
-- Key messages are large enough for the presentation setting.
-- Labels in charts and diagrams are readable.
+- Important text is readable at final PDF size.
+- Dense paragraphs are reduced or split.
+- Reading order follows headline, key message, body, visual, source/risk notes.
+- Korean line breaks are natural and do not split words or syllables awkwardly.
 
-## Contrast
+## Contrast And Color
 
 - Text has sufficient contrast against backgrounds.
 - Chart labels and annotations remain legible.
-- Light gray text is avoided for critical content.
+- Color is not the only carrier of meaning.
+- Red/green or status colors include text, symbols, labels, or patterns.
 
-## Alt Text
+## Images And Alternatives
 
-- Meaningful images have alt text.
+- Meaningful images have alt text or documented alt text requirements in spec
+  or notes.
 - Decorative images are marked or documented as decorative.
-- Generated visuals have clear descriptions in `${OUT_DIR}/notes.md`.
+- Generated or sourced visuals have usage notes in `${OUT_DIR}/notes.md`.
 
-## Reading Order
+## HTML And PDF
 
-- Slide structure follows a logical reading order.
-- Titles, key messages, visuals, and notes are not confusingly layered.
+- HTML uses semantic slide sections and meaningful heading structure.
+- Font loading does not create overflow, clipping, or unreadable fallbacks.
+- Rendered PNGs are sharp and correct size.
+- Final PDF has one slide per page and preserves readable content.
 
-## Chart Labeling
+## Charts And Tables
 
-- Charts include clear labels.
-- Important values are directly labeled when useful.
+- Charts and tables include source labels or notes where useful.
+- Labels are direct and readable.
 - Legends are avoided when direct labeling is clearer.
-
-## Avoid Color-Only Meaning
-
-- Use labels, icons, patterns, or annotations in addition to color.
-- Red and green status indicators include text or symbols.
-
-## Speaker Notes
-
-- Complex visuals include speaker notes when they help delivery.
-- Notes clarify data sources or assumptions where useful.

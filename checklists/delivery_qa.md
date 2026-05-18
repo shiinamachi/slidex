@@ -3,50 +3,48 @@
 ## Final Files
 
 - Active deck id and `ACTIVE_DECK_DIR` are documented.
-- `${OUT_DIR}/final_deck.pptx` exists.
+- `${OUT_DIR}/strategy.md` exists.
 - `${OUT_DIR}/deck_spec.json` exists.
-- `${OUT_DIR}/notes.md` exists.
-- `${OUT_DIR}/qa_report.md` exists.
+- `${OUT_DIR}/final_deck.html` exists.
+- `${OUT_DIR}/final_deck.generated_baseline.html` exists.
+- `${OUT_DIR}/rendered_slides/*.png` exists.
+- `${OUT_DIR}/final_deck.pdf` exists.
+- `${OUT_DIR}/render_manifest.json` exists.
 - `${OUT_DIR}/qa_montage.png` exists.
-- Rendered slide images exist in `${OUT_DIR}/rendered_slides/`.
-- No generated outputs were written to another deck workspace.
+- `${OUT_DIR}/qa_report.md` exists.
+- `${OUT_DIR}/notes.md` exists.
+- `${OUT_DIR}/delivery_summary.md` exists before final handoff.
 
-## PPTX Integrity
+## Render And PDF Integrity
 
-- PPTX opens correctly.
-- No broken images are visible.
-- No missing fonts or substitution issues are unresolved.
-- No whole-slide rasterization is used unless explicitly justified.
+- Render manifest records current HTML hash and generated artifact hashes.
+- Rendered slide count matches spec, HTML, PDF page count, and montage.
+- PNG dimensions match the expected render size.
+- No rendered slide is blank, clipped, or stale.
+- PDF uses paginated mode with one slide image per page.
+- Manifest freshness has been checked after direct HTML edits.
 
-## Visual Issues
+## Business QA
 
-- No text overflow remains.
-- No object overlap remains.
-- Margins and alignment are consistent.
-- Charts are readable.
-- Tables fit and remain editable.
+- Document type fit is checked.
+- Story arc and decision journey are coherent.
+- Claim provenance findings are resolved or documented.
+- Legal, compliance, security, privacy, and unsupported outcome risks are
+  documented.
+- Source references are used faithfully.
 
-## HTML Deck Parity
+## Visual And Accessibility
 
-- If HTML output exists, slide count, order, headlines, and key messages match
-  `deck_spec.json`, or the spec is updated to match the approved final
-  structure.
-- HTML render screenshots exist for every slide.
-- HTML has no unintended external dependencies unless documented.
-- HTML does not introduce unsupported claims that are absent from the approved
-  spec.
-- Korean text wraps by word or phrase, not mid-word.
-- HTML loads a documented webfont and applies it consistently across every text
-  role, including mono-styled labels, unless a brand guide explicitly requires a
-  separate mono face.
+- No material overflow, overlap, broken image, missing font, unreadable chart,
+  or low-contrast issue remains unless documented as accepted risk.
+- Korean wrapping is acceptable.
+- Font preset and external dependencies are documented.
+- Meaningful images have alt text or documented alt text requirements.
 
-## Documentation
+## User HTML Edit Sync
 
-- Generated visual prompts are documented.
-- Design decisions are documented.
-- DESIGN.md usage, applied directives, and unresolved style prompt conflicts are
-  documented when a deck-specific design prompt exists.
-- Candidate-output comparison decisions are documented when candidate outputs
-  influenced the deck.
-- Data sources and assumptions are noted.
-- Unresolved risks are listed honestly.
+- If the user edited `final_deck.html`, `html_edit_sync.md` exists.
+- Sync findings list detected changes, accepted changes, rejected/corrected
+  changes, stale derivative files, regenerated files, and baseline hashes.
+- `final_deck.generated_baseline.html` matches the accepted current HTML after
+  sync.

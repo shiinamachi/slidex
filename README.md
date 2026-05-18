@@ -1,30 +1,25 @@
-# PPTX 제작 프롬프트 시스템
+# codex-business-deck-kit
 
-이 저장소는 Codex CLI가 고품질 PowerPoint 덱을 만들 때 사용할 파일 기반
-프롬프트 시스템입니다. 앱이나 자동 생성 프로그램이 아니라, 전략 수립부터
-PPTX 제작, 렌더링, 시각 QA, 수정, 최종 납품까지 이어지는 작업 절차와 운영
-키트입니다.
+`codex-business-deck-kit`은 Codex CLI가 비즈니스급 문서를 만들 때 사용하는
+파일 기반 프롬프트 시스템과 로컬 자동화 키트입니다. 대상 산출물은
+PowerPoint가 아니라 HTML을 시각 원본으로 삼아 렌더링한 페이지형 PDF입니다.
 
-여러 덱을 같은 저장소에서 관리할 수 있도록 각 덱은
-`decks/<deck_id>/` 아래에 독립된 작업공간을 가집니다. 기존 루트 기반
-`brief.md`, `assets/`, `brand/`, `data/`, `out/` 구조도 하위 호환을 위해
-지원하지만, 새 작업은 덱별 작업공간을 권장합니다.
+이 저장소는 앱이나 SaaS가 아닙니다. 비즈니스 계획서, IR/회사소개서, 정부지원
+사업계획서, 제안서, 임원 리뷰 문서를 만들기 위한 durable prompt, JSON
+schema, QA checklist, Go CLI, 작업공간 템플릿을 제공합니다.
 
-## 덱별 작업공간
+## 작업공간 모델
 
-권장 구조는 다음과 같습니다.
+각 문서 작업은 `decks/<deck_id>/` 아래에 격리합니다.
 
 ```text
 decks/<deck_id>/
   brief.md
   DESIGN.md
   assets/
-    template.pptx
-    reference_deck.pptx
-    reference_decks/
-      benchmark-board-deck.pptx
-      product-launch-style.pptx
+    reference_docs/
     logo.png
+    images/
   brand/
     guidelines.md
     colors.json
@@ -32,160 +27,152 @@ decks/<deck_id>/
     *.csv
     *.xlsx
   source/
-    notes.pdf
+    *.pdf
+    *.pptx
+    *.docx
+    notes.md
     screenshots/
   out/
+    intake_questions.md
+    source_inventory.md
     strategy.md
     deck_spec.json
-    final_deck.pptx
-    notes.md
+    final_deck.html
+    final_deck.generated_baseline.html
     rendered_slides/
+      slide_01.png
+      slide_02.png
+    final_deck.pdf
+    render_manifest.json
     qa_montage.png
     qa_report.md
+    notes.md
+    delivery_summary.md
+    html_edit_sync.md
 ```
 
-새 덱을 만들 때는 `decks/_template/`를 복사해 `decks/<deck_id>/`를 만들고
-`brief.md`를 작성합니다. 덱마다 특정 스타일을 적용해야 하면 같은 폴더의
-`DESIGN.md`에 스타일 프롬프트를 적습니다. 여러 덱이 있으면 프롬프트 실행
-전에 대상 덱을 명시해야 합니다.
+`final_deck.html`이 최종 시각 원본이며, `final_deck.pdf`가 기본 납품 파일입니다.
+PDF는 일반 프레젠테이션 내보내기처럼 한 슬라이드가 한 PDF 페이지가 되도록
+만듭니다. 긴 세로형 PDF는 사용자가 별도 실험 산출물로 요청한 경우에만
+만듭니다.
+
+## 입력 파일
+
+가능한 자료만 넣으면 됩니다. 자료가 부족하면 Codex는 먼저 현재 자료를 검사한
+뒤 한국어 Q&A를 반복해 책임 있게 제작 가능한 수준까지 brief를 보강해야 합니다.
+
+- `${ACTIVE_DECK_DIR}/brief.md`: 문서 목적, 청중, 의사결정 맥락, 제약
+- `${ACTIVE_DECK_DIR}/DESIGN.md`: 이 문서에만 적용할 스타일 프롬프트
+- `${ACTIVE_DECK_DIR}/assets/reference_docs/`: 참고 문서, 이미지, 벤치마크 자료
+- `${ACTIVE_DECK_DIR}/assets/logo.png`, `${ACTIVE_DECK_DIR}/assets/images/`
+- `${ACTIVE_DECK_DIR}/brand/guidelines.md`, `${ACTIVE_DECK_DIR}/brand/colors.json`
+- `${ACTIVE_DECK_DIR}/data/*.csv`, `${ACTIVE_DECK_DIR}/data/*.xlsx`
+- `${ACTIVE_DECK_DIR}/source/`: PDF, DOCX, PPTX, 스크린샷, 회의 노트, 원문 자료
+
+사용자가 제공한 PPTX는 생성 대상이 아니라 수동 참고/source 문서로만 취급합니다.
+이 시스템은 PPTX를 생성하거나 선택 납품물로 제안하지 않습니다.
+
+## 표준 워크플로
+
+1. 활성 작업공간을 결정합니다.
+2. brief, DESIGN.md, brand, assets, data, source, 기존 out 자료를 검사합니다.
+3. 문서 유형, 청중, 목적, 핵심 주장, 제약이 부족하면 Q&A를 반복합니다.
+4. `${OUT_DIR}/intake_questions.md`와 `${OUT_DIR}/source_inventory.md`를 작성하고
+   `${ACTIVE_DECK_DIR}/brief.md`를 확인된 사실과 승인된 가정으로 갱신합니다.
+5. `${OUT_DIR}/strategy.md`를 만듭니다.
+6. `schemas/deck_spec.schema.json`에 맞는 `${OUT_DIR}/deck_spec.json`을 만듭니다.
+7. 정적 HTML/CSS 슬라이드 원본 `${OUT_DIR}/final_deck.html`을 작성합니다.
+8. 같은 내용을 `${OUT_DIR}/final_deck.generated_baseline.html`에 기준선으로
+   저장합니다.
+9. `codex-business-deck-kit render`로 `.slide` 요소를 PNG로 렌더링하고,
+   `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`를 생성합니다.
+10. 비즈니스 논리, claim provenance, 시각 품질, HTML/PDF 무결성, 접근성을 QA합니다.
+11. QA 이슈를 HTML/spec/notes에 반영하고 다시 렌더링합니다.
+12. 최종 검증 후 `${OUT_DIR}/delivery_summary.md`를 작성합니다.
+
+최종 완료를 주장하려면 현재 HTML에서 렌더링된 이미지와 PDF가 존재하고, montage와
+렌더 이미지를 실제로 검사해야 합니다.
+
+## 프롬프트 실행
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_intake_and_strategy.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_start_business_doc.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/01_create_business_strategy.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/02_create_business_doc_spec.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/03_build_html_deck.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/04_render_html.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/05_business_visual_qa.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/06_revise_html_deck.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/07_sync_user_html_edits.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/08_finalize_business_delivery.md
 ```
 
-인터랙티브 세션에서는 “`decks/customer-retention`을 활성 덱으로 사용”처럼
-먼저 지시해도 됩니다. 활성 덱 선택 규칙은
-`prompts/_active_deck_context.md`에 정리되어 있습니다.
-
-## 사용자가 준비할 파일
-
-가능한 파일만 넣으면 됩니다. 일부가 없어도 프롬프트는 누락 정보를 정리하고
-합리적인 가정으로 진행하도록 설계되어 있습니다.
-
-- `${ACTIVE_DECK_DIR}/brief.md`: 덱 목적, 청중, 메시지, 제약
-- `${ACTIVE_DECK_DIR}/DESIGN.md`: 이 덱에만 적용할 스타일 프롬프트
-- `${ACTIVE_DECK_DIR}/assets/template.pptx`: 반드시 따라야 할 템플릿
-- `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`: 기존 단일 참고 덱 파일명
-  (하위 호환)
-- `${ACTIVE_DECK_DIR}/assets/reference_decks/`: 원하는 만큼 넣는 참고 덱 폴더
-- `${ACTIVE_DECK_DIR}/assets/logo.png`: 로고나 브랜드 이미지
-- `${ACTIVE_DECK_DIR}/brand/guidelines.md`: 브랜드 가이드
-- `${ACTIVE_DECK_DIR}/brand/colors.json`: 브랜드 컬러
-- `${ACTIVE_DECK_DIR}/data/*.csv`, `${ACTIVE_DECK_DIR}/data/*.xlsx`: 차트와 표에 사용할 데이터
-- `${ACTIVE_DECK_DIR}/source/`: PDF, 스크린샷, 원문 문서 등 기타 참고 자료
-
-템플릿이나 참고 덱 세트가 있으면 향후 작업은 먼저 그것들을 검사하고 화면비,
-글꼴, 컬러, 레이아웃 패턴을 맞춰야 합니다. 참고 덱은
-`assets/reference_decks/`에 원하는 수만큼 둘 수 있으며, 기존
-`assets/reference_deck.pptx`도 하위 호환으로 함께 검사합니다. 없을 때만 기본
-16:9를 사용합니다. `DESIGN.md`가 있으면 덱별 스타일 방향으로 적용하되,
-승인된 템플릿, 참고 덱 세트, 브랜드 가이드, 접근성, 편집 가능성 요구사항보다
-우선하지 않습니다. 적용한
-스타일 지시와 충돌 사항은 `strategy.md`, `deck_spec.json`, `notes.md`,
-`qa_report.md`에 필요한 수준으로 기록합니다.
-
-## 새 덱을 만드는 흐름
-
-1. `decks/_template/`를 복사해 `decks/<deck_id>/`를 만듭니다.
-2. `${ACTIVE_DECK_DIR}/brief.md`를 작성합니다.
-3. 필요하면 `${ACTIVE_DECK_DIR}/DESIGN.md`에 덱별 스타일 프롬프트를 작성합니다.
-4. 필요하면 덱별 `brand/`, `assets/`, `data/`, `source/` 자료를 추가합니다.
-5. `prompts/00_intake_and_strategy.md`로 `${OUT_DIR}/strategy.md`를 생성합니다.
-6. `prompts/01_create_deck_spec.md`로 `${OUT_DIR}/deck_spec.json`을 만듭니다.
-7. `prompts/02_build_pptx.md`로 편집 가능한 `${OUT_DIR}/final_deck.pptx`를 만듭니다.
-8. `prompts/03_visual_qa.md`로 슬라이드를 이미지로 렌더링하고 QA 몽타주와 리포트를 만듭니다.
-9. `prompts/04_revise_deck.md`로 문제를 수정하고 다시 렌더링합니다.
-10. `prompts/05_finalize_delivery.md`로 최종 산출물을 확인하고 납품 요약을 작성합니다.
-
-최종 전달 전에는 렌더링, QA 몽타주, 시각 검사, 수정 단계를 반드시 거쳐야
-합니다.
-
-## 단계별 프롬프트 실행
-
-각 단계는 다음처럼 실행합니다. 덱이 여러 개라면 `DECK_ID`를 지정하거나
-인터랙티브 세션에서 활성 덱 폴더를 먼저 알려주세요.
+원샷 흐름은 intake gate가 완료된 경우에만 자율 실행합니다.
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_intake_and_strategy.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/01_create_deck_spec.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/02_build_pptx.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/03_visual_qa.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/04_revise_deck.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/05_finalize_delivery.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_shot_create_business_doc.md
 ```
 
-## 원샷 프롬프트
+## 로컬 CLI
 
-한 번에 전체 흐름을 실행하려면 다음 명령을 사용합니다.
+표준 렌더링과 검증에는 canonical CLI 이름 `codex-business-deck-kit`을 사용합니다.
+짧은 이름을 만들 수는 있지만 문서와 acceptance 기준의 기준 이름은 항상
+`codex-business-deck-kit`입니다.
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_shot_create_deck.md
+codex-business-deck-kit render \
+  --html decks/customer-retention/out/final_deck.html \
+  --out decks/customer-retention/out/rendered_slides \
+  --pdf decks/customer-retention/out/final_deck.pdf \
+  --manifest decks/customer-retention/out/render_manifest.json \
+  --pdf-mode paginated \
+  --selector .slide \
+  --width 1920 \
+  --height 1080 \
+  --font-preset pretendard
 ```
 
-원샷 프롬프트도 전략, 덱 스펙, PPTX 제작, 렌더링, QA, 수정, 최종 확인을 모두
-요구합니다.
+제공 명령:
 
-## 후보 산출물 비교
+- `inspect`: 작업공간 입력과 산출물 inventory를 JSON으로 출력합니다.
+- `validate-spec`: `deck_spec.json`을 schema 기반 계약에 맞춰 검증합니다.
+- `render`: HTML `.slide`를 PNG로 렌더링하고 페이지형 PDF, manifest, montage를
+  만듭니다.
+- `qa`: HTML, 렌더 이미지, PDF, manifest, schema, claim provenance 중심의
+  기계 판독 가능한 QA findings를 출력합니다.
+- `sync-html-edits`: 사용자가 직접 수정한 HTML을 baseline과 비교하고 spec/notes/QA
+  stale 상태를 동기화합니다.
+- `package`: 최종 산출물 존재와 manifest freshness를 확인합니다.
 
-같은 brief와 `DESIGN.md`로 여러 모델이 만든 후보 결과물이 있으면
-`${OUT_DIR}`에 함께 두고 비교 지시를 할 수 있습니다. 예를 들어
-`final_deck.html`과 `final_deck_gemini.html`을 비교해 최종 HTML 또는 PPTX를
-개선할 수 있습니다.
+## HTML 기준
 
-후보 산출물은 사실 출처가 아니라 디자인/카피 가설로만 취급합니다. 프롬프트는
-후보별 장점을 `adopt`, `adapt`, `reject`로 나누고, 근거 없는 지표,
-슈퍼라티브, 완료된 성과 표현, 가짜 제품명, 미제공 기술 범위는 버리도록
-설계되어 있습니다. 비교 결과를 반영한 뒤에는 `deck_spec.json`, 렌더링 이미지,
-`qa_montage.png`, `qa_report.md`, `notes.md`가 최종 슬라이드 수와 순서를
-같이 보도록 동기화해야 합니다.
-
-## 브랜드와 공유 자료
-
-- 덱별 브랜드 파일은 `${ACTIVE_DECK_DIR}/brand/`에 둡니다.
-- 브랜드 템플릿은 `brand/guidelines.template.md`와
-  `brand/colors.template.json`을 참고합니다.
-- 실제 브랜드가 없다면 가짜 브랜드를 만들지 말고, 사용자가 승인한 일반적인
-  시각 방향만 적습니다.
-- 여러 덱이 같은 자료를 써야 하면 `shared/brand/`, `shared/assets/`,
-  `shared/data/`를 둘 수 있습니다.
-- 공유 자료를 사용할 때도 덱별 파일이 우선이며, 사용 이유와 출처를
-  `${OUT_DIR}/notes.md`에 기록합니다.
-
-## QA 기준
-
-`checklists/`의 체크리스트를 함께 사용합니다.
-
-- `checklists/design_qa.md`: 스토리, 레이아웃, 타이포그래피, 차트, 완성도
-- `checklists/accessibility_qa.md`: 텍스트 크기, 대비, 대체 텍스트, 읽기 순서
-- `checklists/delivery_qa.md`: 최종 파일, 깨진 이미지, 오버플로, 폰트, 문서화
-
-QA는 실제 슬라이드를 렌더링한 이미지와 `${OUT_DIR}/qa_montage.png`를 눈으로
-확인한 뒤에만 통과로 판단합니다.
-
-## 전역 타이포그래피 규칙
-
-한국어 텍스트는 어절 또는 자연스러운 구 단위로 줄바꿈해야 합니다. 중간 음절,
-단어 내부, 조사 앞뒤가 어색하게 끊긴 줄바꿈은 QA 실패로 보고, 문장을 줄이거나
-텍스트 박스를 넓히거나 어절 경계에 수동 줄바꿈을 넣어 해결합니다.
-
-HTML 덱 산출물은 로컬 시스템 폰트에만 의존하지 않고 웹폰트를 로드해야 합니다.
-브랜드가 승인한 웹폰트가 없으면 한국어 B2B 덱에는 Pretendard를 기본값으로
-사용하고, 제목, 본문, 라벨, 칩, 푸터, mono 스타일 기술 라벨까지 모든 텍스트
-역할에 일관되게 적용합니다. 외부 폰트 의존성과 fallback은 `notes.md` 또는
-`qa_report.md`에 기록합니다.
+- `<!doctype html>`과 적절한 `lang`을 사용합니다.
+- `.deck` 루트 안에 `<section class="slide" data-slide-id="slide_01">` 형식의
+  안정적인 slide 요소를 둡니다.
+- 기본 화면비는 16:9 Widescreen, 기본 렌더 크기는 `1920x1080`입니다.
+- 지원 preset: `wide-1080p`, `wide-720p`, `wide-900p`, `wide-1440p`, `custom`.
+- 전체 슬라이드를 PNG로 묻어 HTML 본문으로 쓰지 않습니다.
+- CSS 변수로 design token을 관리합니다.
+- 한국어 비즈니스 문서는 기본적으로 Pretendard font preset을 사용하며,
+  `deck_spec.json`과 CSS 변수에 font choice를 기록합니다.
+- 한국어는 `word-break: keep-all`, `overflow-wrap: normal`, `hyphens: none`,
+  `line-break: strict`를 기본으로 합니다.
+- 가짜 지표, 고객명, 로고, 스크린샷, 제품명, 기술 범위를 만들지 않습니다.
 
 ## 최종 산출물
 
-완료된 덱 작업에서는 `${OUT_DIR}/`에 다음 파일이 있어야 합니다.
+완료된 작업의 `${OUT_DIR}/`에는 다음 파일이 필요합니다.
 
-- `${OUT_DIR}/strategy.md`
-- `${OUT_DIR}/deck_spec.json`
-- `${OUT_DIR}/final_deck.pptx`
-- `${OUT_DIR}/notes.md`
-- `${OUT_DIR}/rendered_slides/`의 렌더링된 슬라이드 이미지
-- `${OUT_DIR}/qa_montage.png`
-- `${OUT_DIR}/qa_report.md`
-- 최종 요약과 미해결 리스크
+- `strategy.md`
+- `deck_spec.json`
+- `final_deck.html`
+- `final_deck.generated_baseline.html`
+- `rendered_slides/*.png`
+- `final_deck.pdf`
+- `render_manifest.json`
+- `qa_montage.png`
+- `qa_report.md`
+- `notes.md`
+- `delivery_summary.md`
 
-이 초기 설정 작업은 실제 덱을 만들지 않으므로 `final_deck.pptx`를 생성하지
-않습니다.
+직접 HTML을 수정한 경우 `html_edit_sync.md`도 필요합니다.

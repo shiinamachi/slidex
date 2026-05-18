@@ -1,8 +1,8 @@
-# 여러 덱 작업공간
+# 여러 비즈니스 문서 작업공간
 
-이 폴더는 같은 프롬프트 시스템 안에서 여러 PPTX 덱을 서로 섞지 않고
-관리하기 위한 영역입니다. 각 덱은 `decks/<deck_id>/` 아래에 독립된 입력,
-자료, 산출물을 둡니다.
+이 폴더는 같은 `codex-business-deck-kit` 시스템 안에서 여러 문서 작업을 서로
+섞지 않고 관리하기 위한 영역입니다. 각 작업은 `decks/<deck_id>/` 아래에
+독립된 입력, 자료, 산출물을 둡니다.
 
 ## 권장 구조
 
@@ -12,12 +12,9 @@ decks/
     brief.md
     DESIGN.md
     assets/
-      template.pptx
-      reference_deck.pptx
-      reference_decks/
-        benchmark-board-deck.pptx
-        product-launch-style.pptx
+      reference_docs/
       logo.png
+      images/
     brand/
       guidelines.md
       colors.json
@@ -25,51 +22,45 @@ decks/
       retention.csv
     source/
       notes.pdf
+      screenshots/
     out/
+      intake_questions.md
+      source_inventory.md
       strategy.md
       deck_spec.json
-      final_deck.pptx
-      notes.md
+      final_deck.html
+      final_deck.generated_baseline.html
       rendered_slides/
+      final_deck.pdf
+      render_manifest.json
       qa_montage.png
       qa_report.md
+      notes.md
+      delivery_summary.md
 ```
 
-`prompts/`, `schemas/`, `checklists/`는 저장소 공통 리소스입니다. 덱별
-자료와 결과물은 항상 해당 덱 폴더 안에 둡니다.
+`prompts/`, `schemas/`, `checklists/`, `cmd/`, `internal/`은 저장소 공통
+리소스입니다. 작업별 자료와 결과물은 항상 해당 작업 폴더 안에 둡니다.
 
-## 새 덱 만들기
+## 새 작업 만들기
 
-1. `decks/_template/`를 `decks/<deck_id>/`로 복사합니다.
-2. `decks/<deck_id>/brief.md`를 작성합니다.
-3. 특정 스타일을 적용하려면 `decks/<deck_id>/DESIGN.md`에 덱별 스타일
-   프롬프트를 작성합니다.
-4. 필요한 템플릿, 참고 덱들, 로고, 데이터, 원문 자료를 덱 폴더 안에 넣습니다.
-   참고 덱은 `assets/reference_decks/`에 원하는 만큼 넣을 수 있고, 기존
-   `assets/reference_deck.pptx` 단일 파일명도 하위 호환으로 지원됩니다.
-5. 여러 덱이 있으면 실행 전에 대상 덱을 명시합니다.
+```bash
+cp -R decks/_template decks/<deck_id>
+```
+
+`brief.md`를 작성하고 필요한 reference docs, 로고, 이미지, 데이터, 원문 자료를
+작업 폴더 안에 넣습니다. 사용자가 제공한 PPTX는 `source/` 아래의 참고 문서로만
+취급합니다.
 
 예:
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_intake_and_strategy.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_start_business_doc.md
 ```
-
-인터랙티브 세션에서는 “`decks/customer-retention`을 활성 덱으로 사용”처럼
-먼저 지시해도 됩니다.
 
 ## 공유 자료
 
-여러 덱이 같은 브랜드나 공통 이미지를 써야 하면 `shared/brand/`,
-`shared/assets/`, `shared/data/`를 둘 수 있습니다. 다만 덱별 파일이 있으면
-덱별 파일을 우선하고, 공유 자료를 사용할 때는 `${OUT_DIR}/notes.md`에 사용
-이유와 출처를 기록합니다.
-
-## 기존 단일 덱 구조
-
-루트의 `brief.md`, `assets/`, `brand/`, `data/`, `out/` 구조도 하위 호환을
-위해 계속 사용할 수 있습니다. 여러 덱을 동시에 관리하려면 기존 파일을
-`decks/<deck_id>/` 아래로 옮기는 것을 권장합니다.
-
-루트 단일 덱 구조에서도 `DESIGN.md`를 루트에 두면 해당 덱의 스타일
-프롬프트로 사용됩니다.
+여러 작업이 같은 브랜드나 공통 이미지를 써야 하면 `shared/brand/`,
+`shared/assets/`, `shared/data/`를 둘 수 있습니다. 덱별 파일이 있으면 덱별
+파일을 우선하고, 공유 자료를 사용할 때는 `${OUT_DIR}/notes.md`에 사용 이유와
+출처를 기록합니다.

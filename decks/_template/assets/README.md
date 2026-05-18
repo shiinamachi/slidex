@@ -1,20 +1,14 @@
 # Assets
 
-덱별 템플릿, 참고 덱들, 로고, 이미지 파일을 이 폴더에 둡니다.
+문서별 참고 자료, 로고, 이미지 파일을 이 폴더에 둡니다.
 
-권장 파일명:
-
-- `template.pptx`
-- `reference_deck.pptx` (기존 단일 참고 덱 파일명, 하위 호환)
-- `reference_decks/` (여러 참고 덱을 원하는 만큼 넣는 폴더)
-- `logo.png`
-
-새 작업에서는 `reference_decks/` 폴더를 만들고 설명적인 파일명으로 참고 덱을
-여러 개 넣는 방식을 권장합니다. 예:
+권장 구조:
 
 ```text
-reference_decks/
-  board-update-structure.pptx
-  product-launch-visual-style.pptx
-  analytics-dashboard-density.pptx
+reference_docs/
+images/
+logo.png
 ```
+
+사용자가 제공한 프레젠테이션 파일은 생성 대상이 아니라 수동 참고 자료로만
+취급하고, 가능하면 `source/` 아래에 둡니다.

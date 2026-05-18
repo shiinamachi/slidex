@@ -9,34 +9,82 @@
     "activeDeckDir": "decks/customer-retention-2026-h1",
     "outputDir": "decks/customer-retention-2026-h1/out",
     "designPromptFile": "decks/customer-retention-2026-h1/DESIGN.md",
-    "sourceFiles": [
-      "decks/customer-retention-2026-h1/DESIGN.md",
-      "decks/customer-retention-2026-h1/brief.md",
-      "decks/customer-retention-2026-h1/assets/reference_decks/executive_qbr_structure.pptx",
-      "decks/customer-retention-2026-h1/assets/reference_decks/retention_metrics_visual_style.pptx",
-      "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
-      "decks/customer-retention-2026-h1/data/support_response_time.xlsx"
-    ],
+    "schemaVersion": "codex-business-deck-kit.deck_spec.v1",
+    "toolName": "codex-business-deck-kit",
     "referenceFiles": [
       {
-        "path": "decks/customer-retention-2026-h1/assets/reference_decks/executive_qbr_structure.pptx",
-        "kind": "reference_deck",
-        "role": "Executive pacing, section flow, and decision-oriented slide hierarchy",
+        "path": "decks/customer-retention-2026-h1/source/customer_interviews.pdf",
+        "kind": "source_document",
+        "role": "고객 이탈 원인과 개선 요청 근거",
         "priority": "primary"
-      },
-      {
-        "path": "decks/customer-retention-2026-h1/assets/reference_decks/retention_metrics_visual_style.pptx",
-        "kind": "reference_deck",
-        "role": "Chart treatment, KPI density, and retention-momentum visual language",
-        "priority": "supporting"
       }
     ]
   },
+  "documentType": "executive_report",
   "audience": "CEO, CFO, CRO, 고객 성공 리더십",
   "objective": "고객 이탈 증가 원인을 설명하고 유지율 개선을 위한 세 가지 투자 우선순위 승인을 받는다.",
+  "desiredOutcome": "임원진이 90일 실행 계획과 운영 KPI 개선 방향에 합의한다.",
   "tone": "간결하고 분석적이며 실행 중심",
-  "aspectRatio": "16:9",
+  "sourceInventory": [
+    {
+      "path": "decks/customer-retention-2026-h1/brief.md",
+      "kind": "brief",
+      "role": "확정 요구사항",
+      "priority": "required"
+    },
+    {
+      "path": "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
+      "kind": "data_source",
+      "role": "세그먼트별 유지율 추이",
+      "priority": "primary"
+    }
+  ],
+  "intakeStatus": {
+    "status": "assumptions_approved",
+    "questionsAsked": [
+      "개선 효과 수치는 예측이므로 가정으로 표시해도 됩니까?"
+    ],
+    "openQuestions": [],
+    "approvedAssumptions": [
+      "효과 수치는 source 데이터가 없으면 방향성 가정으로만 표현한다."
+    ]
+  },
+  "outputContract": {
+    "sourceHtml": "out/final_deck.html",
+    "generatedBaselineHtml": "out/final_deck.generated_baseline.html",
+    "renderedSlidesDir": "out/rendered_slides",
+    "primaryPdf": "out/final_deck.pdf",
+    "renderManifest": "out/render_manifest.json",
+    "pdfMode": "paginated",
+    "qaMontage": "out/qa_montage.png",
+    "notes": "out/notes.md",
+    "qaReport": "out/qa_report.md",
+    "deliverySummary": "out/delivery_summary.md"
+  },
+  "renderConfig": {
+    "engine": "codex-business-deck-kit-cli",
+    "preset": "wide-1080p",
+    "slideSelector": ".slide",
+    "widthPx": 1920,
+    "heightPx": 1080,
+    "deviceScaleFactor": 1,
+    "waitForFonts": true,
+    "captureElementOnly": true,
+    "fontPreset": "pretendard"
+  },
+  "pdfConfig": {
+    "source": "rendered_images",
+    "mode": "paginated",
+    "pageAspectRatio": "16:9",
+    "pageSizeInches": {
+      "width": 13.333,
+      "height": 7.5
+    },
+    "imageFit": "exact",
+    "background": "#ffffff"
+  },
   "designSystem": {
+    "fontPreset": "pretendard",
     "colors": {
       "primary": "#2563EB",
       "accent": "#F59E0B",
@@ -44,186 +92,163 @@
       "mutedText": "#475569",
       "background": "#FFFFFF"
     },
-    "fonts": {
-      "heading": "Aptos Display",
-      "body": "Aptos",
-      "fallback": "Arial"
+    "typography": {
+      "headline": "큰 action headline",
+      "body": "간결한 한국어 비즈니스 문장"
     },
-    "margins": "Use consistent wide margins and avoid dense edge-to-edge content.",
-    "spacing": "Use generous spacing between title, visual, and takeaway regions.",
-    "layoutPrinciples": [
-      "One dominant message per slide",
-      "Prefer native charts and tables",
-      "Use accent color only for emphasis"
-    ],
-    "stylePromptSummary": "Use a restrained executive consulting style with clean grids, confident whitespace, direct chart labeling, and subtle retention-momentum visual cues.",
+    "layout": {
+      "aspectRatio": "16:9",
+      "density": "medium",
+      "safeMargin": "96px"
+    },
+    "cssVariables": {
+      "--slide-width": "1920px",
+      "--slide-height": "1080px",
+      "--font-body": "Pretendard"
+    },
+    "stylePromptSummary": "절제된 임원 보고서 스타일",
     "stylePromptDirectives": [
-      "Use a sparse, decision-ready layout with one dominant visual region per slide",
-      "Favor native charts, tables, and shape-based diagrams over decorative imagery",
-      "Use blue as the primary structural color and amber only for selective emphasis"
+      "넓은 여백과 한 개의 지배적 시각 요소 사용"
     ],
     "stylePromptAvoid": [
-      "Busy stock-photo business scenes",
-      "Dense text blocks",
-      "Decorative gradients that reduce chart readability"
+      "근거 없는 성과 수치",
+      "복잡한 장식"
     ],
-    "stylePromptConflicts": [
-      "No approved brand file is present, so style prompt guidance is applied only as neutral executive direction"
-    ],
-    "brandNotes": "No approved brand file is present in this sample; use neutral executive styling."
+    "stylePromptConflicts": [],
+    "htmlCssNotes": [
+      "word-break: keep-all을 기본으로 사용",
+      "fixed 1920x1080 slide surface"
+    ]
   },
   "storyArc": [
-    "Establish the retention problem",
-    "Show where risk is concentrated",
-    "Explain the operational drivers",
-    "Recommend focused interventions",
-    "Ask for approval on the 90-day plan"
+    "유지율 문제를 정의한다",
+    "리스크가 집중된 세그먼트를 설명한다",
+    "운영 레버를 제안한다",
+    "90일 실행 승인으로 마무리한다"
   ],
   "slides": [
     {
       "id": "slide_01",
-      "slideType": "cover",
-      "headline": "고객 유지율 개선은 다음 두 분기의 최우선 성장 레버입니다",
-      "subheadline": "2026년 상반기 실행 제안",
-      "keyMessage": "이탈 방어는 신규 매출 확대보다 빠르게 순매출 유지율을 안정화할 수 있다.",
-      "bodyPoints": [
+      "htmlId": "slide_01",
+      "sectionRole": "cover",
+      "headline": "고객 유지율 개선은 다음 두 분기의 우선 성장 과제입니다",
+      "keyMessage": "이탈 방어는 순매출 유지율 안정화를 위한 직접적인 실행 영역이다.",
+      "bodyContent": [
         "최근 유지율 하락 요인을 요약",
         "세 가지 실행 우선순위 제안"
       ],
-      "speakerNotes": "임원진이 투자 결정을 내려야 하는 맥락을 짧게 설명한다.",
-      "visualInstructions": {
-        "description": "Clean executive cover with a restrained abstract retention motif.",
-        "generationPrompt": "Minimal executive presentation cover visual showing connected customer segments and upward retention momentum, clean white background, subtle blue and amber accents.",
-        "altText": "연결된 고객 세그먼트와 상승 흐름을 나타내는 추상 이미지",
-        "editablePreference": "raster_image",
-        "avoid": [
-          "stock-photo business people",
-          "busy backgrounds"
-        ]
-      },
-      "layoutInstructions": {
-        "structure": "Large action headline on left, restrained visual field on right.",
-        "marginGuidance": "Use wide margins.",
-        "hierarchy": "Headline first, subtitle second, date and owner small.",
-        "density": "low"
-      },
-      "qaRisks": [
-        "Cover image may overpower the action title"
+      "layoutIntent": "좌측 action headline, 우측 절제된 유지율 모티프",
+      "visualIntent": "브랜드 없는 추상 연결선과 세그먼트 구조",
+      "evidenceRefs": [
+        "brief.md"
+      ],
+      "claims": [
+        "claim_001"
+      ],
+      "renderRisks": [
+        "타이틀이 길어지면 줄바꿈 확인 필요"
+      ],
+      "qaChecks": [
+        "headline readable",
+        "no unsupported metric"
+      ],
+      "speakerNotes": "투자 승인이 필요한 맥락을 짧게 설명한다.",
+      "accessibilityNotes": [
+        "의미 있는 추상 이미지에는 alt text 제공"
       ]
     },
     {
       "id": "slide_02",
-      "slideType": "executive_summary",
-      "headline": "이탈 증가는 세그먼트 집중 문제이며 전사 평균만 보면 대응이 늦습니다",
-      "keyMessage": "중견 고객군과 온보딩 90일 이내 고객에서 유지율 하락이 집중된다.",
-      "bodyPoints": [
+      "htmlId": "slide_02",
+      "sectionRole": "executive_summary",
+      "headline": "이탈 증가는 세그먼트 집중 문제로 보고 대응해야 합니다",
+      "keyMessage": "평균 지표보다 고위험 세그먼트의 원인과 대응 우선순위가 중요하다.",
+      "bodyContent": [
         "전체 유지율은 4분기 연속 하락",
         "고위험 세그먼트가 하락분의 대부분을 설명",
         "대응은 세그먼트별로 달라야 함"
       ],
-      "speakerNotes": "평균 지표보다 세그먼트별 리스크를 봐야 한다는 점을 강조한다.",
-      "layoutInstructions": {
-        "structure": "Three concise summary blocks under one action headline.",
-        "marginGuidance": "Align all blocks to a shared grid.",
-        "hierarchy": "Use large numbers or short labels for each block.",
-        "density": "medium"
-      },
-      "qaRisks": [
-        "Too much text could weaken executive readability"
-      ]
-    },
-    {
-      "id": "slide_03",
-      "slideType": "data_chart",
-      "headline": "중견 고객군의 유지율 하락이 전체 손실의 절반 이상을 차지합니다",
-      "keyMessage": "고객 규모별 유지율을 분리하면 중견 고객군이 가장 큰 개선 기회다.",
-      "bodyPoints": [
-        "엔터프라이즈 고객은 안정적",
-        "SMB는 변동성이 높지만 절대 매출 영향은 작음",
-        "중견 고객군은 규모와 하락폭이 모두 큼"
+      "layoutIntent": "세 개의 요약 블록과 하단 evidence note",
+      "visualIntent": "세그먼트별 리스크 비교",
+      "evidenceRefs": [
+        "data/retention_by_segment.csv"
       ],
-      "speakerNotes": "차트의 핵심은 절대 하락폭과 매출 영향이 동시에 큰 세그먼트다.",
-      "chartInstructions": {
-        "chartType": "line",
-        "dataSource": "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
-        "message": "Segment retention trend by quarter, with mid-market highlighted.",
-        "labels": "Direct-label each segment at the line end.",
-        "nativePowerPointChart": true,
-        "notes": "Use muted colors for non-focus segments and accent color for mid-market."
-      },
-      "layoutInstructions": {
-        "structure": "Chart dominates the slide with a concise takeaway callout.",
-        "marginGuidance": "Keep chart labels inside safe margins.",
-        "hierarchy": "Headline, chart, takeaway callout.",
-        "density": "medium"
-      },
-      "qaRisks": [
-        "Line labels may collide",
-        "Axis text may become too small"
-      ]
-    },
-    {
-      "id": "slide_04",
-      "slideType": "recommendation",
-      "headline": "세 가지 운영 레버에 집중하면 90일 안에 유지율 하락을 완화할 수 있습니다",
-      "keyMessage": "온보딩, 리스크 감지, 대응 속도 개선이 가장 직접적인 실행 과제다.",
-      "bodyPoints": [
-        "온보딩 30일 체크포인트 재설계",
-        "사용량 급감 고객의 조기 경보",
-        "고위험 티켓 대응 SLA 강화"
+      "claims": [
+        "claim_002"
       ],
-      "speakerNotes": "각 레버를 비용, 실행 난이도, 기대 효과 관점에서 설명한다.",
-      "tableInstructions": {
-        "dataSource": "Derived from support and retention analysis",
-        "columns": [
-          "Lever",
-          "Expected impact",
-          "Owner",
-          "First milestone"
-        ],
-        "emphasis": "Highlight the recommended first milestone for each lever.",
-        "nativePowerPointTable": true
-      },
-      "layoutInstructions": {
-        "structure": "Editable four-column recommendation table with concise entries.",
-        "marginGuidance": "Avoid tiny table text; split if necessary.",
-        "hierarchy": "Action title, table, short approval ask.",
-        "density": "medium"
-      },
-      "qaRisks": [
-        "Table text may become too dense"
-      ]
-    },
-    {
-      "id": "slide_05",
-      "slideType": "timeline",
-      "headline": "90일 실행 계획은 빠른 진단, 개입, 확산 순서로 진행합니다",
-      "keyMessage": "첫 30일은 진단과 설계, 다음 60일은 고위험 세그먼트 개입과 확산에 집중한다.",
-      "bodyPoints": [
-        "0-30일: 세그먼트 진단과 온보딩 체크포인트 설계",
-        "31-60일: 고위험 고객 조기 경보와 대응 SLA 적용",
-        "61-90일: 효과 측정과 반복 확산"
+      "renderRisks": [
+        "블록 내부 텍스트 밀도"
       ],
-      "speakerNotes": "승인이 필요한 의사결정과 첫 번째 운영 마일스톤을 명확히 요청한다.",
-      "visualInstructions": {
-        "description": "Editable three-phase timeline built with native shapes.",
-        "altText": "진단, 개입, 확산으로 구성된 90일 실행 타임라인",
-        "editablePreference": "native_shapes"
-      },
-      "layoutInstructions": {
-        "structure": "Three horizontal timeline phases with milestones and owners.",
-        "marginGuidance": "Keep phase labels aligned and evenly spaced.",
-        "hierarchy": "Headline, timeline, approval ask.",
-        "density": "medium"
-      },
-      "qaRisks": [
-        "Timeline labels may wrap awkwardly"
+      "qaChecks": [
+        "source note visible",
+        "Korean wrapping natural"
+      ],
+      "speakerNotes": "세그먼트별 리스크를 봐야 하는 이유를 설명한다.",
+      "accessibilityNotes": [
+        "색상만으로 세그먼트를 구분하지 않음"
       ]
     }
   ],
-  "qaNotes": [
-    "Render slides and inspect for text overflow before delivery.",
-    "Confirm chart labels remain readable in the exported images.",
-    "Confirm meaningful visuals have alt text."
-  ]
+  "claimProvenance": {
+    "required": true,
+    "unsupportedClaimsPolicy": "remove_or_rewrite",
+    "claims": [
+      {
+        "id": "claim_001",
+        "text": "이탈 방어는 순매출 유지율 안정화를 위한 직접적인 실행 영역이다.",
+        "status": "assumption",
+        "sourceRefs": [
+          "brief.md"
+        ],
+        "slideIds": [
+          "slide_01"
+        ],
+        "notes": "정량 효과는 별도 source 없이는 표현하지 않는다."
+      },
+      {
+        "id": "claim_002",
+        "text": "고위험 세그먼트가 하락분의 대부분을 설명한다.",
+        "status": "sourced",
+        "sourceRefs": [
+          "data/retention_by_segment.csv"
+        ],
+        "slideIds": [
+          "slide_02"
+        ],
+        "notes": "데이터 확인 후 수치 표현 가능"
+      }
+    ]
+  },
+  "businessQa": {
+    "documentTypeChecklist": [
+      "executive_report 구조와 승인 요청이 명확한지 확인"
+    ],
+    "copyRisks": [
+      "성과 수치가 source 없이 단정적으로 표현될 위험"
+    ],
+    "evidenceRisks": [
+      "고객 인터뷰 요약 원문 확인 필요"
+    ],
+    "legalRisks": [],
+    "visualRisks": [
+      "차트 라벨이 작아질 위험"
+    ]
+  },
+  "accessibilityNotes": [
+    "색상 외 라벨로 세그먼트 구분",
+    "PDF 기준 글자 크기 확인"
+  ],
+  "htmlImplementationNotes": [
+    "static HTML without server dependency",
+    "CSS variable driven design tokens"
+  ],
+  "candidateOutputComparison": [],
+  "userEditPolicy": {
+    "allowDirectHtmlEdits": true,
+    "syncRequiredAfterHtmlEdits": true,
+    "preserveUserEditsByDefault": true,
+    "baselineHtml": "out/final_deck.generated_baseline.html",
+    "syncReport": "out/html_edit_sync.md",
+    "staleDerivativePolicy": "mark_stale_with_reason"
+  }
 }

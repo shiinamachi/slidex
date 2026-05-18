@@ -1,18 +1,22 @@
-# Deck Brief
+# Business Document Brief
 
 ## Deck ID
 
 -
 
-## Deck Title
+## Document Title
 
 -
+
+## Document Type
+
+- business_plan | ir_deck | company_profile | proposal | government_grant_plan | executive_report | custom
 
 ## Audience
 
 -
 
-## Purpose
+## Objective
 
 -
 
@@ -20,7 +24,7 @@
 
 -
 
-## Presentation Setting
+## Decision Context
 
 -
 
@@ -28,7 +32,11 @@
 
 -
 
-## Brand Direction
+## Confirmed Facts
+
+-
+
+## Claims Requiring Evidence
 
 -
 
@@ -52,10 +60,19 @@
 
 -
 
-## Constraints
+## Font Preset
+
+- pretendard
+
+## Constraints And Exclusions
 
 -
 
 ## Final Deliverables
 
--
+- HTML source
+- rendered slide images
+- paginated PDF
+- render manifest
+- QA report
+- delivery summary

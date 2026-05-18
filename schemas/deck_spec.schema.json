@@ -1,481 +1,275 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/deck_spec.schema.json",
-  "title": "Deck Specification",
-  "description": "Structured specification for an editable PowerPoint deck.",
+  "$id": "https://example.com/schemas/codex-business-deck-kit.deck_spec.schema.json",
+  "title": "codex-business-deck-kit Document Specification",
+  "description": "Structured specification for an HTML-first business document rendered to a paginated PDF.",
   "type": "object",
   "required": [
     "metadata",
+    "documentType",
     "audience",
     "objective",
+    "desiredOutcome",
     "tone",
-    "aspectRatio",
+    "sourceInventory",
+    "intakeStatus",
+    "outputContract",
+    "renderConfig",
+    "pdfConfig",
     "designSystem",
-    "slides"
+    "storyArc",
+    "slides",
+    "claimProvenance",
+    "businessQa",
+    "userEditPolicy"
   ],
   "additionalProperties": false,
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "aspectRatio": {
-            "const": "custom"
-          }
-        },
-        "required": [
-          "aspectRatio"
-        ]
-      },
-      "then": {
-        "required": [
-          "customSize"
-        ]
-      }
-    }
-  ],
   "properties": {
     "metadata": {
       "type": "object",
-      "required": [
-        "title",
-        "version"
-      ],
+      "required": ["title", "version"],
       "additionalProperties": false,
       "properties": {
-        "title": {
-          "type": "string",
-          "minLength": 1
-        },
-        "subtitle": {
-          "type": "string"
-        },
-        "owner": {
-          "type": "string"
-        },
-        "date": {
-          "type": "string"
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "deckId": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_.-]+$"
-        },
-        "activeDeckDir": {
-          "type": "string",
-          "minLength": 1
-        },
-        "outputDir": {
-          "type": "string",
-          "minLength": 1
-        },
-        "sourceFiles": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
+        "title": {"type": "string", "minLength": 1},
+        "subtitle": {"type": "string"},
+        "owner": {"type": "string"},
+        "date": {"type": "string"},
+        "version": {"type": "string", "minLength": 1},
+        "deckId": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
+        "activeDeckDir": {"type": "string"},
+        "outputDir": {"type": "string"},
+        "designPromptFile": {"type": "string"},
+        "schemaVersion": {"type": "string"},
+        "toolName": {"type": "string"},
         "referenceFiles": {
           "type": "array",
-          "description": "Templates, reference decks, visual references, and other inputs that materially influence deck style or structure.",
-          "items": {
-            "$ref": "#/$defs/referenceFile"
-          }
-        },
-        "designPromptFile": {
-          "type": "string",
-          "minLength": 1
+          "items": {"$ref": "#/$defs/sourceRef"}
         }
       }
     },
-    "audience": {
-      "type": "string",
-      "minLength": 1
-    },
-    "objective": {
-      "type": "string",
-      "minLength": 1
-    },
-    "tone": {
-      "type": "string",
-      "minLength": 1
-    },
-    "aspectRatio": {
+    "documentType": {
       "type": "string",
       "enum": [
-        "16:9",
-        "4:3",
+        "business_plan",
+        "ir_deck",
+        "company_profile",
+        "proposal",
+        "government_grant_plan",
+        "executive_report",
         "custom"
       ]
     },
-    "customSize": {
+    "audience": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "desiredOutcome": {"type": "string", "minLength": 1},
+    "tone": {"type": "string", "minLength": 1},
+    "sourceInventory": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/sourceRef"}
+    },
+    "intakeStatus": {
       "type": "object",
-      "required": [
-        "widthInches",
-        "heightInches"
-      ],
+      "required": ["status", "questionsAsked", "openQuestions", "approvedAssumptions"],
       "additionalProperties": false,
       "properties": {
-        "widthInches": {
-          "type": "number",
-          "exclusiveMinimum": 0
+        "status": {
+          "type": "string",
+          "enum": ["complete", "incomplete", "blocked", "assumptions_approved"]
         },
-        "heightInches": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        }
+        "questionsAsked": {"type": "array", "items": {"type": "string"}},
+        "openQuestions": {"type": "array", "items": {"type": "string"}},
+        "approvedAssumptions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "outputContract": {
+      "type": "object",
+      "required": ["sourceHtml", "renderedSlidesDir", "primaryPdf", "renderManifest", "pdfMode", "qaMontage"],
+      "additionalProperties": false,
+      "properties": {
+        "sourceHtml": {"type": "string"},
+        "generatedBaselineHtml": {"type": "string"},
+        "renderedSlidesDir": {"type": "string"},
+        "primaryPdf": {"type": "string"},
+        "renderManifest": {"type": "string"},
+        "pdfMode": {"type": "string", "enum": ["paginated"]},
+        "qaMontage": {"type": "string"},
+        "notes": {"type": "string"},
+        "qaReport": {"type": "string"},
+        "deliverySummary": {"type": "string"}
+      }
+    },
+    "renderConfig": {
+      "type": "object",
+      "required": ["engine", "slideSelector", "widthPx", "heightPx", "deviceScaleFactor", "waitForFonts", "captureElementOnly"],
+      "additionalProperties": false,
+      "properties": {
+        "engine": {"type": "string", "const": "codex-business-deck-kit-cli"},
+        "preset": {"type": "string", "enum": ["wide-1080p", "wide-720p", "wide-900p", "wide-1440p", "custom"]},
+        "slideSelector": {"type": "string"},
+        "widthPx": {"type": "integer", "minimum": 1},
+        "heightPx": {"type": "integer", "minimum": 1},
+        "deviceScaleFactor": {"type": "number", "exclusiveMinimum": 0},
+        "waitForFonts": {"type": "boolean"},
+        "captureElementOnly": {"type": "boolean"},
+        "fontPreset": {"$ref": "#/$defs/fontPreset"}
+      }
+    },
+    "pdfConfig": {
+      "type": "object",
+      "required": ["source", "mode", "pageAspectRatio", "pageSizeInches", "imageFit", "background"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"type": "string", "const": "rendered_images"},
+        "mode": {"type": "string", "const": "paginated"},
+        "pageAspectRatio": {"type": "string"},
+        "pageSizeInches": {
+          "type": "object",
+          "required": ["width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "width": {"type": "number", "exclusiveMinimum": 0},
+            "height": {"type": "number", "exclusiveMinimum": 0}
+          }
+        },
+        "imageFit": {"type": "string", "enum": ["exact", "contain", "cover"]},
+        "background": {"type": "string"}
       }
     },
     "designSystem": {
       "type": "object",
+      "required": ["fontPreset", "colors", "typography", "layout", "htmlCssNotes"],
       "additionalProperties": false,
       "properties": {
-        "colors": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "fonts": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "heading": {
-              "type": "string"
-            },
-            "body": {
-              "type": "string"
-            },
-            "fallback": {
-              "type": "string"
-            }
-          }
-        },
-        "margins": {
-          "type": "string"
-        },
-        "spacing": {
-          "type": "string"
-        },
-        "layoutPrinciples": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "stylePromptSummary": {
-          "type": "string"
-        },
-        "stylePromptDirectives": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "stylePromptAvoid": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "stylePromptConflicts": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "brandNotes": {
-          "type": "string"
-        }
+        "fontPreset": {"$ref": "#/$defs/fontPreset"},
+        "fontOverride": {"type": "string"},
+        "colors": {"type": "object", "additionalProperties": {"type": "string"}},
+        "typography": {"type": "object", "additionalProperties": {"type": "string"}},
+        "layout": {"type": "object", "additionalProperties": {"type": "string"}},
+        "cssVariables": {"type": "object", "additionalProperties": {"type": "string"}},
+        "stylePromptSummary": {"type": "string"},
+        "stylePromptDirectives": {"type": "array", "items": {"type": "string"}},
+        "stylePromptAvoid": {"type": "array", "items": {"type": "string"}},
+        "stylePromptConflicts": {"type": "array", "items": {"type": "string"}},
+        "htmlCssNotes": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "candidateOutputComparison": {
-      "type": "array",
-      "description": "Comparison notes for prior model-generated candidate outputs used as design or copy hypotheses.",
-      "items": {
-        "$ref": "#/$defs/candidateOutputComparison"
+    "storyArc": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "slides": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/slide"}},
+    "claimProvenance": {
+      "type": "object",
+      "required": ["required", "unsupportedClaimsPolicy", "claims"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {"type": "boolean"},
+        "unsupportedClaimsPolicy": {"type": "string", "enum": ["remove_or_rewrite", "mark_as_assumption", "block_until_sourced"]},
+        "claims": {"type": "array", "items": {"$ref": "#/$defs/claim"}}
       }
     },
-    "storyArc": {
-      "type": "array",
-      "items": {
-        "type": "string"
+    "businessQa": {
+      "type": "object",
+      "required": ["documentTypeChecklist", "copyRisks", "evidenceRisks", "legalRisks", "visualRisks"],
+      "additionalProperties": false,
+      "properties": {
+        "documentTypeChecklist": {"type": "array", "items": {"type": "string"}},
+        "copyRisks": {"type": "array", "items": {"type": "string"}},
+        "evidenceRisks": {"type": "array", "items": {"type": "string"}},
+        "legalRisks": {"type": "array", "items": {"type": "string"}},
+        "visualRisks": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "slides": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/slide"
-      }
-    },
-    "qaNotes": {
-      "type": "array",
-      "items": {
-        "type": "string"
+    "accessibilityNotes": {"type": "array", "items": {"type": "string"}},
+    "htmlImplementationNotes": {"type": "array", "items": {"type": "string"}},
+    "candidateOutputComparison": {"type": "array", "items": {"$ref": "#/$defs/candidateOutputComparison"}},
+    "userEditPolicy": {
+      "type": "object",
+      "required": ["allowDirectHtmlEdits", "syncRequiredAfterHtmlEdits", "preserveUserEditsByDefault"],
+      "additionalProperties": false,
+      "properties": {
+        "allowDirectHtmlEdits": {"type": "boolean"},
+        "syncRequiredAfterHtmlEdits": {"type": "boolean"},
+        "preserveUserEditsByDefault": {"type": "boolean"},
+        "baselineHtml": {"type": "string"},
+        "syncReport": {"type": "string"},
+        "staleDerivativePolicy": {"type": "string"}
       }
     }
   },
   "$defs": {
-    "referenceFile": {
+    "fontPreset": {
+      "type": "string",
+      "enum": ["pretendard", "noto-sans-kr", "noto-sans-cjk-kr", "ibm-plex-sans-kr", "suit", "custom"]
+    },
+    "sourceRef": {
       "type": "object",
-      "required": [
-        "path",
-        "kind"
-      ],
+      "required": ["path", "kind"],
       "additionalProperties": false,
       "properties": {
-        "path": {
-          "type": "string",
-          "minLength": 1
-        },
-        "kind": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Examples: template, reference_deck, visual_reference, brand_reference, data_source, source_document, design_prompt, candidate_output, html_output, model_output_comparison, other."
-        },
-        "role": {
-          "type": "string"
-        },
-        "priority": {
-          "type": "string",
-          "enum": [
-            "required",
-            "primary",
-            "supporting",
-            "background"
-          ]
-        },
-        "notes": {
-          "type": "string"
-        }
+        "path": {"type": "string", "minLength": 1},
+        "kind": {"type": "string"},
+        "role": {"type": "string"},
+        "priority": {"type": "string", "enum": ["required", "primary", "supporting", "background"]},
+        "notes": {"type": "string"},
+        "sha256": {"type": "string"}
       }
     },
-    "candidateOutputComparison": {
+    "claim": {
       "type": "object",
-      "required": [
-        "path"
-      ],
+      "required": ["id", "text", "status"],
       "additionalProperties": false,
       "properties": {
-        "path": {
-          "type": "string",
-          "minLength": 1
-        },
-        "modelOrSource": {
-          "type": "string"
-        },
-        "strengthsToAdopt": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "patternsToAdapt": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "risksToReject": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "copyRisks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "visualHierarchyNotes": {
-          "type": "string"
-        },
-        "sourceFaithfulnessNotes": {
-          "type": "string"
-        }
+        "id": {"type": "string"},
+        "text": {"type": "string"},
+        "status": {"type": "string", "enum": ["sourced", "user_confirmed", "assumption", "unsupported", "removed"]},
+        "sourceRefs": {"type": "array", "items": {"type": "string"}},
+        "slideIds": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "string"}
       }
     },
     "slide": {
       "type": "object",
       "required": [
         "id",
-        "slideType",
+        "htmlId",
+        "sectionRole",
         "headline",
-        "keyMessage"
+        "keyMessage",
+        "bodyContent",
+        "layoutIntent",
+        "visualIntent",
+        "evidenceRefs",
+        "claims",
+        "renderRisks",
+        "qaChecks"
       ],
       "additionalProperties": false,
       "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9_-]+$"
-        },
-        "slideType": {
-          "type": "string",
-          "enum": [
-            "cover",
-            "agenda",
-            "section_divider",
-            "executive_summary",
-            "problem",
-            "insight",
-            "data_chart",
-            "comparison",
-            "timeline",
-            "process",
-            "kpi",
-            "case_study",
-            "quote",
-            "recommendation",
-            "closing"
-          ]
-        },
-        "headline": {
-          "type": "string",
-          "minLength": 1
-        },
-        "subheadline": {
-          "type": "string"
-        },
-        "keyMessage": {
-          "type": "string",
-          "minLength": 1
-        },
-        "bodyPoints": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "speakerNotes": {
-          "type": "string"
-        },
-        "visualInstructions": {
-          "$ref": "#/$defs/visualInstructions"
-        },
-        "chartInstructions": {
-          "$ref": "#/$defs/chartInstructions"
-        },
-        "tableInstructions": {
-          "$ref": "#/$defs/tableInstructions"
-        },
-        "layoutInstructions": {
-          "$ref": "#/$defs/layoutInstructions"
-        },
-        "qaRisks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+        "htmlId": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+        "sectionRole": {"type": "string"},
+        "headline": {"type": "string", "minLength": 1},
+        "keyMessage": {"type": "string", "minLength": 1},
+        "bodyContent": {"type": "array", "items": {"type": "string"}},
+        "layoutIntent": {"type": "string"},
+        "visualIntent": {"type": "string"},
+        "evidenceRefs": {"type": "array", "items": {"type": "string"}},
+        "claims": {"type": "array", "items": {"type": "string"}},
+        "renderRisks": {"type": "array", "items": {"type": "string"}},
+        "qaChecks": {"type": "array", "items": {"type": "string"}},
+        "speakerNotes": {"type": "string"},
+        "accessibilityNotes": {"type": "array", "items": {"type": "string"}}
       }
     },
-    "visualInstructions": {
+    "candidateOutputComparison": {
       "type": "object",
+      "required": ["path"],
       "additionalProperties": false,
       "properties": {
-        "description": {
-          "type": "string"
-        },
-        "assetCandidates": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "generationPrompt": {
-          "type": "string"
-        },
-        "altText": {
-          "type": "string"
-        },
-        "editablePreference": {
-          "type": "string",
-          "enum": [
-            "native_shapes",
-            "native_chart",
-            "native_table",
-            "raster_image",
-            "none"
-          ]
-        },
-        "avoid": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "chartInstructions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "chartType": {
-          "type": "string"
-        },
-        "dataSource": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "labels": {
-          "type": "string"
-        },
-        "nativePowerPointChart": {
-          "type": "boolean"
-        },
-        "notes": {
-          "type": "string"
-        }
-      }
-    },
-    "tableInstructions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "dataSource": {
-          "type": "string"
-        },
-        "columns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "emphasis": {
-          "type": "string"
-        },
-        "nativePowerPointTable": {
-          "type": "boolean"
-        }
-      }
-    },
-    "layoutInstructions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "structure": {
-          "type": "string"
-        },
-        "marginGuidance": {
-          "type": "string"
-        },
-        "hierarchy": {
-          "type": "string"
-        },
-        "density": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high"
-          ]
-        }
+        "path": {"type": "string"},
+        "modelOrSource": {"type": "string"},
+        "adopt": {"type": "array", "items": {"type": "string"}},
+        "adapt": {"type": "array", "items": {"type": "string"}},
+        "reject": {"type": "array", "items": {"type": "string"}},
+        "sourceFaithfulnessNotes": {"type": "string"}
       }
     }
   }
