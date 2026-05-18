@@ -32,6 +32,11 @@ Read:
    - broken images
    - missing alt text for meaningful images
 
+Use the best available rendering method in the environment, such as a $slides
+render/export capability, LibreOffice headless export, PowerPoint/Keynote export,
+or another configured PPTX-to-image renderer. Document the exact method used. If
+no renderer is available, stop, report the blocker, and do not mark QA as passed.
+
 ## Output
 
 Create `out/qa_report.md` with:

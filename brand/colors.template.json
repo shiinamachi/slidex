@@ -1,13 +1,13 @@
 {
-  "_instructions": "Replace these placeholder values with approved brand colors before creating a deck. Keep contrast and accessibility requirements in mind.",
-  "primary": "#2563EB",
-  "secondary": "#64748B",
-  "accent": "#F59E0B",
-  "background": "#FFFFFF",
-  "surface": "#F8FAFC",
-  "text": "#111827",
-  "mutedText": "#475569",
-  "success": "#16A34A",
-  "warning": "#D97706",
-  "danger": "#DC2626"
+  "_instructions": "Replace every REPLACE_WITH_* placeholder with approved brand colors before creating a deck. Use hex colors such as #123ABC and check contrast for accessibility.",
+  "primary": "REPLACE_WITH_PRIMARY_HEX",
+  "secondary": "REPLACE_WITH_SECONDARY_HEX",
+  "accent": "REPLACE_WITH_ACCENT_HEX",
+  "background": "REPLACE_WITH_BACKGROUND_HEX",
+  "surface": "REPLACE_WITH_SURFACE_HEX",
+  "text": "REPLACE_WITH_TEXT_HEX",
+  "mutedText": "REPLACE_WITH_MUTED_TEXT_HEX",
+  "success": "REPLACE_WITH_SUCCESS_HEX",
+  "warning": "REPLACE_WITH_WARNING_HEX",
+  "danger": "REPLACE_WITH_DANGER_HEX"
 }
