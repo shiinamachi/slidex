@@ -7,6 +7,8 @@ you must not create a PPTX in this stage.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before inspecting deck materials or writing files.
+Then read `prompts/_global_presentation_rules.md` for text wrapping, typography,
+and HTML webfont rules.
 Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
 is handled consistently.
 If the user asks to compare prior outputs or multiple candidate outputs exist in
@@ -68,7 +70,8 @@ reasonable assumptions.
    likely visual treatment.
 9. Identify source data or evidence needed for charts, tables, and claims.
 10. List design risks and QA risks to watch later, including any risk that the
-   design prompt may conflict with brand, accessibility, or readability.
+   design prompt may conflict with brand, accessibility, text wrapping, webfont
+   loading, or readability.
 
 ## Output
 

@@ -10,6 +10,8 @@ visual QA, revision, or final delivery.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading deck materials or writing files.
+Then read `prompts/_global_presentation_rules.md` for text wrapping, typography,
+and HTML webfont rules.
 Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
 is applied through the full workflow.
 If the user asks to compare prior model outputs or candidate outputs already
@@ -52,6 +54,8 @@ exist in `${OUT_DIR}`, also read `prompts/_candidate_output_context.md`.
     text, plus any meaningful mismatch with DESIGN.md when a deck-specific
     design prompt exists. If candidate outputs were compared, carry forward only
     source-faithful hierarchy/copy improvements and reject unsupported claims.
+    Also fix Korean mid-word wrapping and missing/inconsistent HTML webfont
+    application.
 12. Re-render slides in `${OUT_DIR}/rendered_slides/`, recreate
     `${OUT_DIR}/qa_montage.png`, and update `${OUT_DIR}/qa_report.md`.
 13. Repeat revision until the deck is visually acceptable or unresolved risks are
@@ -76,6 +80,10 @@ exist in `${OUT_DIR}`, also read `prompts/_candidate_output_context.md`.
 - Apply `${ACTIVE_DECK_DIR}/DESIGN.md` as a deck-specific style prompt when
   present, but do not let it override approved brand, template, accessibility,
   or editability requirements.
+- For Korean text, preserve eojeol/phrase-based wrapping. Do not allow mid-word
+  Hangul breaks as a quick overflow fix.
+- For HTML deck outputs, load and apply a webfont across all text roles. Use
+  Pretendard for Korean-heavy decks when no approved brand webfont is supplied.
 - Support any number of reference decks under
   `${ACTIVE_DECK_DIR}/assets/reference_decks/`; preserve
   `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` only as a legacy input.

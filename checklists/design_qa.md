@@ -56,6 +56,10 @@
 - Important live presentation text is larger.
 - No more than two font families are used unless the brand requires it.
 - Font substitution is checked in rendered slides.
+- Korean text wraps at eojeol or natural phrase boundaries, not mid-word or
+  mid-syllable.
+- HTML deck outputs load and apply a webfont across headings, body, labels,
+  chips, footers, and technical labels.
 
 ## Color
 

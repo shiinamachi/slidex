@@ -6,6 +6,8 @@ Create a structured deck specification. Do not create a PPTX in this stage.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
+Then read `prompts/_global_presentation_rules.md` for text wrapping, typography,
+and HTML webfont rules.
 Then read `prompts/_design_prompt_context.md` so any deck-specific design prompt
 is captured in the structured spec.
 If candidate outputs are being compared, also read
@@ -52,6 +54,9 @@ direction within the priority rules in `prompts/_design_prompt_context.md`.
   `${ACTIVE_DECK_DIR}/DESIGN.md` exists.
 - Capture the distilled design prompt interpretation in `designSystem`, including
   style directives, avoid guidance, and any conflicts or overrides.
+- Capture any global typography requirements that materially affect production,
+  including Korean eojeol/phrase-based wrapping and required webfont usage for
+  HTML deck outputs.
 - Give every slide one clear message.
 - Use action headlines rather than generic titles.
 - Keep slide messages concise.

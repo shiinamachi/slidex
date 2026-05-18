@@ -6,6 +6,8 @@ Finalize the deck delivery without overclaiming.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before verifying files or writing final notes.
+Then read `prompts/_global_presentation_rules.md` for text wrapping, typography,
+and HTML webfont rules.
 Then read `prompts/_design_prompt_context.md` so final delivery can report any
 deck-specific design prompt that was used.
 If candidate outputs were compared or influenced the final deck, also read
@@ -29,6 +31,10 @@ Verify that these files exist:
 - Confirm all meaningful QA findings were fixed or documented.
 - Confirm no text overflow, object overlap, broken images, missing fonts, or
   unreadable charts remain, unless listed as unresolved risks.
+- Confirm Korean text does not break mid-word or mid-syllable in rendered
+  outputs.
+- If HTML outputs exist, confirm required webfonts load and apply consistently
+  across text roles, or document the external dependency risk.
 - Confirm meaningful images have alt text or documented alt text requirements.
 - Confirm generated visual prompts and design notes are documented in
   `${OUT_DIR}/notes.md`.

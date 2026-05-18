@@ -36,6 +36,9 @@
 - HTML does not introduce unsupported claims that are absent from the approved
   spec.
 - Korean text wraps by word or phrase, not mid-word.
+- HTML loads a documented webfont and applies it consistently across every text
+  role, including mono-styled labels, unless a brand guide explicitly requires a
+  separate mono face.
 
 ## Documentation
 

@@ -8,6 +8,8 @@ Build the editable PowerPoint deck from `${OUT_DIR}/deck_spec.json`.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
+Then read `prompts/_global_presentation_rules.md` for text wrapping, typography,
+and HTML webfont rules.
 Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
 is applied consistently during the build.
 If candidate outputs are being used as comparison references, also read
@@ -63,6 +65,12 @@ was missed.
   presentation decks.
 - Keep charts simple, labeled, and readable.
 - Add alt text for meaningful images.
+- For Korean text, avoid mid-word or mid-syllable breaks. Use shorter copy,
+  wider text boxes, or manual line breaks only at eojeol or natural phrase
+  boundaries.
+- For HTML deck outputs, load a webfont and apply it to every text role. If no
+  brand webfont is supplied, use Pretendard for Korean-heavy decks and document
+  the external or local font source.
 - Apply deck-specific `DESIGN.md` style directives to typography, spacing,
   composition, imagery, iconography, charts, and visual density unless they
   conflict with higher-priority inputs or QA requirements.

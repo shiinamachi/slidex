@@ -7,6 +7,8 @@ slides were inspected.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
+Then read `prompts/_global_presentation_rules.md` for text wrapping, typography,
+and HTML webfont rules.
 Then read `prompts/_design_prompt_context.md` so deck-specific style intent is
 included in QA.
 If candidate outputs were compared or remain in `${OUT_DIR}`, also read
@@ -43,6 +45,7 @@ Read:
    - inconsistent margins
    - poor alignment
    - font substitution
+   - missing or blocked webfont loading in HTML outputs
    - low contrast
    - unreadable charts
    - excessive text density
@@ -56,6 +59,8 @@ Read:
    - unsupported claims introduced by HTML or candidate outputs
    - external dependencies, hidden raster slide images, broken font loading,
      mid-word Korean wrapping, overflow, or element collisions in HTML outputs
+   - Korean line breaks that split words or syllables rather than eojeol or
+     natural phrases
 
 If multiple candidate outputs exist, include a comparison finding: which output
 has stronger visual hierarchy, which has safer copy, which violates source
