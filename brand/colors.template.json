@@ -1,0 +1,13 @@
+{
+  "_instructions": "Replace these placeholder values with approved brand colors before creating a deck. Keep contrast and accessibility requirements in mind.",
+  "primary": "#2563EB",
+  "secondary": "#64748B",
+  "accent": "#F59E0B",
+  "background": "#FFFFFF",
+  "surface": "#F8FAFC",
+  "text": "#111827",
+  "mutedText": "#475569",
+  "success": "#16A34A",
+  "warning": "#D97706",
+  "danger": "#DC2626"
+}

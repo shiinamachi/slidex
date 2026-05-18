@@ -1,0 +1,194 @@
+{
+  "metadata": {
+    "title": "2026년 상반기 고객 유지율 개선 전략",
+    "subtitle": "임원 의사결정을 위한 90일 실행 제안",
+    "owner": "Customer Success Strategy",
+    "date": "2026-05-18",
+    "version": "0.1",
+    "sourceFiles": [
+      "examples/sample_brief.md",
+      "data/retention_by_segment.csv",
+      "data/support_response_time.xlsx"
+    ]
+  },
+  "audience": "CEO, CFO, CRO, 고객 성공 리더십",
+  "objective": "고객 이탈 증가 원인을 설명하고 유지율 개선을 위한 세 가지 투자 우선순위 승인을 받는다.",
+  "tone": "간결하고 분석적이며 실행 중심",
+  "aspectRatio": "16:9",
+  "designSystem": {
+    "colors": {
+      "primary": "#2563EB",
+      "accent": "#F59E0B",
+      "text": "#111827",
+      "mutedText": "#475569",
+      "background": "#FFFFFF"
+    },
+    "fonts": {
+      "heading": "Aptos Display",
+      "body": "Aptos",
+      "fallback": "Arial"
+    },
+    "margins": "Use consistent wide margins and avoid dense edge-to-edge content.",
+    "spacing": "Use generous spacing between title, visual, and takeaway regions.",
+    "layoutPrinciples": [
+      "One dominant message per slide",
+      "Prefer native charts and tables",
+      "Use accent color only for emphasis"
+    ],
+    "brandNotes": "No approved brand file is present in this sample; use neutral executive styling."
+  },
+  "storyArc": [
+    "Establish the retention problem",
+    "Show where risk is concentrated",
+    "Explain the operational drivers",
+    "Recommend focused interventions",
+    "Ask for approval on the 90-day plan"
+  ],
+  "slides": [
+    {
+      "id": "slide_01",
+      "slideType": "cover",
+      "headline": "고객 유지율 개선은 다음 두 분기의 최우선 성장 레버입니다",
+      "subheadline": "2026년 상반기 실행 제안",
+      "keyMessage": "이탈 방어는 신규 매출 확대보다 빠르게 순매출 유지율을 안정화할 수 있다.",
+      "bodyPoints": [
+        "최근 유지율 하락 요인을 요약",
+        "세 가지 실행 우선순위 제안"
+      ],
+      "speakerNotes": "임원진이 투자 결정을 내려야 하는 맥락을 짧게 설명한다.",
+      "visualInstructions": {
+        "description": "Clean executive cover with a restrained abstract retention motif.",
+        "generationPrompt": "Minimal executive presentation cover visual showing connected customer segments and upward retention momentum, clean white background, subtle blue and amber accents.",
+        "altText": "연결된 고객 세그먼트와 상승 흐름을 나타내는 추상 이미지",
+        "editablePreference": "raster_image",
+        "avoid": [
+          "stock-photo business people",
+          "busy backgrounds"
+        ]
+      },
+      "layoutInstructions": {
+        "structure": "Large action headline on left, restrained visual field on right.",
+        "marginGuidance": "Use wide margins.",
+        "hierarchy": "Headline first, subtitle second, date and owner small.",
+        "density": "low"
+      },
+      "qaRisks": [
+        "Cover image may overpower the action title"
+      ]
+    },
+    {
+      "id": "slide_02",
+      "slideType": "executive_summary",
+      "headline": "이탈 증가는 세그먼트 집중 문제이며 전사 평균만 보면 대응이 늦습니다",
+      "keyMessage": "중견 고객군과 온보딩 90일 이내 고객에서 유지율 하락이 집중된다.",
+      "bodyPoints": [
+        "전체 유지율은 4분기 연속 하락",
+        "고위험 세그먼트가 하락분의 대부분을 설명",
+        "대응은 세그먼트별로 달라야 함"
+      ],
+      "speakerNotes": "평균 지표보다 세그먼트별 리스크를 봐야 한다는 점을 강조한다.",
+      "layoutInstructions": {
+        "structure": "Three concise summary blocks under one action headline.",
+        "marginGuidance": "Align all blocks to a shared grid.",
+        "hierarchy": "Use large numbers or short labels for each block.",
+        "density": "medium"
+      },
+      "qaRisks": [
+        "Too much text could weaken executive readability"
+      ]
+    },
+    {
+      "id": "slide_03",
+      "slideType": "data_chart",
+      "headline": "중견 고객군의 유지율 하락이 전체 손실의 절반 이상을 차지합니다",
+      "keyMessage": "고객 규모별 유지율을 분리하면 중견 고객군이 가장 큰 개선 기회다.",
+      "bodyPoints": [
+        "엔터프라이즈 고객은 안정적",
+        "SMB는 변동성이 높지만 절대 매출 영향은 작음",
+        "중견 고객군은 규모와 하락폭이 모두 큼"
+      ],
+      "speakerNotes": "차트의 핵심은 절대 하락폭과 매출 영향이 동시에 큰 세그먼트다.",
+      "chartInstructions": {
+        "chartType": "line",
+        "dataSource": "data/retention_by_segment.csv",
+        "message": "Segment retention trend by quarter, with mid-market highlighted.",
+        "labels": "Direct-label each segment at the line end.",
+        "nativePowerPointChart": true,
+        "notes": "Use muted colors for non-focus segments and accent color for mid-market."
+      },
+      "layoutInstructions": {
+        "structure": "Chart dominates the slide with a concise takeaway callout.",
+        "marginGuidance": "Keep chart labels inside safe margins.",
+        "hierarchy": "Headline, chart, takeaway callout.",
+        "density": "medium"
+      },
+      "qaRisks": [
+        "Line labels may collide",
+        "Axis text may become too small"
+      ]
+    },
+    {
+      "id": "slide_04",
+      "slideType": "recommendation",
+      "headline": "세 가지 운영 레버에 집중하면 90일 안에 유지율 하락을 완화할 수 있습니다",
+      "keyMessage": "온보딩, 리스크 감지, 대응 속도 개선이 가장 직접적인 실행 과제다.",
+      "bodyPoints": [
+        "온보딩 30일 체크포인트 재설계",
+        "사용량 급감 고객의 조기 경보",
+        "고위험 티켓 대응 SLA 강화"
+      ],
+      "speakerNotes": "각 레버를 비용, 실행 난이도, 기대 효과 관점에서 설명한다.",
+      "tableInstructions": {
+        "dataSource": "Derived from support and retention analysis",
+        "columns": [
+          "Lever",
+          "Expected impact",
+          "Owner",
+          "First milestone"
+        ],
+        "emphasis": "Highlight the recommended first milestone for each lever.",
+        "nativePowerPointTable": true
+      },
+      "layoutInstructions": {
+        "structure": "Editable four-column recommendation table with concise entries.",
+        "marginGuidance": "Avoid tiny table text; split if necessary.",
+        "hierarchy": "Action title, table, short approval ask.",
+        "density": "medium"
+      },
+      "qaRisks": [
+        "Table text may become too dense"
+      ]
+    },
+    {
+      "id": "slide_05",
+      "slideType": "timeline",
+      "headline": "90일 실행 계획은 빠른 진단, 개입, 확산 순서로 진행합니다",
+      "keyMessage": "첫 30일은 진단과 설계, 다음 60일은 고위험 세그먼트 개입과 확산에 집중한다.",
+      "bodyPoints": [
+        "0-30일: 세그먼트 진단과 온보딩 체크포인트 설계",
+        "31-60일: 고위험 고객 조기 경보와 대응 SLA 적용",
+        "61-90일: 효과 측정과 반복 확산"
+      ],
+      "speakerNotes": "승인이 필요한 의사결정과 첫 번째 운영 마일스톤을 명확히 요청한다.",
+      "visualInstructions": {
+        "description": "Editable three-phase timeline built with native shapes.",
+        "altText": "진단, 개입, 확산으로 구성된 90일 실행 타임라인",
+        "editablePreference": "native_shapes"
+      },
+      "layoutInstructions": {
+        "structure": "Three horizontal timeline phases with milestones and owners.",
+        "marginGuidance": "Keep phase labels aligned and evenly spaced.",
+        "hierarchy": "Headline, timeline, approval ask.",
+        "density": "medium"
+      },
+      "qaRisks": [
+        "Timeline labels may wrap awkwardly"
+      ]
+    }
+  ],
+  "qaNotes": [
+    "Render slides and inspect for text overflow before delivery.",
+    "Confirm chart labels remain readable in the exported images.",
+    "Confirm meaningful visuals have alt text."
+  ]
+}

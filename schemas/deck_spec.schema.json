@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/deck_spec.schema.json",
+  "title": "Deck Specification",
+  "description": "Structured specification for an editable PowerPoint deck.",
+  "type": "object",
+  "required": [
+    "metadata",
+    "audience",
+    "objective",
+    "tone",
+    "aspectRatio",
+    "designSystem",
+    "slides"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": [
+        "title",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 1
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tone": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aspectRatio": {
+      "type": "string",
+      "enum": [
+        "16:9",
+        "4:3",
+        "custom"
+      ]
+    },
+    "customSize": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "widthInches": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightInches": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "designSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "colors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "fonts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "heading": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "fallback": {
+              "type": "string"
+            }
+          }
+        },
+        "margins": {
+          "type": "string"
+        },
+        "spacing": {
+          "type": "string"
+        },
+        "layoutPrinciples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "brandNotes": {
+          "type": "string"
+        }
+      }
+    },
+    "storyArc": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "slides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/slide"
+      }
+    },
+    "qaNotes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "slide": {
+      "type": "object",
+      "required": [
+        "id",
+        "slideType",
+        "headline",
+        "keyMessage"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "slideType": {
+          "type": "string",
+          "enum": [
+            "cover",
+            "agenda",
+            "section_divider",
+            "executive_summary",
+            "problem",
+            "insight",
+            "data_chart",
+            "comparison",
+            "timeline",
+            "process",
+            "kpi",
+            "case_study",
+            "quote",
+            "recommendation",
+            "closing"
+          ]
+        },
+        "headline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subheadline": {
+          "type": "string"
+        },
+        "keyMessage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bodyPoints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "speakerNotes": {
+          "type": "string"
+        },
+        "visualInstructions": {
+          "$ref": "#/$defs/visualInstructions"
+        },
+        "chartInstructions": {
+          "$ref": "#/$defs/chartInstructions"
+        },
+        "tableInstructions": {
+          "$ref": "#/$defs/tableInstructions"
+        },
+        "layoutInstructions": {
+          "$ref": "#/$defs/layoutInstructions"
+        },
+        "qaRisks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "visualInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "assetCandidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generationPrompt": {
+          "type": "string"
+        },
+        "altText": {
+          "type": "string"
+        },
+        "editablePreference": {
+          "type": "string",
+          "enum": [
+            "native_shapes",
+            "native_chart",
+            "native_table",
+            "raster_image",
+            "none"
+          ]
+        },
+        "avoid": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "chartInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "chartType": {
+          "type": "string"
+        },
+        "dataSource": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "string"
+        },
+        "nativePowerPointChart": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "tableInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dataSource": {
+          "type": "string"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emphasis": {
+          "type": "string"
+        },
+        "nativePowerPointTable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "layoutInstructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "structure": {
+          "type": "string"
+        },
+        "marginGuidance": {
+          "type": "string"
+        },
+        "hierarchy": {
+          "type": "string"
+        },
+        "density": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    }
+  }
+}
