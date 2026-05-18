@@ -131,6 +131,7 @@ type qaResult struct {
 	FilesChecked    []string    `json:"filesChecked"`
 	SlideCount      int         `json:"slideCount"`
 	PDFPageCount    int         `json:"pdfPageCount"`
+	RenderMethod    string      `json:"renderMethod,omitempty"`
 	Findings        []qaFinding `json:"findings"`
 	GeneratedReport string      `json:"generatedReport,omitempty"`
 }
@@ -965,6 +966,10 @@ async function codexBusinessDeckKitReady() {
   document.documentElement.setAttribute('data-fonts-ready', 'true');
   const issues = [];
   document.querySelectorAll('.slide, .slide *').forEach((el, index) => {
+    const className = String(el.className || '');
+    if (/(^|\s)(arrow|line|top-rule|footer-rule|connector)(\s|$)/.test(className)) {
+      return;
+    }
     const overflowX = el.scrollWidth > el.clientWidth + 1;
     const overflowY = el.scrollHeight > el.clientHeight + 1;
     if (overflowX || overflowY) {
@@ -972,7 +977,7 @@ async function codexBusinessDeckKitReady() {
         index,
         tag: el.tagName,
         id: el.id || '',
-        className: String(el.className || ''),
+        className,
         clientWidth: el.clientWidth,
         clientHeight: el.clientHeight,
         scrollWidth: el.scrollWidth,
@@ -1533,6 +1538,7 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 			if currentHash, err := sha256File(htmlPath); err == nil && currentHash != manifest.SourceHTML.SHA256 {
 				result.Findings = append(result.Findings, fail("manifest.freshness", "current HTML hash does not match render manifest", htmlPath))
 			}
+			result.RenderMethod = manifest.RenderMethod
 			if manifest.PDFPageSizePoints.Width <= 0 || manifest.PDFPageSizePoints.Height <= 0 {
 				result.Findings = append(result.Findings, fail("pdf.page_size", "render manifest is missing PDF page size", manifestPath))
 			}
@@ -1580,8 +1586,8 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 }
 
 func localDependencies(htmlPath, src string) []dependency {
-	styles, assets, fonts := collectDependencies(htmlPath, src, "unknown")
-	return append(append(styles, assets...), fonts...)
+	styles, assets, _ := collectDependencies(htmlPath, src, "pretendard")
+	return append(styles, assets...)
 }
 
 func writeQAReport(path string, result qaResult) error {
@@ -1590,6 +1596,7 @@ func writeQAReport(path string, result qaResult) error {
 	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", result.ToolName, result.Version))
 	b.WriteString(fmt.Sprintf("- Deck directory: `%s`\n", result.DeckDir))
 	b.WriteString(fmt.Sprintf("- Overall status: %s\n", result.Status))
+	b.WriteString(fmt.Sprintf("- Render method: %s\n", firstNonEmpty(result.RenderMethod, "not recorded in render_manifest.json")))
 	b.WriteString(fmt.Sprintf("- Slide count: %d\n", result.SlideCount))
 	b.WriteString(fmt.Sprintf("- PDF page count: %d\n\n", result.PDFPageCount))
 	b.WriteString("## Files Checked\n\n")
@@ -1810,6 +1817,13 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		derivativeStale = append(derivativeStale, "strategy.md: HTML story or slide structure changed; strategy may need a human update.")
 		derivativeStale = append(derivativeStale, "source_inventory.md: asset, dependency, or evidence references may need refresh.")
 		derivativeStale = append(derivativeStale, "delivery_summary.md: final delivery summary must be regenerated after accepted edits.")
+	}
+	if changeDetected {
+		if err := appendSyncFindingsToQAReport(filepath.Join(outDir, "qa_report.md"), derivativeStale, acceptedChanges, correctedOrRejected); err != nil {
+			qaErr = strings.TrimSpace(qaErr + "; failed to append sync findings to QA report: " + err.Error())
+		} else if len(derivativeStale) > 0 {
+			derivativeUpdated = append(derivativeUpdated, "qa_report.md")
+		}
 	}
 	report := map[string]any{
 		"toolName":             toolName,
@@ -2150,6 +2164,41 @@ func writeSyncReport(path string, report map[string]any) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
+func appendSyncFindingsToQAReport(path string, stale []string, accepted []string, corrected []string) error {
+	var b strings.Builder
+	if existing, err := os.ReadFile(path); err == nil {
+		b.Write(existing)
+		if !strings.HasSuffix(b.String(), "\n") {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n## User-Edit Sync Findings\n\n")
+	if len(accepted) > 0 {
+		b.WriteString("### Accepted Changes\n\n")
+		for _, item := range accepted {
+			b.WriteString("- " + item + "\n")
+		}
+	}
+	if len(corrected) > 0 {
+		b.WriteString("\n### Corrected Or Rejected Changes\n\n")
+		for _, item := range corrected {
+			b.WriteString("- " + item + "\n")
+		}
+	}
+	b.WriteString("\n### Stale Derivative Files\n\n")
+	if len(stale) == 0 {
+		b.WriteString("- None\n")
+	} else {
+		for _, item := range stale {
+			b.WriteString("- " + item + "\n")
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
 func runPackage(args []string) error {
 	fs := flag.NewFlagSet("package", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
@@ -2208,6 +2257,12 @@ func packageDeck(deck string) (map[string]any, error) {
 		} else if hash, err := sha256File(htmlPath); err == nil && hash != manifest.SourceHTML.SHA256 {
 			findings = append(findings, fail("package.manifest_freshness", "manifest source HTML hash is stale", manifestPath))
 		} else {
+			if currentHTML, err := os.ReadFile(htmlPath); err == nil {
+				currentStyles, currentAssets, currentFonts := collectDependencies(htmlPath, string(currentHTML), manifest.FontPreset)
+				findings = append(findings, verifyManifestDependencies("stylesheet", manifest.Stylesheets, currentStyles, manifestPath)...)
+				findings = append(findings, verifyManifestDependencies("asset", manifest.Assets, currentAssets, manifestPath)...)
+				findings = append(findings, verifyManifestDependencies("font", manifest.Fonts, currentFonts, manifestPath)...)
+			}
 			if len(manifest.PNGFiles) != len(pngs) {
 				findings = append(findings, fail("package.png_count", fmt.Sprintf("manifest PNG count %d does not match files %d", len(manifest.PNGFiles), len(pngs)), manifestPath))
 			}
@@ -2254,6 +2309,43 @@ func packageDeck(deck string) (map[string]any, error) {
 		"status":   status,
 		"findings": findings,
 	}, nil
+}
+
+func verifyManifestDependencies(kind string, manifestDeps []dependency, currentDeps []dependency, manifestPath string) []qaFinding {
+	var findings []qaFinding
+	manifestSet := map[string]dependency{}
+	for _, dep := range manifestDeps {
+		manifestSet[dependencyFreshnessKey(dep)] = dep
+		if dep.Path != "" && dep.SHA256 != "" {
+			if hash, err := sha256File(dep.Path); err != nil {
+				findings = append(findings, fail("package."+kind+"_dependency", "dependency file missing: "+err.Error(), dep.Path))
+			} else if hash != dep.SHA256 {
+				findings = append(findings, fail("package."+kind+"_dependency", "dependency hash does not match manifest", dep.Path))
+			}
+		}
+		if dep.Path == "" && dep.URL == "" && dep.Kind != "inline_css" {
+			findings = append(findings, qaFinding{Severity: "warn", Check: "package." + kind + "_dependency", Message: "dependency has no path or URL", Path: manifestPath})
+		}
+	}
+	currentSet := map[string]dependency{}
+	for _, dep := range currentDeps {
+		currentSet[dependencyFreshnessKey(dep)] = dep
+	}
+	for key := range currentSet {
+		if _, ok := manifestSet[key]; !ok {
+			findings = append(findings, fail("package."+kind+"_dependency", "current dependency is missing or changed in manifest: "+key, manifestPath))
+		}
+	}
+	for key := range manifestSet {
+		if _, ok := currentSet[key]; !ok {
+			findings = append(findings, fail("package."+kind+"_dependency", "manifest dependency is no longer present in current HTML: "+key, manifestPath))
+		}
+	}
+	return findings
+}
+
+func dependencyFreshnessKey(dep dependency) string {
+	return dep.Kind + "|" + dep.ID + "|" + dep.Path + "|" + dep.URL + "|" + dep.Version + "|" + dep.SHA256
 }
 
 func sha256File(path string) (string, error) {

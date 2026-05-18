@@ -84,6 +84,8 @@ pretendard
 ## Final Deliverables
 
 - HTML source
+- strategy document
+- deck specification JSON
 - generated baseline HTML
 - rendered slide images
 - paginated PDF
