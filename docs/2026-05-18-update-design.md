@@ -8,6 +8,9 @@ This document is the implementation design for changing the current
 It is intentionally detailed so a future Codex CLI session can use this file as
 its `/goal` objective and implement the update without leaving known gaps.
 
+The implementation target includes both prompt-system updates and a required Go
+CLI named `codex-business-deck-kit`.
+
 ## Non-Negotiable Goal
 
 Rework the system from a PPTX-first deck prompt workspace into an HTML-first
@@ -182,10 +185,12 @@ decks/<deck_id>/
     strategy.md
     deck_spec.json
     final_deck.html
+    final_deck.generated_baseline.html
     rendered_slides/
       slide_01.png
       slide_02.png
     final_deck.pdf
+    render_manifest.json
     qa_montage.png
     qa_report.md
     notes.md
@@ -216,8 +221,9 @@ The required workflow becomes:
 8. Render every `.slide` to `${OUT_DIR}/rendered_slides/*.png`.
 9. Generate `${OUT_DIR}/final_deck.pdf` from rendered images, one slide image
    per PDF page.
-10. Create `${OUT_DIR}/qa_montage.png`.
-11. Run automated validation:
+10. Create `${OUT_DIR}/render_manifest.json`.
+11. Create `${OUT_DIR}/qa_montage.png`.
+12. Run automated validation:
     - HTML parse validity.
     - slide count parity.
     - required asset existence.
@@ -226,12 +232,13 @@ The required workflow becomes:
     - blank slide detection.
     - image dimension checks.
     - PDF page-count and page-size checks.
+    - render manifest freshness checks.
     - schema validation.
     - claim provenance checks.
-12. Visually inspect rendered slides and montage.
-13. Revise HTML/spec/notes until QA passes or unresolved risks are documented.
-14. If the user directly edits `final_deck.html`, run the HTML edit sync flow.
-15. Finalize delivery with created files, checks, and unresolved risks.
+13. Visually inspect rendered slides and montage.
+14. Revise HTML/spec/notes until QA passes or unresolved risks are documented.
+15. If the user directly edits `final_deck.html`, run the HTML edit sync flow.
+16. Finalize delivery with created files, checks, and unresolved risks.
 
 No final delivery may claim success unless rendered slide images and the final
 PDF were produced from the current HTML and inspected.
@@ -337,11 +344,12 @@ Required outputs:
 
 - `${OUT_DIR}/rendered_slides/*.png`
 - `${OUT_DIR}/final_deck.pdf`
+- `${OUT_DIR}/render_manifest.json`
 - `${OUT_DIR}/qa_montage.png`
 
 Rendering requirements:
 
-- Use the `business-deck-kit` CLI, headless Chrome, or CDP.
+- Use the `codex-business-deck-kit` CLI, headless Chrome, or CDP.
 - Wait for `document.fonts.ready`.
 - Capture each `.slide` element, not the full scrolling page.
 - Enforce expected dimensions, default `1920x1080`.
@@ -421,7 +429,8 @@ Purpose: final delivery verification.
 Required behavior:
 
 - Verify all required files exist.
-- Verify current HTML hash or timestamp matches rendered images/PDF.
+- Verify current HTML hash and dependency hashes match rendered images/PDF
+  through `${OUT_DIR}/render_manifest.json`.
 - Verify QA report is current.
 - Verify no unresolved material issues remain unless documented.
 - Write `${OUT_DIR}/delivery_summary.md`.
@@ -477,11 +486,12 @@ Recommended field details:
     "sourceHtml": "out/final_deck.html",
     "renderedSlidesDir": "out/rendered_slides",
     "primaryPdf": "out/final_deck.pdf",
+    "renderManifest": "out/render_manifest.json",
     "pdfMode": "paginated",
     "qaMontage": "out/qa_montage.png"
   },
   "renderConfig": {
-    "engine": "business-deck-kit-cli | chrome-cdp | other",
+    "engine": "codex-business-deck-kit-cli | chrome-cdp | other",
     "slideSelector": ".slide",
     "widthPx": 1920,
     "heightPx": 1080,
@@ -588,12 +598,15 @@ Required rendering behavior:
 - Fail if any slide image is missing, zero-byte, blank, wrong size, or visibly
   clipped.
 - Generate PDF from rendered images, not from stale HTML or older images.
-- Record a render manifest or equivalent data in `notes.md` or
-  `qa_report.md`.
+- Record render freshness and artifact hashes in
+  `${OUT_DIR}/render_manifest.json`.
 
 Recommended implementation:
 
-- Add a local CLI program named `business-deck-kit`.
+- Add a local CLI program named `codex-business-deck-kit`.
+- The shorter executable name `business-deck-kit` may exist only as an alias,
+  but all documentation and acceptance criteria must use
+  `codex-business-deck-kit` as the canonical CLI name.
 - Recommended implementation language: Go.
 - Use headless Chrome through Chrome DevTools Protocol for HTML inspection,
   element screenshots, and PDF-related browser behavior.
@@ -606,8 +619,27 @@ Recommended implementation:
   - `--width 1920`
   - `--height 1080`
   - `--font-preset pretendard|noto-sans-kr|noto-sans-cjk-kr|ibm-plex-sans-kr|suit|custom`
-- The CLI should also create `qa_montage.png` or expose a separate `montage`
-  subcommand.
+- The CLI must also create `qa_montage.png` or expose a separate `montage`
+  subcommand used by the required workflow.
+- The CLI must emit `${OUT_DIR}/render_manifest.json` after rendering.
+
+`render_manifest.json` must include:
+
+- source HTML path and SHA-256 hash,
+- relevant inline CSS or stylesheet dependency hashes,
+- referenced local asset hashes,
+- font preset and font dependency identifiers,
+- slide selector,
+- ordered slide IDs,
+- expected and actual slide image dimensions,
+- PNG file paths and hashes,
+- PDF file path and hash,
+- PDF mode, page count, page size, and image fit,
+- render timestamp,
+- tool name and version,
+- Chrome/Chromium version,
+- operating system,
+- unresolved render warnings.
 
 If `sharp` remains in the toolchain, it should be used only for image
 composition, montage generation, or image-to-PDF assembly. It must not be the
@@ -679,16 +711,31 @@ Implementation requirements:
    - removed QA-required elements.
 4. Update `deck_spec.json` so slide count, order, headlines, key messages,
    claims, and visual notes match the approved HTML.
-5. Preserve user changes by default.
-6. If a user edit introduces unsupported claims or render failures, report the
+5. Determine whether user edits also require updates to:
+   - `${ACTIVE_DECK_DIR}/brief.md`,
+   - `${OUT_DIR}/strategy.md`,
+   - `${OUT_DIR}/source_inventory.md`,
+   - `${OUT_DIR}/notes.md`,
+   - `${OUT_DIR}/delivery_summary.md`.
+6. Update those files when the edit changes document type, audience, objective,
+   desired outcome, core claims, evidence, assets, source dependencies, or
+   delivery contract.
+7. If a derivative file should not be changed automatically, mark it as
+   potentially stale in `html_edit_sync.md` and `qa_report.md` with a concrete
+   reason.
+8. Preserve user changes by default.
+9. If a user edit introduces unsupported claims or render failures, report the
    issue and propose a corrected version instead of silently discarding the edit.
-7. Re-render images and PDF from the edited HTML.
-8. Re-run QA and update the report.
-9. Write `html_edit_sync.md` with:
+10. Re-render images and PDF from the edited HTML.
+11. Rebuild `render_manifest.json`.
+12. Re-run QA and update the report.
+13. Write `html_edit_sync.md` with:
    - sync date,
    - detected changes,
    - accepted changes,
    - corrected/rejected changes,
+   - derivative files updated,
+   - derivative files marked stale,
    - files regenerated,
    - remaining risks.
 
@@ -770,13 +817,14 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 
 The one-shot prompt must stop for Q&A if the intake gate is incomplete.
 
-If local scripts are implemented, document commands such as:
+Document CLI commands such as:
 
 ```bash
-business-deck-kit render \
+codex-business-deck-kit render \
   --html decks/customer-retention/out/final_deck.html \
   --out decks/customer-retention/out/rendered_slides \
   --pdf decks/customer-retention/out/final_deck.pdf \
+  --manifest decks/customer-retention/out/render_manifest.json \
   --pdf-mode paginated \
   --selector .slide \
   --width 1920 \
@@ -820,7 +868,7 @@ the new HTML/PDF prompts and must not instruct Codex to create PPTX.
 
 ## CLI Program Implementation
 
-Implementing a separate local CLI is allowed and recommended. The CLI should
+Implementing a separate local CLI is required for this transition. The CLI must
 make deterministic rendering, validation, sync, and packaging reliable while
 Codex remains responsible for reasoning-heavy writing, design, and Q&A.
 
@@ -846,7 +894,7 @@ Reasons:
 ### Suggested Go Layout
 
 ```text
-cmd/business-deck-kit/
+cmd/codex-business-deck-kit/
   main.go
 internal/config/
 internal/deck/
@@ -861,19 +909,20 @@ internal/schema/
 Suggested commands:
 
 ```bash
-business-deck-kit inspect --deck decks/<deck_id>
-business-deck-kit validate-spec --spec decks/<deck_id>/out/deck_spec.json
-business-deck-kit render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
-business-deck-kit qa --deck decks/<deck_id>
-business-deck-kit sync-html-edits --deck decks/<deck_id>
-business-deck-kit package --deck decks/<deck_id>
+codex-business-deck-kit inspect --deck decks/<deck_id>
+codex-business-deck-kit validate-spec --spec decks/<deck_id>/out/deck_spec.json
+codex-business-deck-kit render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
+codex-business-deck-kit qa --deck decks/<deck_id>
+codex-business-deck-kit sync-html-edits --deck decks/<deck_id>
+codex-business-deck-kit package --deck decks/<deck_id>
 ```
 
 Suggested responsibilities:
 
 - `inspect`: inventory inputs and output manifest data.
 - `validate-spec`: validate `deck_spec.json` against the schema.
-- `render`: capture `.slide` elements to PNG and generate paginated PDF.
+- `render`: capture `.slide` elements to PNG, generate paginated PDF, and
+  write `render_manifest.json`.
 - `qa`: run automated DOM/render/PDF checks and emit machine-readable findings.
 - `sync-html-edits`: compare user-edited HTML against the generated baseline.
 - `package`: verify final deliverables and write delivery manifest data.
@@ -903,13 +952,27 @@ For future runs:
 The implementation is complete only when:
 
 - The system name is changed to `codex-business-deck-kit` in user-facing docs.
+- The canonical CLI binary is `codex-business-deck-kit`; any shorter executable
+  name is documented only as an alias.
+- A Go CLI skeleton exists at `cmd/codex-business-deck-kit/` or an equivalent
+  clearly documented Go command path.
+- The CLI provides the minimum required commands: `inspect`, `validate-spec`,
+  `render`, `qa`, `sync-html-edits`, and `package`.
+- The `render` command can render HTML `.slide` elements to PNG, create a
+  one-slide-per-page PDF, create or support `qa_montage.png`, and write
+  `render_manifest.json`.
+- The `sync-html-edits` command or prompt flow can detect direct HTML edits,
+  update required derived documents, and mark any unupdated derived documents as
+  stale risks.
 - The primary workflow is HTML-first and PDF-delivery-first.
 - Required deliverables are documented as:
   - `strategy.md`
   - `deck_spec.json`
   - `final_deck.html`
+  - `final_deck.generated_baseline.html`
   - `rendered_slides/*.png`
   - `final_deck.pdf`
+  - `render_manifest.json`
   - `qa_montage.png`
   - `qa_report.md`
   - `notes.md`
@@ -939,8 +1002,7 @@ Recommended order:
 4. Replace or add staged prompts.
 5. Update QA checklists.
 6. Update templates and examples.
-7. Add the Go CLI skeleton and rendering/QA commands if implementing the
-   program path in the same pass.
+7. Add the required Go CLI skeleton and minimum commands.
 8. Run repository-wide search for stale PPTX-first required-delivery language.
 9. Review against acceptance criteria.
 
