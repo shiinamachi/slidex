@@ -634,7 +634,10 @@ Recommended implementation:
 - source HTML path and SHA-256 hash,
 - relevant inline CSS or stylesheet dependency hashes,
 - referenced local asset hashes,
-- font preset and font dependency identifiers,
+- font preset, font dependency identifiers, and SHA-256 hashes for local font
+  files or downloaded webfont CSS/font files,
+- when a remote webfont cannot be hashed deterministically, its URL, declared
+  version, retrieval timestamp, and unresolved dependency risk,
 - slide selector,
 - ordered slide IDs,
 - expected and actual slide image dimensions,
