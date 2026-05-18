@@ -616,6 +616,13 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o644); err != nil {
 			return manifest, err
 		}
+		overflowIssues, err := checkOverflowWithChrome(chromePath, wrapperPath)
+		if err != nil {
+			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("overflow check could not run for %s: %v", slide.ID, err))
+		}
+		if len(overflowIssues) > 0 {
+			return manifest, fmt.Errorf("visible clipping or overflow risk on %s: %s", slide.ID, strings.Join(overflowIssues, "; "))
+		}
 		pngPath := filepath.Join(cfg.OutDir, fmt.Sprintf("slide_%02d.png", i+1))
 		if err := captureScreenshot(chromePath, wrapperPath, pngPath, cfg.Width, cfg.Height); err != nil {
 			return manifest, err
@@ -760,12 +767,35 @@ body { font-family: var(--font-body); }
 *::-webkit-scrollbar { display: none !important; }
 </style>
 <script>
-document.addEventListener('DOMContentLoaded', async () => {
+async function codexBusinessDeckKitReady() {
   if (document.fonts && document.fonts.ready) {
     await document.fonts.ready;
   }
   document.documentElement.setAttribute('data-fonts-ready', 'true');
-});
+  const issues = [];
+  document.querySelectorAll('.slide, .slide *').forEach((el, index) => {
+    const overflowX = el.scrollWidth > el.clientWidth + 1;
+    const overflowY = el.scrollHeight > el.clientHeight + 1;
+    if (overflowX || overflowY) {
+      issues.push({
+        index,
+        tag: el.tagName,
+        id: el.id || '',
+        className: String(el.className || ''),
+        clientWidth: el.clientWidth,
+        clientHeight: el.clientHeight,
+        scrollWidth: el.scrollWidth,
+        scrollHeight: el.scrollHeight
+      });
+    }
+  });
+  const report = document.createElement('script');
+  report.id = 'codex-overflow-data';
+  report.type = 'application/json';
+  report.textContent = JSON.stringify(issues);
+  document.body.appendChild(report);
+}
+document.addEventListener('DOMContentLoaded', () => { codexBusinessDeckKitReady(); });
 </script>
 </head>
 <body><div class="deck">%s</div></body>
@@ -841,6 +871,41 @@ func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int) 
 	return nil
 }
 
+func checkOverflowWithChrome(chromePath, htmlPath string) ([]string, error) {
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(htmlPath)}
+	cmd := exec.Command(chromePath,
+		"--headless=new",
+		"--disable-gpu",
+		"--no-sandbox",
+		"--hide-scrollbars",
+		"--virtual-time-budget=3000",
+		"--dump-dom",
+		u.String(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
+	}
+	re := regexp.MustCompile(`(?is)<script id="codex-overflow-data" type="application/json">(.*?)</script>`)
+	m := re.FindStringSubmatch(string(out))
+	if len(m) < 2 {
+		return nil, errors.New("overflow report missing from dumped DOM")
+	}
+	var rawIssues []map[string]any
+	if err := json.Unmarshal([]byte(m[1]), &rawIssues); err != nil {
+		return nil, err
+	}
+	issues := make([]string, 0, len(rawIssues))
+	for _, issue := range rawIssues {
+		issues = append(issues, fmt.Sprintf("%s#%v.%v scroll=%vx%v client=%vx%v",
+			issue["tag"], issue["id"], issue["className"],
+			issue["scrollWidth"], issue["scrollHeight"],
+			issue["clientWidth"], issue["clientHeight"],
+		))
+	}
+	return issues, nil
+}
+
 func validatePNG(path string, expectedW, expectedH int) (dimension, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -914,6 +979,15 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 	var assets []dependency
 	var fonts []dependency
 
+	styleRe := regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style>`)
+	for i, m := range styleRe.FindAllStringSubmatch(src, -1) {
+		block := []byte(m[1])
+		styles = append(styles, dependency{
+			ID:     fmt.Sprintf("inline_style_%02d", i+1),
+			Kind:   "inline_css",
+			SHA256: sha256Bytes(block),
+		})
+	}
 	linkRe := regexp.MustCompile(`(?is)<link\b[^>]*href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>`)
 	for _, m := range linkRe.FindAllStringSubmatch(src, -1) {
 		href := firstNonEmpty(m[2], m[3], m[4])
@@ -1182,17 +1256,28 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 
 	var htmlSlides []slideInfo
 	if raw, err := os.ReadFile(htmlPath); err == nil {
-		htmlSlides = extractSlides(string(raw))
+		htmlString := string(raw)
+		htmlLower := strings.ToLower(htmlString)
+		if !strings.Contains(htmlLower, "<!doctype html") {
+			result.Findings = append(result.Findings, fail("html.doctype", "HTML must include <!doctype html>", htmlPath))
+		}
+		if !regexp.MustCompile(`(?is)<html\b[^>]*\blang\s*=`).MatchString(htmlString) {
+			result.Findings = append(result.Findings, fail("html.lang", "HTML root must declare lang", htmlPath))
+		}
+		if !strings.Contains(htmlLower, "font-family") {
+			result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.font", Message: "HTML/CSS does not explicitly declare font-family", Path: htmlPath})
+		}
+		htmlSlides = extractSlides(htmlString)
 		result.SlideCount = len(htmlSlides)
 		if len(htmlSlides) == 0 {
 			result.Findings = append(result.Findings, fail("html.slides", "no .slide elements found", htmlPath))
 		}
-		for _, dep := range localDependencies(htmlPath, string(raw)) {
+		for _, dep := range localDependencies(htmlPath, htmlString) {
 			if dep.Risk != "" {
 				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.dependency", Message: dep.Risk, Path: dep.Path})
 			}
 		}
-		if !strings.Contains(string(raw), "word-break: keep-all") {
+		if !strings.Contains(htmlString, "word-break: keep-all") {
 			result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.korean_wrapping", Message: "CSS does not explicitly include word-break: keep-all", Path: htmlPath})
 		}
 	} else {
@@ -1216,6 +1301,12 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 			expected = manifest.ExpectedDimensions
 			if currentHash, err := sha256File(htmlPath); err == nil && currentHash != manifest.SourceHTML.SHA256 {
 				result.Findings = append(result.Findings, fail("manifest.freshness", "current HTML hash does not match render manifest", htmlPath))
+			}
+			if manifest.PDFPageSizePoints.Width <= 0 || manifest.PDFPageSizePoints.Height <= 0 {
+				result.Findings = append(result.Findings, fail("pdf.page_size", "render manifest is missing PDF page size", manifestPath))
+			}
+			if manifest.FontPreset == "" {
+				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "font.preset", Message: "render manifest does not record a font preset", Path: manifestPath})
 			}
 		}
 	}
