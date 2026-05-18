@@ -1333,6 +1333,8 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	if baseErr == nil {
 		baseHash = sha256Bytes(baseRaw)
 	}
+	previousBaselineHash := baseHash
+	newBaselineHash := baseHash
 	currentSlides := extractSlides(string(currentRaw))
 	baselineSlides := extractSlides(string(baseRaw))
 	changes := compareSlides(baselineSlides, currentSlides)
@@ -1382,7 +1384,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 					return nil, err
 				}
 				baseRaw, _ = os.ReadFile(baselinePath)
-				baseHash = sha256Bytes(baseRaw)
+				newBaselineHash = sha256Bytes(baseRaw)
 			}
 		}
 	}
@@ -1392,8 +1394,11 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		"deckDir":              deckAbs,
 		"syncReport":           syncPath,
 		"currentHtmlHash":      currentHash,
-		"previousBaselineHash": baseHash,
+		"previousBaselineHash": previousBaselineHash,
+		"newBaselineHash":      newBaselineHash,
 		"changes":              changes,
+		"acceptedChanges":      changes,
+		"correctedOrRejected":  []string{},
 		"backup":               backupPath,
 		"renderStatus":         renderStatus,
 		"renderError":          renderErr,
@@ -1550,7 +1555,8 @@ func writeSyncReport(path string, report map[string]any) error {
 	b.WriteString(fmt.Sprintf("- Sync date: %s\n", time.Now().UTC().Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", toolName, toolVersion))
 	b.WriteString(fmt.Sprintf("- Current HTML hash: `%s`\n", report["currentHtmlHash"]))
-	b.WriteString(fmt.Sprintf("- Previous/new baseline hash: `%s`\n", report["previousBaselineHash"]))
+	b.WriteString(fmt.Sprintf("- Previous baseline hash: `%s`\n", report["previousBaselineHash"]))
+	b.WriteString(fmt.Sprintf("- New baseline hash: `%s`\n", report["newBaselineHash"]))
 	if backup, _ := report["backup"].(string); backup != "" {
 		b.WriteString(fmt.Sprintf("- Backup: `%s`\n", backup))
 	}
@@ -1568,9 +1574,25 @@ func writeSyncReport(path string, report map[string]any) error {
 			b.WriteString("- " + c + "\n")
 		}
 	}
+	b.WriteString("\n## Accepted Changes\n\n")
+	if changes, ok := report["acceptedChanges"].([]string); ok {
+		for _, c := range changes {
+			b.WriteString("- " + c + "\n")
+		}
+	}
+	b.WriteString("\n## Corrected Or Rejected Changes\n\n")
+	if changes, ok := report["correctedOrRejected"].([]string); ok && len(changes) > 0 {
+		for _, c := range changes {
+			b.WriteString("- " + c + "\n")
+		}
+	} else {
+		b.WriteString("- None recorded by automated sync. QA findings must be reviewed before final delivery.\n")
+	}
 	b.WriteString("\n## Derivative Files\n\n")
 	b.WriteString("- Updated or checked: `deck_spec.json`, `notes.md`, `render_manifest.json`, `qa_report.md`, rendered slide PNGs, `final_deck.pdf`, `qa_montage.png` when render completed.\n")
 	b.WriteString("- Potentially stale if the edit changed objective, audience, or evidence: `brief.md`, `strategy.md`, `source_inventory.md`, `delivery_summary.md`.\n")
+	b.WriteString("\n## Remaining Risks\n\n")
+	b.WriteString("- Manual review is required for business meaning changes, claim provenance, and visual inspection of the regenerated montage.\n")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
