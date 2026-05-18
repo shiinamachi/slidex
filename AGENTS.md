@@ -53,6 +53,7 @@ For every future deck run, inspect available inputs in the active deck
 workspace before making design decisions:
 
 - `${ACTIVE_DECK_DIR}/brief.md`
+- `${ACTIVE_DECK_DIR}/DESIGN.md`
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`
 - `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx`
 - `${ACTIVE_DECK_DIR}/assets/logo.png` and other image assets
@@ -66,6 +67,11 @@ workspace before making design decisions:
 If a template or reference deck exists, inspect it first and match its aspect
 ratio, typography, color system, layout patterns, visual density, and brand
 style. Default to 16:9 only when no source deck or template defines the size.
+If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific style
+prompt. Apply it after the brief, approved template, reference deck, brand
+guidelines, and brand colors, but before general design defaults. Document its
+source, applied directives, and any conflicts in the relevant strategy, spec,
+notes, QA, or delivery outputs.
 
 ## Required PPTX Workflow
 
@@ -74,7 +80,8 @@ Every future deck production run must follow this sequence:
 1. Intake the brief and source materials.
 2. Extract deck strategy: audience, objective, story arc, tone, and slide plan.
 3. Create a structured `${OUT_DIR}/deck_spec.json` that follows
-   `schemas/deck_spec.schema.json`.
+   `schemas/deck_spec.schema.json`, including DESIGN.md source and distilled
+   style directives when a deck-specific design prompt exists.
 4. Build an editable `${OUT_DIR}/final_deck.pptx` using native PowerPoint
    objects.
 5. Generate or source visuals only when they improve the story.

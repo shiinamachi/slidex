@@ -20,6 +20,15 @@
 - Spacing is even and repeatable.
 - Similar slide types use similar structure.
 
+## Design Prompt Alignment
+
+- If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, its practical style directives are
+  reflected in `deck_spec.json`.
+- Rendered slides match the design prompt's intended tone, density, composition,
+  imagery, chart style, and avoid list where practical.
+- Conflicts between DESIGN.md, the brief, template, reference deck, brand
+  guidelines, accessibility, or editability are documented rather than hidden.
+
 ## Typography
 
 - Body text is generally at least 18pt.

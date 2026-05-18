@@ -10,6 +10,7 @@
 decks/
   customer-retention/
     brief.md
+    DESIGN.md
     assets/
       template.pptx
       reference_deck.pptx
@@ -38,8 +39,10 @@ decks/
 
 1. `decks/_template/`를 `decks/<deck_id>/`로 복사합니다.
 2. `decks/<deck_id>/brief.md`를 작성합니다.
-3. 필요한 템플릿, 참고 덱, 로고, 데이터, 원문 자료를 덱 폴더 안에 넣습니다.
-4. 여러 덱이 있으면 실행 전에 대상 덱을 명시합니다.
+3. 특정 스타일을 적용하려면 `decks/<deck_id>/DESIGN.md`에 덱별 스타일
+   프롬프트를 작성합니다.
+4. 필요한 템플릿, 참고 덱, 로고, 데이터, 원문 자료를 덱 폴더 안에 넣습니다.
+5. 여러 덱이 있으면 실행 전에 대상 덱을 명시합니다.
 
 예:
 
@@ -62,3 +65,6 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_i
 루트의 `brief.md`, `assets/`, `brand/`, `data/`, `out/` 구조도 하위 호환을
 위해 계속 사용할 수 있습니다. 여러 덱을 동시에 관리하려면 기존 파일을
 `decks/<deck_id>/` 아래로 옮기는 것을 권장합니다.
+
+루트 단일 덱 구조에서도 `DESIGN.md`를 루트에 두면 해당 덱의 스타일
+프롬프트로 사용됩니다.

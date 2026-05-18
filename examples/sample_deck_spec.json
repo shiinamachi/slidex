@@ -8,7 +8,9 @@
     "deckId": "customer-retention-2026-h1",
     "activeDeckDir": "decks/customer-retention-2026-h1",
     "outputDir": "decks/customer-retention-2026-h1/out",
+    "designPromptFile": "decks/customer-retention-2026-h1/DESIGN.md",
     "sourceFiles": [
+      "decks/customer-retention-2026-h1/DESIGN.md",
       "decks/customer-retention-2026-h1/brief.md",
       "decks/customer-retention-2026-h1/data/retention_by_segment.csv",
       "decks/customer-retention-2026-h1/data/support_response_time.xlsx"
@@ -37,6 +39,20 @@
       "One dominant message per slide",
       "Prefer native charts and tables",
       "Use accent color only for emphasis"
+    ],
+    "stylePromptSummary": "Use a restrained executive consulting style with clean grids, confident whitespace, direct chart labeling, and subtle retention-momentum visual cues.",
+    "stylePromptDirectives": [
+      "Use a sparse, decision-ready layout with one dominant visual region per slide",
+      "Favor native charts, tables, and shape-based diagrams over decorative imagery",
+      "Use blue as the primary structural color and amber only for selective emphasis"
+    ],
+    "stylePromptAvoid": [
+      "Busy stock-photo business scenes",
+      "Dense text blocks",
+      "Decorative gradients that reduce chart readability"
+    ],
+    "stylePromptConflicts": [
+      "No approved brand file is present, so style prompt guidance is applied only as neutral executive direction"
     ],
     "brandNotes": "No approved brand file is present in this sample; use neutral executive styling."
   },

@@ -6,12 +6,15 @@ Create a structured deck specification. Do not create a PPTX in this stage.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
+Then read `prompts/_design_prompt_context.md` so any deck-specific design prompt
+is captured in the structured spec.
 
 ## Inputs
 
 Read:
 
 - `${ACTIVE_DECK_DIR}/brief.md`
+- `${ACTIVE_DECK_DIR}/DESIGN.md`
 - `${OUT_DIR}/strategy.md`
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`
 - `${ACTIVE_DECK_DIR}/brand/colors.json`
@@ -25,12 +28,19 @@ Read:
 If a template or reference deck exists, preserve its aspect ratio and match its
 brand style unless the brief explicitly says otherwise.
 
+If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, apply it as deck-specific style
+direction within the priority rules in `prompts/_design_prompt_context.md`.
+
 ## Requirements
 
 - Create `${OUT_DIR}/deck_spec.json`.
 - Follow `schemas/deck_spec.schema.json`.
 - Include active deck id, active deck directory, and output directory in
   metadata when available.
+- Include the design prompt source path in metadata when
+  `${ACTIVE_DECK_DIR}/DESIGN.md` exists.
+- Capture the distilled design prompt interpretation in `designSystem`, including
+  style directives, avoid guidance, and any conflicts or overrides.
 - Give every slide one clear message.
 - Use action headlines rather than generic titles.
 - Keep slide messages concise.
@@ -38,6 +48,8 @@ brand style unless the brief explicitly says otherwise.
   without a point of view.
 - Define layout instructions, visual instructions, chart instructions, table
   instructions, speaker notes, and QA risks where useful.
+- Translate `DESIGN.md` into slide-level layout and visual instructions where it
+  materially changes composition, density, imagery, chart style, or tone.
 - Prefer native PowerPoint charts, tables, shapes, and editable diagrams.
 - Use generated visuals only when they improve the story.
 - Include alt text guidance for meaningful images.

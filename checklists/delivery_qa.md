@@ -30,5 +30,7 @@
 
 - Generated visual prompts are documented.
 - Design decisions are documented.
+- DESIGN.md usage, applied directives, and unresolved style prompt conflicts are
+  documented when a deck-specific design prompt exists.
 - Data sources and assumptions are noted.
 - Unresolved risks are listed honestly.

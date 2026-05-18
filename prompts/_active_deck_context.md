@@ -7,6 +7,7 @@ keep all inputs and outputs scoped to that deck.
 ## Preferred Layout
 
 - `decks/<deck_id>/brief.md`
+- `decks/<deck_id>/DESIGN.md`
 - `decks/<deck_id>/assets/`
 - `decks/<deck_id>/brand/`
 - `decks/<deck_id>/data/`
@@ -46,10 +47,12 @@ Ignore `decks/_template/` when selecting an active deck.
 ## Isolation Rules
 
 - Read deck-specific inputs from `ACTIVE_DECK_DIR` first.
+- If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific
+  style prompt and apply it according to `prompts/_design_prompt_context.md`.
 - Use `shared/brand/`, `shared/assets/`, or `shared/data/` only when the user
   explicitly references them or when the active deck lacks equivalent files and
   the shared defaults are clearly relevant.
 - Do not mix source files from multiple deck workspaces unless the user asks for
   a combined or comparative deck.
-- Record the active deck id and directory in strategy notes, deck spec metadata
-  when possible, and delivery notes.
+- Record the active deck id, directory, and design prompt source when present in
+  strategy notes, deck spec metadata when possible, and delivery notes.

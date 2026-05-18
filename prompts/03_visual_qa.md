@@ -7,6 +7,8 @@ slides were inspected.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
+Then read `prompts/_design_prompt_context.md` so deck-specific style intent is
+included in QA.
 
 ## Inputs
 
@@ -15,6 +17,7 @@ Read:
 - `${OUT_DIR}/final_deck.pptx`
 - `${OUT_DIR}/deck_spec.json`
 - `${OUT_DIR}/notes.md`
+- `${ACTIVE_DECK_DIR}/DESIGN.md`
 - `checklists/design_qa.md`
 - `checklists/accessibility_qa.md`
 - `checklists/delivery_qa.md`
@@ -38,6 +41,7 @@ Read:
    - excessive text density
    - broken images
    - missing alt text for meaningful images
+   - mismatch with `${ACTIVE_DECK_DIR}/DESIGN.md` style directives when present
 
 Use the best available rendering method in the environment, such as a $slides
 render/export capability, LibreOffice headless export, PowerPoint/Keynote export,
@@ -54,6 +58,7 @@ Create `${OUT_DIR}/qa_report.md` with:
 - Slide-by-slide findings
 - Accessibility findings
 - Design and consistency findings
+- DESIGN.md alignment findings when a deck-specific design prompt exists
 - Required revisions
 - Unresolved risks
 

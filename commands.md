@@ -27,7 +27,9 @@ cp -R decks/_template decks/customer-retention
 ```
 
 그 뒤 `decks/customer-retention/brief.md`를 작성하고 필요한 `assets/`,
-`brand/`, `data/`, `source/` 자료를 추가합니다.
+`brand/`, `data/`, `source/` 자료를 추가합니다. 해당 덱에 특정 스타일을
+적용하려면 `decks/customer-retention/DESIGN.md`에 스타일 프롬프트를
+작성합니다.
 
 ## 단계별 덱 제작 명령
 
@@ -62,13 +64,15 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 
 1. `decks/_template/`를 복사해 `decks/<deck_id>/`를 만듭니다.
 2. `decks/<deck_id>/brief.md`를 작성합니다.
-3. 필요한 브랜드, 데이터, 참고 덱, 템플릿 파일을 덱 폴더에 추가합니다.
-4. Codex CLI를 열고 현재 저장소를 작업 디렉터리로 둡니다.
-5. 대상 덱이 여러 개라면 “`decks/<deck_id>`를 활성 덱으로 사용”이라고 먼저 지시합니다.
-6. 먼저 전략 프롬프트를 실행하거나 붙여넣습니다.
-7. 단계별 결과를 확인한 뒤 다음 프롬프트를 실행합니다.
-8. QA 리포트에서 의미 있는 문제가 남아 있으면 수정 프롬프트를 반복합니다.
-9. 최종 프롬프트로 납품 파일과 리스크를 확인합니다.
+3. 필요한 경우 `decks/<deck_id>/DESIGN.md`에 덱별 스타일 프롬프트를
+   작성합니다.
+4. 필요한 브랜드, 데이터, 참고 덱, 템플릿 파일을 덱 폴더에 추가합니다.
+5. Codex CLI를 열고 현재 저장소를 작업 디렉터리로 둡니다.
+6. 대상 덱이 여러 개라면 “`decks/<deck_id>`를 활성 덱으로 사용”이라고 먼저 지시합니다.
+7. 먼저 전략 프롬프트를 실행하거나 붙여넣습니다.
+8. 단계별 결과를 확인한 뒤 다음 프롬프트를 실행합니다.
+9. QA 리포트에서 의미 있는 문제가 남아 있으면 수정 프롬프트를 반복합니다.
+10. 최종 프롬프트로 납품 파일과 리스크를 확인합니다.
 
 ## 샌드박스 선택
 

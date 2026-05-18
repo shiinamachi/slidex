@@ -8,6 +8,8 @@ Build the editable PowerPoint deck from `${OUT_DIR}/deck_spec.json`.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before reading inputs or writing files.
+Then read `prompts/_design_prompt_context.md` so any deck-specific style prompt
+is applied consistently during the build.
 
 ## Inputs
 
@@ -16,6 +18,7 @@ Read:
 - `${OUT_DIR}/deck_spec.json`
 - `schemas/deck_spec.schema.json`
 - `${OUT_DIR}/strategy.md`
+- `${ACTIVE_DECK_DIR}/DESIGN.md`
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`
 - `${ACTIVE_DECK_DIR}/brand/colors.json`
 - `${ACTIVE_DECK_DIR}/assets/template.pptx`
@@ -27,6 +30,9 @@ Inspect `${ACTIVE_DECK_DIR}/assets/template.pptx` or
 `${ACTIVE_DECK_DIR}/assets/reference_deck.pptx` first if present. Match source
 aspect ratio, typography, color system, layout rhythm, page density, and brand
 style. Default to 16:9 only when no template or reference deck defines the size.
+If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, apply its distilled directives from
+`deck_spec.json` and re-check the original file for any important nuance that
+was missed.
 
 ## Build Rules
 
@@ -46,6 +52,9 @@ style. Default to 16:9 only when no template or reference deck defines the size.
   presentation decks.
 - Keep charts simple, labeled, and readable.
 - Add alt text for meaningful images.
+- Apply deck-specific `DESIGN.md` style directives to typography, spacing,
+  composition, imagery, iconography, charts, and visual density unless they
+  conflict with higher-priority inputs or QA requirements.
 
 ## Notes
 
@@ -53,6 +62,8 @@ Create or update `${OUT_DIR}/notes.md` with:
 
 - Active deck id, active deck directory, and output directory
 - Design decisions
+- Design prompt source, interpretation, applied directives, and any ignored or
+  conflicting directives
 - Template or reference deck observations
 - Generated visual prompts
 - Image source notes

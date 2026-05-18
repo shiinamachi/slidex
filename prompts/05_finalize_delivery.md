@@ -6,6 +6,8 @@ Finalize the deck delivery without overclaiming.
 
 First read `prompts/_active_deck_context.md`. Resolve `ACTIVE_DECK_DIR` and
 `OUT_DIR` before verifying files or writing final notes.
+Then read `prompts/_design_prompt_context.md` so final delivery can report any
+deck-specific design prompt that was used.
 
 ## Required Files
 
@@ -28,6 +30,10 @@ Verify that these files exist:
 - Confirm meaningful images have alt text or documented alt text requirements.
 - Confirm generated visual prompts and design notes are documented in
   `${OUT_DIR}/notes.md`.
+- If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, confirm its source path, applied
+  directives, and any ignored or conflicting directives are documented in
+  `${OUT_DIR}/deck_spec.json`, `${OUT_DIR}/notes.md`, or
+  `${OUT_DIR}/qa_report.md`.
 
 ## Output
 
@@ -36,6 +42,7 @@ Write a final delivery summary for the user with:
 - Active deck id, active deck directory, and output directory
 - Files created
 - Checks performed
+- DESIGN.md usage summary when a deck-specific design prompt exists
 - How to use the delivered files for this deck
 - Known limitations
 - Unresolved risks

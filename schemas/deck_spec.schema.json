@@ -76,6 +76,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "designPromptFile": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -149,6 +153,27 @@
           "type": "string"
         },
         "layoutPrinciples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stylePromptSummary": {
+          "type": "string"
+        },
+        "stylePromptDirectives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stylePromptAvoid": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stylePromptConflicts": {
           "type": "array",
           "items": {
             "type": "string"

@@ -9,6 +9,7 @@ cp -R decks/_template decks/<deck_id>
 복사한 뒤에는 `brief.md`를 먼저 채우고, 필요한 경우 다음 하위 폴더를
 만듭니다.
 
+- `DESIGN.md`: 이 덱에만 적용할 선택적 스타일 프롬프트
 - `assets/`: 템플릿 PPTX, 참고 덱, 로고, 이미지
 - `brand/`: 승인된 브랜드 가이드와 컬러 파일
 - `data/`: 차트와 표에 사용할 CSV/XLSX
@@ -16,3 +17,5 @@ cp -R decks/_template decks/<deck_id>
 - `out/`: 프롬프트 실행 중 생성되는 전략, 스펙, PPTX, QA 결과
 
 실제 덱 산출물은 템플릿 폴더에 만들지 않습니다.
+`DESIGN.md`는 템플릿, 참고 덱, 브랜드 가이드, 접근성, 편집 가능성 요구사항보다
+낮은 우선순위의 스타일 입력입니다.
