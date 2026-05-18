@@ -42,4 +42,4 @@ Resolve `ACTIVE_DECK_DIR` and `OUT_DIR`.
 - Use static HTML/CSS with fixed slide dimensions and Korean-capable font
   presets.
 - Render current HTML to PNG and PDF before QA.
-- Do not generate or deliver PowerPoint output.
+- Do not generate or deliver legacy presentation-file output.
