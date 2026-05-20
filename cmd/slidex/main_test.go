@@ -95,6 +95,9 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if _, err := writeDeliverySummary(deck); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := writeStructuredReview(deck, "delivery", 1); err != nil {
+		t.Fatal(err)
+	}
 	pkg, err := packageDeck(deck, false)
 	if err != nil {
 		t.Fatal(err)

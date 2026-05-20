@@ -130,22 +130,28 @@ type qaFinding struct {
 }
 
 type qaResult struct {
-	ToolName        string      `json:"toolName"`
-	Version         string      `json:"version"`
-	DeckDir         string      `json:"deckDir"`
-	Status          string      `json:"status"`
-	FilesChecked    []string    `json:"filesChecked"`
-	SlideCount      int         `json:"slideCount"`
-	PDFPageCount    int         `json:"pdfPageCount"`
-	RenderMethod    string      `json:"renderMethod,omitempty"`
-	Findings        []qaFinding `json:"findings"`
-	GeneratedReport string      `json:"generatedReport,omitempty"`
+	ToolName         string      `json:"toolName"`
+	Version          string      `json:"version"`
+	DeckDir          string      `json:"deckDir"`
+	Status           string      `json:"status"`
+	VisualReviewMode string      `json:"visualReviewMode,omitempty"`
+	VisualStatus     string      `json:"visualStatus,omitempty"`
+	FilesChecked     []string    `json:"filesChecked"`
+	SlideCount       int         `json:"slideCount"`
+	PDFPageCount     int         `json:"pdfPageCount"`
+	RenderMethod     string      `json:"renderMethod,omitempty"`
+	Findings         []qaFinding `json:"findings"`
+	GeneratedReport  string      `json:"generatedReport,omitempty"`
 }
 
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
+	}
+	if os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h" {
+		usage()
+		return
 	}
 
 	var err error
@@ -223,7 +229,7 @@ Commands:
   validate-spec --spec decks/<deck_id>/out/deck_spec.json
   render --deck decks/<deck_id>
   render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
-  qa --deck decks/<deck_id>
+  qa --deck decks/<deck_id> [--visual-review codex|manual|none]
   revise --deck decks/<deck_id>
   sync-html-edits --deck decks/<deck_id>
   finalize --deck decks/<deck_id>
@@ -1629,13 +1635,14 @@ func runQA(args []string) error {
 	fs := flag.NewFlagSet("qa", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
 	writeReport := fs.Bool("write-report", true, "write out/qa_report.md")
+	visualReview := fs.String("visual-review", "codex", "visual review mode: codex, manual, or none")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *deck == "" {
 		return errors.New("--deck is required")
 	}
-	result, err := qaDeck(*deck, *writeReport)
+	result, err := qaDeckWithVisualReview(*deck, *writeReport, *visualReview)
 	if err != nil {
 		return err
 	}
@@ -1649,6 +1656,10 @@ func runQA(args []string) error {
 }
 
 func qaDeck(deck string, writeReport bool) (qaResult, error) {
+	return qaDeckWithVisualReview(deck, writeReport, "none")
+}
+
+func qaDeckWithVisualReview(deck string, writeReport bool, visualReview string) (qaResult, error) {
 	deckAbs := mustAbs(deck)
 	outDir := filepath.Join(deckAbs, "out")
 	specPath := filepath.Join(outDir, "deck_spec.json")
@@ -1659,9 +1670,10 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 	renderedDir := filepath.Join(outDir, "rendered_slides")
 
 	result := qaResult{
-		ToolName: toolName,
-		Version:  toolVersion,
-		DeckDir:  deckAbs,
+		ToolName:         toolName,
+		Version:          toolVersion,
+		DeckDir:          deckAbs,
+		VisualReviewMode: visualReview,
 	}
 	for _, p := range []string{specPath, htmlPath, manifestPath, pdfPath, montagePath} {
 		if _, err := os.Stat(p); err != nil {
@@ -1781,6 +1793,16 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 		result.Findings = append(result.Findings, fail("visual_review.image_set", err.Error(), filepath.Join(outDir, "visual_reviews", "image_set.json")))
 		result.Status = "fail"
 	}
+	visualStatus, visualFindings := runVisualReview(deckAbs, manifest, visualReview)
+	result.VisualStatus = visualStatus
+	result.Findings = append(result.Findings, visualFindings...)
+	if hasFailures(result.Findings) {
+		result.Status = "fail"
+	} else if hasWarnings(result.Findings) {
+		result.Status = "pass_with_risks"
+	} else {
+		result.Status = "pass"
+	}
 	if writeReport {
 		reportPath := filepath.Join(outDir, "qa_report.md")
 		if err := writeQAReport(reportPath, result); err != nil {
@@ -1811,7 +1833,8 @@ func writeQAReport(path string, result qaResult) error {
 	b.WriteString("  renderManifestSha256: " + firstNonEmpty(mustSHA256(manifestPath), "missing") + "\n")
 	b.WriteString("  pngSetSha256: " + firstNonEmpty(pngSetHash, "missing") + "\n")
 	b.WriteString("  deterministicStatus: " + result.Status + "\n")
-	b.WriteString("  visualStatus: pending\n")
+	b.WriteString("  visualStatus: " + firstNonEmpty(result.VisualStatus, "not_run") + "\n")
+	b.WriteString("  visualReviewMode: " + firstNonEmpty(result.VisualReviewMode, "none") + "\n")
 	b.WriteString("```\n\n")
 	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", result.ToolName, result.Version))
 	b.WriteString(fmt.Sprintf("- Deck directory: `%s`\n", result.DeckDir))
@@ -2477,6 +2500,8 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	qaReportPath := filepath.Join(outDir, "qa_report.md")
 	deliverySummaryPath := filepath.Join(outDir, "delivery_summary.md")
 	visualImageSetPath := filepath.Join(outDir, "visual_reviews", "image_set.json")
+	visualReviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
+	structuredReviewPath := filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_delivery.json")
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		var manifest renderManifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -2543,6 +2568,10 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 				findings = append(findings, summaryFindings...)
 			}
 			findings = append(findings, verifyVisualReviewImageSet(visualImageSetPath, manifest)...)
+			if !visualReviewArtifactFresh(visualReviewPath, manifest) {
+				findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
+			}
+			findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, manifest)...)
 		}
 	}
 	if includeLogs {

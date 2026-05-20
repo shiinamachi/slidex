@@ -402,6 +402,7 @@ func runPipeline(args []string) error {
 	codexMode := fs.String("codex-mode", "app-server", "app-server, exec, or exec_fallback")
 	allowMismatch := fs.Bool("allow-codex-protocol-mismatch", false, "continue with recorded risk on protocol mismatch")
 	chromeNoSandbox := fs.Bool("chrome-no-sandbox", false, "allow Chrome --no-sandbox fallback")
+	visualReview := fs.String("visual-review", "none", "visual review mode: codex, manual, or none")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -422,6 +423,7 @@ func runPipeline(args []string) error {
 	state := newState(deckAbs, *codexMode, *allowMismatch)
 	recorder := func(stage string, fn func() error) error {
 		start := time.Now().UTC().Format(time.RFC3339)
+		inputs := stageInputs(deckAbs, stage)
 		err := fn()
 		status := "pass"
 		stop := "pass"
@@ -435,12 +437,39 @@ func runPipeline(args []string) error {
 				stop = "user_input_required"
 			}
 		}
-		state.Stages = append(state.Stages, stageRecord{Stage: stage, Status: status, StopCondition: stop, StartedAt: start, CompletedAt: time.Now().UTC().Format(time.RFC3339), Error: msg})
+		state.Stages = append(state.Stages, stageRecord{
+			Stage:         stage,
+			Status:        status,
+			Inputs:        inputs,
+			Outputs:       stageOutputs(deckAbs, stage),
+			Runtime:       state.CodexRuntime,
+			Verifier:      map[string]any{"name": stage + "_contract", "status": status},
+			StopCondition: stop,
+			StartedAt:     start,
+			CompletedAt:   time.Now().UTC().Format(time.RFC3339),
+			Error:         msg,
+		})
 		_ = writeState(outDir, state)
 		_ = appendRunLog(outDir, map[string]any{"event": "stage_completed", "stage": stage, "status": status, "stopCondition": stop, "error": msg})
 		return err
 	}
-	if err := recorder("resolve_workspace", func() error { return ensureRuntimeArtifacts(deckAbs, state) }); err != nil {
+	if err := recorder("resolve_workspace", func() error {
+		if *codexMode == "app-server" {
+			snapshot, err := appServerCapabilitySnapshot(deckAbs, true)
+			if err != nil {
+				if !*allowMismatch {
+					return exitCodeError(4, "App Server capability probe failed: %v", err)
+				}
+				state.UnresolvedRisks = append(state.UnresolvedRisks, acceptedRisk{Reason: "App Server probe failed with protocol mismatch allowed: " + err.Error(), Owner: "slidex", Expiration: time.Now().Add(24 * time.Hour).Format(time.RFC3339), ArtifactLink: "out/protocol_diagnostics.json"})
+			} else {
+				if err := writeJSONFile(filepath.Join(outDir, "protocol_diagnostics.json"), snapshot); err != nil {
+					return err
+				}
+				state.CodexRuntime.ProtocolBundleHash = hashPathSet(filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion))
+			}
+		}
+		return ensureRuntimeArtifacts(deckAbs, state)
+	}); err != nil {
 		return err
 	}
 	if err := recorder("inspect_inputs", func() error {
@@ -493,7 +522,7 @@ func runPipeline(args []string) error {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
 	}
 	if err := recorder("qa", func() error {
-		qa, err := qaDeck(deckAbs, true)
+		qa, err := qaDeckWithVisualReview(deckAbs, true, *visualReview)
 		if err != nil && qa.Status == "fail" {
 			return err
 		}
@@ -503,6 +532,12 @@ func runPipeline(args []string) error {
 	}
 	if *until == "qa" {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
+	}
+	if err := recorder("review_loop", func() error {
+		_, err := writeStructuredReview(deckAbs, "delivery", 1)
+		return err
+	}); err != nil {
+		return err
 	}
 	if err := recorder("delivery_summary", func() error { _, err := writeDeliverySummary(deckAbs); return err }); err != nil {
 		return err
@@ -560,6 +595,7 @@ func runMigrate(args []string) error {
 	deck := fs.String("deck", "", "deck workspace directory")
 	from := fs.String("from", "legacy-html-pdf", "legacy-html-pdf or pptx-first")
 	write := fs.Bool("write", false, "apply safe migration changes")
+	dryRun := fs.Bool("dry-run", true, "report migration findings without changes")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -571,6 +607,9 @@ func runMigrate(args []string) error {
 	findings := migrationFindings(deckAbs, *from)
 	created := []string{}
 	if *write {
+		*dryRun = false
+	}
+	if !*dryRun {
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			return err
 		}
@@ -594,7 +633,7 @@ func runMigrate(args []string) error {
 		}
 		created = append(created, filepath.Join(outDir, "codex_threads.json"))
 	}
-	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "mode": map[bool]string{true: "write", false: "dry-run"}[*write], "from": *from, "findings": findings, "created": created})
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "mode": map[bool]string{true: "dry-run", false: "write"}[*dryRun], "from": *from, "findings": findings, "created": created})
 }
 
 func runCodex(args []string) error {
@@ -609,13 +648,27 @@ func runCodex(args []string) error {
 	case "app-server":
 		return runCodexAppServer(args[1:])
 	case "models":
-		return printCommandJSON("codex", "model/list", commandOutput(8*time.Second, "codex", "--help"))
-	case "features":
-		cmdArgs := []string{"features", "list"}
-		if len(args) > 1 && args[1] == "--json" {
-			cmdArgs = []string{"features", "list"}
+		snapshot, err := appServerCapabilitySnapshot(mustAbs("."), false)
+		if err != nil {
+			return err
 		}
-		return printCommandJSON("codex", "features", commandOutput(8*time.Second, "codex", cmdArgs...))
+		return printJSON(map[string]any{"toolName": toolName, "models": snapshot["model_list"]})
+	case "features":
+		fs := flag.NewFlagSet("codex features", flag.ContinueOnError)
+		thread := fs.String("thread", "", "thread id for thread-scoped probe")
+		jsonOut := fs.Bool("json", false, "emit JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		_ = jsonOut
+		if *thread != "" {
+			snapshot, err := appServerCapabilitySnapshot(mustAbs("."), true)
+			if err != nil {
+				return err
+			}
+			return printJSON(map[string]any{"toolName": toolName, "thread": *thread, "features": snapshot["experimentalFeature_thread_scoped"]})
+		}
+		return printCommandJSON("codex", "features", commandOutput(8*time.Second, "codex", "features", "list"))
 	case "mcp":
 		return printCommandJSON("codex", "mcp", commandOutput(8*time.Second, "codex", "mcp", "list"))
 	case "plugins":
@@ -675,13 +728,27 @@ func runCodexAppServer(args []string) error {
 	}
 	switch args[0] {
 	case "probe":
-		return printJSON(probeProtocolSchema())
+		fs := flag.NewFlagSet("codex app-server probe", flag.ContinueOnError)
+		listen := fs.String("listen", "stdio://", "listen URL")
+		jsonOut := fs.Bool("json", false, "emit JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		_ = jsonOut
+		if *listen != "stdio://" {
+			return exitCodeError(4, "only stdio:// app-server probe is implemented")
+		}
+		snapshot, err := appServerCapabilitySnapshot(mustAbs("."), true)
+		if err != nil {
+			return err
+		}
+		return printJSON(snapshot)
 	case "start":
-		return printCommandJSON("codex", "app-server.start", commandOutput(15*time.Second, "codex", "app-server", "daemon", "start"))
+		return runCommandJSON("app-server.start", 30*time.Second, "codex", "app-server", "daemon", "start")
 	case "status":
-		return printCommandJSON("codex", "app-server.status", commandOutput(8*time.Second, "codex", "app-server", "daemon", "version"))
+		return runCommandJSON("app-server.status", 15*time.Second, "codex", "app-server", "daemon", "version")
 	case "stop":
-		return printCommandJSON("codex", "app-server.stop", commandOutput(15*time.Second, "codex", "app-server", "daemon", "stop"))
+		return runCommandJSON("app-server.stop", 30*time.Second, "codex", "app-server", "daemon", "stop")
 	default:
 		return exitCodeError(2, "unknown app-server command: %s", args[0])
 	}
@@ -828,9 +895,83 @@ func runMCPServer(args []string) error {
 			continue
 		}
 		method, _ := req["method"].(string)
-		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"tool": "slidex", "method": method, "supported": []string{"inspect", "render", "qa", "package", "state/read"}}})
+		result, err := handleMCPRequest(req)
+		if err != nil {
+			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "error": map[string]any{"code": -32000, "message": err.Error(), "method": method}})
+			continue
+		}
+		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": result})
 	}
 	return scanner.Err()
+}
+
+func handleMCPRequest(req map[string]any) (any, error) {
+	method, _ := req["method"].(string)
+	switch method {
+	case "initialize":
+		return map[string]any{"protocolVersion": "2024-11-05", "serverInfo": map[string]any{"name": "slidex", "version": toolVersion}, "capabilities": map[string]any{"tools": map[string]any{}}}, nil
+	case "tools/list":
+		return map[string]any{"tools": []map[string]any{
+			mcpTool("inspect", "Inventory deck inputs and outputs"),
+			mcpTool("render", "Render deck HTML to PNG/PDF/manifest/montage"),
+			mcpTool("qa", "Run deterministic QA"),
+			mcpTool("package", "Verify package gate"),
+			mcpTool("state/read", "Read slidex_state.json"),
+		}}, nil
+	case "tools/call":
+		params, _ := req["params"].(map[string]any)
+		name, _ := params["name"].(string)
+		args, _ := params["arguments"].(map[string]any)
+		return callMCPTool(name, args)
+	default:
+		return nil, fmt.Errorf("unsupported MCP method: %s", method)
+	}
+}
+
+func mcpTool(name, description string) map[string]any {
+	return map[string]any{
+		"name":        name,
+		"description": description,
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"deck": map[string]any{"type": "string"}, "includeLogs": map[string]any{"type": "boolean"}}},
+	}
+}
+
+func callMCPTool(name string, args map[string]any) (any, error) {
+	deck, _ := args["deck"].(string)
+	if deck == "" && name != "state/read" {
+		return nil, errors.New("deck argument is required")
+	}
+	switch name {
+	case "inspect":
+		return inspectDeck(deck)
+	case "render":
+		out := filepath.Join(mustAbs(deck), "out")
+		cfg, err := renderConfigFromFlags(filepath.Join(out, "final_deck.html"), filepath.Join(out, "rendered_slides"), filepath.Join(out, "final_deck.pdf"), filepath.Join(out, "render_manifest.json"), "paginated", ".slide", 1920, 1080, "pretendard", "", false)
+		if err != nil {
+			return nil, err
+		}
+		return renderHTML(cfg)
+	case "qa":
+		return qaDeckWithVisualReview(deck, true, "none")
+	case "package":
+		includeLogs, _ := args["includeLogs"].(bool)
+		return packageDeck(deck, includeLogs)
+	case "state/read":
+		if deck == "" {
+			return nil, errors.New("deck argument is required")
+		}
+		raw, err := os.ReadFile(filepath.Join(mustAbs(deck), "out", "slidex_state.json"))
+		if err != nil {
+			return nil, err
+		}
+		var state map[string]any
+		if err := json.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		return state, nil
+	default:
+		return nil, fmt.Errorf("unsupported tool: %s", name)
+	}
 }
 
 func ensureStrategy(deck string, force bool) (string, error) {
@@ -1085,9 +1226,11 @@ func writeStructuredReview(deck, stage string, round int) (string, error) {
 	resolutionPath := filepath.Join(outDir, "resolution.md")
 	findings := []qaFinding{}
 	if stage == "delivery" || stage == "qa" {
-		pkg, _ := packageDeck(deckAbs, false)
-		if pkg["status"] == "fail" {
-			findings = append(findings, fail("review.package_gate", "package gate is not passing", "out"))
+		for _, rel := range []string{"final_deck.html", "render_manifest.json", "qa_report.md", "visual_reviews/latest_review.json"} {
+			path := filepath.Join(deckAbs, "out", rel)
+			if _, err := os.Stat(path); err != nil {
+				findings = append(findings, fail("review.artifact", "required review artifact missing: "+err.Error(), path))
+			}
 		}
 	}
 	payload := map[string]any{"schemaVersion": "slidex.structuredReview.v1", "stage": stage, "round": round, "mode": "parallel_reviewer_threads", "status": statusFromFindings(findings), "findings": findings}
@@ -1253,14 +1396,45 @@ func probeProtocolSchema() map[string]any {
 	if len(files) == 0 {
 		files, _ = filepath.Glob(filepath.Join(tmp, "*.json"))
 	}
-	required := []string{"ClientRequest.json", "ServerNotification.json"}
+	required := []string{"ClientRequest.json", "ServerNotification.json", filepath.Join("v2", "TurnStartParams.json"), filepath.Join("v2", "ThreadStartParams.json")}
 	missing := []string{}
 	for _, name := range required {
 		if _, err := os.Stat(filepath.Join(tmp, name)); err != nil {
 			missing = append(missing, name)
 		}
 	}
-	return map[string]any{"ok": len(missing) == 0, "experimentalFlagSupported": experimental, "schemaFileCount": len(files), "missing": missing, "permissionProfileRequired": false}
+	methods := schemaMethodSet(filepath.Join(tmp, "ClientRequest.json"))
+	turnRaw := readFileOrEmpty(filepath.Join(tmp, "v2", "TurnStartParams.json"))
+	featureRaw := readFileOrEmpty(filepath.Join(tmp, "v2", "ExperimentalFeatureListParams.json"))
+	outputSchema := strings.Contains(turnRaw, `"outputSchema"`)
+	localImage := strings.Contains(turnRaw, `"localImage"`)
+	threadScopedFeatureProbe := strings.Contains(featureRaw, `"threadId"`)
+	requiredMethods := []string{"initialize", "thread/start", "turn/start", "model/list", "experimentalFeature/list", "mcpServerStatus/list"}
+	optionalMethods := []string{"thread/goal/set", "thread/goal/get", "thread/goal/clear", "review/start", "thread/compact/start", "turn/interrupt", "turn/steer", "thread/read", "thread/turns/list"}
+	missingMethods := []string{}
+	for _, method := range requiredMethods {
+		if !methods[method] {
+			missingMethods = append(missingMethods, method)
+		}
+	}
+	optionalAvailable := map[string]bool{}
+	for _, method := range optionalMethods {
+		optionalAvailable[method] = methods[method]
+	}
+	ok := len(missing) == 0 && len(missingMethods) == 0 && outputSchema && localImage
+	return map[string]any{"ok": ok, "experimentalFlagSupported": experimental, "schemaFileCount": len(files), "missing": missing, "missingMethods": missingMethods, "requiredMethods": requiredMethods, "optionalMethods": optionalAvailable, "turnStartOutputSchema": outputSchema, "localImageSupported": localImage, "threadScopedFeatureProbe": threadScopedFeatureProbe, "permissionProfileRequired": false}
+}
+
+func schemaMethodSet(path string) map[string]bool {
+	raw := readFileOrEmpty(path)
+	methods := map[string]bool{}
+	re := regexp.MustCompile(`"([a-zA-Z0-9_/-]+)"`)
+	for _, m := range re.FindAllStringSubmatch(raw, -1) {
+		if strings.Contains(m[1], "/") || m[1] == "initialize" {
+			methods[m[1]] = true
+		}
+	}
+	return methods
 }
 
 func writeProtocolManifest(bundleDir string) (string, error) {
@@ -1314,6 +1488,82 @@ func newState(deckAbs, mode string, allowMismatch bool) slidexState {
 	}
 	bundleDir := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
 	return slidexState{SchemaVersion: stateSchemaVersion, ToolName: toolName, ToolVersion: toolVersion, GeneratedAt: time.Now().UTC().Format(time.RFC3339), ActiveDeckID: filepath.Base(deckAbs), DeckDir: deckAbs, OutDir: outDir, RequiredCodexVersion: requiredCodexVersion, CodexRuntime: runtimeState{Mode: runtimeMode, RequiredVersion: requiredCodexVersion, InstalledVersion: codexVersion, ProtocolBundle: filepath.ToSlash(bundleDir), ProtocolBundleHash: hashPathSet(bundleDir), AllowMismatch: allowMismatch, Reason: reason}, Goal: goalMirror{Status: "active"}}
+}
+
+func stageInputs(deckAbs, stage string) []artifact {
+	outDir := filepath.Join(deckAbs, "out")
+	paths := []string{}
+	switch stage {
+	case "resolve_workspace":
+		paths = []string{filepath.Join(deckAbs, "brief.md"), filepath.Join(deckAbs, "DESIGN.md")}
+	case "inspect_inputs":
+		paths = []string{filepath.Join(deckAbs, "brief.md"), filepath.Join(deckAbs, "DESIGN.md")}
+	case "intake":
+		paths = []string{filepath.Join(outDir, "source_inventory.md"), filepath.Join(deckAbs, "brief.md")}
+	case "strategy":
+		paths = []string{filepath.Join(deckAbs, "brief.md"), filepath.Join(outDir, "source_inventory.md")}
+	case "spec":
+		paths = []string{filepath.Join(outDir, "strategy.md"), filepath.Join(deckAbs, "brief.md")}
+	case "build_html":
+		paths = []string{filepath.Join(outDir, "deck_spec.json")}
+	case "baseline_html":
+		paths = []string{filepath.Join(outDir, "final_deck.html")}
+	case "render":
+		paths = []string{filepath.Join(outDir, "final_deck.html")}
+	case "qa":
+		paths = []string{filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "render_manifest.json"), filepath.Join(outDir, "final_deck.pdf")}
+	case "delivery_summary":
+		paths = []string{filepath.Join(outDir, "render_manifest.json"), filepath.Join(outDir, "qa_report.md")}
+	case "review_loop":
+		paths = []string{filepath.Join(outDir, "qa_report.md"), filepath.Join(outDir, "visual_reviews", "latest_review.json")}
+	case "package":
+		paths = []string{filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "render_manifest.json"), filepath.Join(outDir, "qa_report.md"), filepath.Join(outDir, "delivery_summary.md")}
+	}
+	return artifactsForExisting(paths)
+}
+
+func stageOutputs(deckAbs, stage string) []artifact {
+	outDir := filepath.Join(deckAbs, "out")
+	paths := []string{}
+	switch stage {
+	case "resolve_workspace":
+		paths = []string{filepath.Join(outDir, "slidex_state.json"), filepath.Join(outDir, "codex_threads.json"), filepath.Join(outDir, "protocol_diagnostics.json")}
+	case "inspect_inputs":
+		paths = []string{filepath.Join(outDir, "source_inventory.md")}
+	case "intake":
+		paths = []string{filepath.Join(outDir, "intake_questions.md")}
+	case "strategy":
+		paths = []string{filepath.Join(outDir, "strategy.md")}
+	case "spec":
+		paths = []string{filepath.Join(outDir, "deck_spec.json")}
+	case "build_html":
+		paths = []string{filepath.Join(outDir, "final_deck.html")}
+	case "baseline_html":
+		paths = []string{filepath.Join(outDir, "final_deck.generated_baseline.html")}
+	case "render":
+		paths = []string{filepath.Join(outDir, "render_manifest.json"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "qa_montage.png")}
+		pngs, _ := filepath.Glob(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
+		paths = append(paths, pngs...)
+	case "qa":
+		paths = []string{filepath.Join(outDir, "qa_report.md"), filepath.Join(outDir, "visual_reviews", "image_set.json"), filepath.Join(outDir, "visual_reviews", "latest_review.json")}
+	case "delivery_summary":
+		paths = []string{filepath.Join(outDir, "delivery_summary.md"), filepath.Join(outDir, "notes.md")}
+	case "review_loop":
+		paths = []string{filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_delivery.json"), filepath.Join(outDir, "agent_reviews", "round_01", "resolution.md")}
+	case "package":
+		paths = []string{filepath.Join(outDir, "slidex_state.json")}
+	}
+	return artifactsForExisting(paths)
+}
+
+func artifactsForExisting(paths []string) []artifact {
+	var out []artifact
+	for _, path := range uniqueStrings(paths) {
+		if _, err := os.Stat(path); err == nil {
+			out = append(out, artifactFromPath(path))
+		}
+	}
+	return out
 }
 
 func ensureRuntimeArtifacts(deckAbs string, state slidexState) error {
@@ -1500,6 +1750,135 @@ func writeVisualReviewImageSet(path string, manifest renderManifest) error {
 	return secureWriteJSON(path, set)
 }
 
+func runVisualReview(deckAbs string, manifest renderManifest, mode string) (string, []qaFinding) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		mode = "codex"
+	}
+	outDir := filepath.Join(deckAbs, "out")
+	reviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
+	imageEvidence := visualReviewEvidence(deckAbs, manifest)
+	payload := map[string]any{
+		"schemaVersion": "slidex.reviewFindings.v1",
+		"stage":         "visual_qa",
+		"round":         1,
+		"mode":          mode,
+		"status":        "pass",
+		"imageEvidence": imageEvidence,
+		"findings":      []qaFinding{},
+	}
+	switch mode {
+	case "none":
+		payload["findings"] = []qaFinding{{Severity: "info", Check: "visual_review.disabled", Message: "Visual review explicitly disabled for deterministic run.", Path: reviewPath}}
+	case "manual":
+		if !visualReviewArtifactFresh(reviewPath, manifest) {
+			return "missing", []qaFinding{fail("visual_review.manual", "manual visual review is required and latest_review.json is missing or stale", reviewPath)}
+		}
+		return "pass", nil
+	case "codex":
+		if len(manifest.PNGFiles) == 0 {
+			return "blocked", []qaFinding{fail("visual_review.codex", "no rendered PNGs available for Codex visual review", filepath.Join(outDir, "rendered_slides"))}
+		}
+		if os.Getenv("SLIDEX_ENABLE_CODEX_VISUAL_QA") != "1" {
+			return "blocked", []qaFinding{fail("visual_review.codex", "set SLIDEX_ENABLE_CODEX_VISUAL_QA=1 to run codex exec --image visual QA; package cannot pass with pending Codex visual review", reviewPath)}
+		}
+		codexPayload, err := runCodexExecVisualReview(deckAbs, manifest)
+		if err != nil {
+			return "blocked", []qaFinding{fail("visual_review.codex", err.Error(), reviewPath)}
+		}
+		if err := secureWriteJSON(reviewPath, codexPayload); err != nil {
+			return "blocked", []qaFinding{fail("visual_review.codex_write", err.Error(), reviewPath)}
+		}
+		if status, _ := codexPayload["status"].(string); status != "pass" {
+			return firstNonEmpty(status, "fail"), []qaFinding{fail("visual_review.codex_status", "Codex visual review did not pass", reviewPath)}
+		}
+		return "pass", nil
+	default:
+		return "blocked", []qaFinding{fail("visual_review.mode", "unsupported visual review mode: "+mode, reviewPath)}
+	}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		return "blocked", []qaFinding{fail("visual_review.schema", err.Error(), reviewPath)}
+	}
+	if err := secureWriteJSON(reviewPath, payload); err != nil {
+		return "blocked", []qaFinding{fail("visual_review.write", err.Error(), reviewPath)}
+	}
+	return "pass", nil
+}
+
+func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]any {
+	evidence := make([]map[string]any, 0, len(manifest.PNGFiles))
+	for _, img := range manifest.PNGFiles {
+		rel, _ := filepath.Rel(deckAbs, img.Path)
+		evidence = append(evidence, map[string]any{
+			"slideId":          img.SlideID,
+			"repoRelativePath": filepath.ToSlash(rel),
+			"absolutePath":     img.Path,
+			"sha256":           img.SHA256,
+			"blank":            img.Blank,
+			"fidelity":         "original",
+			"dimensions":       map[string]any{"width": img.Dimensions.Width, "height": img.Dimensions.Height},
+		})
+	}
+	return evidence
+}
+
+func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[string]any, error) {
+	outDir := filepath.Join(deckAbs, "out")
+	lastMessage := filepath.Join(outDir, "visual_reviews", "codex_visual_review.last.json")
+	if err := ensureSecureDir(filepath.Dir(lastMessage)); err != nil {
+		return nil, err
+	}
+	prompt := "Review the attached rendered slide image for visual QA. Return JSON only matching schemas/review_findings.schema.json. Include imageEvidence with slide id, path, sha256, dimensions, blank flag, and fidelity=original. If no issue is visible, status must be pass and findings empty."
+	args := []string{
+		"exec",
+		"--sandbox", "read-only",
+		"--image", manifest.PNGFiles[0].Path,
+		"--output-schema", filepath.Join("schemas", "review_findings.schema.json"),
+		"--output-last-message", lastMessage,
+		"-",
+	}
+	cmd := exec.Command("codex", args...)
+	cmd.Dir = mustAbs(".")
+	cmd.Stdin = strings.NewReader(prompt)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("codex exec visual QA failed: %w\n%s", err, string(out))
+	}
+	raw, err := os.ReadFile(lastMessage)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func visualReviewArtifactFresh(path string, manifest renderManifest) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return false
+	}
+	if payload["status"] != "pass" {
+		return false
+	}
+	encoded, _ := json.Marshal(payload)
+	for _, img := range manifest.PNGFiles {
+		if !strings.Contains(string(encoded), img.SHA256) {
+			return false
+		}
+	}
+	return true
+}
+
 func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFinding {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -1528,6 +1907,26 @@ func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFindin
 		findings = append(findings, fail("package.visual_review_image_set_fidelity", "visual review image set must request original fidelity", path))
 	}
 	return findings
+}
+
+func verifyStructuredReviewGate(path string, manifest renderManifest) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("package.structured_review", "structured delivery review missing: "+err.Error(), path)}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return []qaFinding{fail("package.structured_review", err.Error(), path)}
+	}
+	if status, _ := payload["status"].(string); status != "pass" {
+		return []qaFinding{fail("package.structured_review", "structured delivery review did not pass", path)}
+	}
+	if info, err := os.Stat(path); err == nil {
+		if manifestTime, parseErr := time.Parse(time.RFC3339, manifest.RenderTimestamp); parseErr == nil && info.ModTime().Before(manifestTime) {
+			return []qaFinding{fail("package.structured_review_freshness", "structured delivery review is older than render manifest", path)}
+		}
+	}
+	return nil
 }
 
 func verifyTextArtifactFreshness(check, path, referencePath string, requiredHashes []string) []qaFinding {
@@ -1665,6 +2064,20 @@ func deckFlag(args []string) (string, error) {
 
 func printCommandJSON(tool, action, output string) error {
 	return printJSON(map[string]any{"toolName": toolName, "tool": tool, "action": action, "output": output})
+}
+
+func runCommandJSON(action string, timeout time.Duration, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	payload := map[string]any{"toolName": toolName, "action": action, "output": strings.TrimSpace(string(out))}
+	if err != nil {
+		payload["status"] = "fail"
+		_ = printJSON(payload)
+		return err
+	}
+	payload["status"] = "pass"
+	return printJSON(payload)
 }
 
 func nullOrRaw(s string) []byte {

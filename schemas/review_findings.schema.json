@@ -11,7 +11,7 @@
     "round": {"type": "integer", "minimum": 1},
     "mode": {
       "type": "string",
-      "enum": ["structured_turn", "review_start_normalized", "parallel_reviewer_threads", "codex_subagent"]
+      "enum": ["structured_turn", "review_start_normalized", "parallel_reviewer_threads", "codex_subagent", "none", "manual"]
     },
     "status": {
       "type": "string",
