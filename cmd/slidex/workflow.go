@@ -2635,15 +2635,16 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	if err := ensureSecureDir(filepath.Dir(lastMessage)); err != nil {
 		return nil, err
 	}
-	prompt := "Review the attached rendered slide image for visual QA. Return JSON only matching schemas/review_findings.schema.json. Include imageEvidence with slide id, path, sha256, dimensions, blank flag, and fidelity=original. If no issue is visible, status must be pass and findings empty."
+	evidenceRaw, _ := json.MarshalIndent(visualReviewEvidence(deckAbs, manifest), "", "  ")
+	prompt := "Review the attached rendered slide images for visual QA. Return JSON only matching schemas/app_review_findings.strict.schema.json. schemaVersion must be slidex.reviewFindings.v1, stage visual_qa, round 1, mode codex_subagent. Include this exact imageEvidence array and set fidelity=original. If no issue is visible, status must be pass and findings empty.\nImage evidence:\n" + string(evidenceRaw)
 	args := []string{
 		"exec",
 		"--sandbox", "read-only",
-		"--image", manifest.PNGFiles[0].Path,
-		"--output-schema", filepath.Join("schemas", "review_findings.schema.json"),
-		"--output-last-message", lastMessage,
-		"-",
 	}
+	for _, image := range manifest.PNGFiles {
+		args = append(args, "--image", image.Path)
+	}
+	args = append(args, "--output-schema", filepath.Join("schemas", "app_review_findings.strict.schema.json"), "--output-last-message", lastMessage, "-")
 	cmd := exec.Command("codex", args...)
 	cmd.Dir = mustAbs(".")
 	cmd.Stdin = strings.NewReader(prompt)
@@ -2657,6 +2658,9 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "app_review_findings.strict.schema.json")); err != nil {
 		return nil, err
 	}
 	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
