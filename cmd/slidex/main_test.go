@@ -257,6 +257,22 @@ func TestRuntimeGateBlocksProtocolMismatchByDefault(t *testing.T) {
 	}
 }
 
+func TestGoalContinuationStopsForUsageLimitAndRepeatedBlocker(t *testing.T) {
+	if !shouldStopGoalContinuation(goalMirror{UsageLimitReached: true}) {
+		t.Fatal("usage limit should stop continuation")
+	}
+	var coded interface{ ExitCode() int }
+	if err := goalStopError(goalMirror{UsageLimitReached: true}); !errors.As(err, &coded) || coded.ExitCode() != 7 {
+		t.Fatalf("usage limit exit = %v, %v; want 7", coded, err)
+	}
+	if !shouldStopGoalContinuation(goalMirror{RepeatedBlockerSignature: "same-blocker"}) {
+		t.Fatal("repeated blocker should stop continuation")
+	}
+	if err := goalStopError(goalMirror{RepeatedBlockerSignature: "same-blocker"}); !errors.As(err, &coded) || coded.ExitCode() != 8 {
+		t.Fatalf("repeated blocker exit = %v, %v; want 8", coded, err)
+	}
+}
+
 func writeTestVisualReviewPass(t *testing.T, deck string, manifest renderManifest) {
 	t.Helper()
 	payload := map[string]any{

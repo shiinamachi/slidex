@@ -497,6 +497,9 @@ func runPipeline(args []string) error {
 		return err
 	}
 	if err := recorder("resolve_workspace", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		if state.CodexRuntime.Mode == "app-server" {
 			run, err := startAppServerWorkflowRun(deckAbs)
 			if err != nil {
@@ -539,6 +542,9 @@ func runPipeline(args []string) error {
 		return err
 	}
 	if err := recorder("inspect_inputs", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		inv, err := inspectDeck(deckAbs)
 		if err != nil {
 			return err
@@ -548,6 +554,9 @@ func runPipeline(args []string) error {
 		return err
 	}
 	if err := recorder("intake", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		questions := intakeQuestionsForDeck(deckAbs)
 		if err := writeIntakeQuestions(deckAbs, questions, statusForQuestions(questions)); err != nil {
 			return err
@@ -559,21 +568,45 @@ func runPipeline(args []string) error {
 	}); err != nil {
 		return err
 	}
-	if err := recorder("strategy", func() error { _, err := ensureStrategy(deckAbs, false); return err }); err != nil {
+	if err := recorder("strategy", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
+		_, err := ensureStrategy(deckAbs, false)
+		return err
+	}); err != nil {
 		return err
 	}
-	if err := recorder("spec", func() error { _, err := ensureSpec(deckAbs, false); return err }); err != nil {
+	if err := recorder("spec", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
+		_, err := ensureSpec(deckAbs, false)
+		return err
+	}); err != nil {
 		return err
 	}
-	if err := recorder("build_html", func() error { _, err := ensureHTML(deckAbs, false); return err }); err != nil {
+	if err := recorder("build_html", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
+		_, err := ensureHTML(deckAbs, false)
+		return err
+	}); err != nil {
 		return err
 	}
 	if err := recorder("baseline_html", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		return copyFile(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "final_deck.generated_baseline.html"))
 	}); err != nil {
 		return err
 	}
 	renderStage := func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		cfg, err := renderConfigFromFlags(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", 1920, 1080, "pretendard", "", *chromeNoSandbox)
 		if err != nil {
 			return err
@@ -588,6 +621,9 @@ func runPipeline(args []string) error {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
 	}
 	if err := recorder("qa", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		var qa qaResult
 		var err error
 		if state.CodexRuntime.Mode == "app-server" && appRun != nil {
@@ -606,15 +642,27 @@ func runPipeline(args []string) error {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
 	}
 	if err := recorder("review_loop", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		_, err := writeStructuredReviewForRuntime(deckAbs, "delivery", 1, state.CodexRuntime.Mode, appRun)
 		return err
 	}); err != nil {
 		return err
 	}
-	if err := recorder("delivery_summary", func() error { _, err := writeDeliverySummary(deckAbs); return err }); err != nil {
+	if err := recorder("delivery_summary", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
+		_, err := writeDeliverySummary(deckAbs)
+		return err
+	}); err != nil {
 		return err
 	}
 	if err := recorder("package", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
 		result, err := packageDeck(deckAbs, false)
 		if err != nil {
 			return err
@@ -2314,6 +2362,20 @@ func enforceCodexRuntimeGate(state slidexState) error {
 	return nil
 }
 
+func shouldStopGoalContinuation(goal goalMirror) bool {
+	return goal.UsageLimitReached || strings.TrimSpace(goal.RepeatedBlockerSignature) != ""
+}
+
+func goalStopError(goal goalMirror) error {
+	if goal.UsageLimitReached {
+		return exitCodeError(7, "goal continuation stopped because usage limit was reached")
+	}
+	if sig := strings.TrimSpace(goal.RepeatedBlockerSignature); sig != "" {
+		return exitCodeError(8, "goal continuation stopped because blocker repeated: %s", sig)
+	}
+	return exitCodeError(8, "goal continuation stopped")
+}
+
 func stageInputs(deckAbs, stage string) []artifact {
 	outDir := filepath.Join(deckAbs, "out")
 	paths := []string{}
@@ -3000,6 +3062,45 @@ func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFindin
 	}
 	if set.RequestedFidelity != "original" {
 		findings = append(findings, fail("package.visual_review_image_set_fidelity", "visual review image set must request original fidelity", path))
+	}
+	return findings
+}
+
+func verifyVisualReviewEvidence(path string, manifest renderManifest) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("package.visual_review_evidence", "visual review missing: "+err.Error(), path)}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return []qaFinding{fail("package.visual_review_evidence", err.Error(), path)}
+	}
+	rawEvidence, _ := payload["imageEvidence"].([]any)
+	if len(rawEvidence) != len(manifest.PNGFiles) {
+		return []qaFinding{fail("package.visual_review_evidence", fmt.Sprintf("visual review imageEvidence count %d does not match rendered image count %d", len(rawEvidence), len(manifest.PNGFiles)), path)}
+	}
+	var findings []qaFinding
+	for i, rawItem := range rawEvidence {
+		item, _ := rawItem.(map[string]any)
+		img := manifest.PNGFiles[i]
+		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review slideId does not match manifest", path))
+		}
+		if sha, _ := item["sha256"].(string); sha != img.SHA256 {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review image hash does not match manifest", path))
+		}
+		if fidelity, _ := item["fidelity"].(string); fidelity != "original" {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review fidelity must be original", path))
+		}
+		if blank, _ := item["blank"].(bool); blank != img.Blank {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review blank flag does not match manifest", path))
+		}
+		dims, _ := item["dimensions"].(map[string]any)
+		width, _ := numberAsInt(dims["width"])
+		height, _ := numberAsInt(dims["height"])
+		if width != img.Dimensions.Width || height != img.Dimensions.Height {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review dimensions do not match manifest", path))
+		}
 	}
 	return findings
 }
