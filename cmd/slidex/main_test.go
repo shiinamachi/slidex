@@ -273,6 +273,97 @@ func TestGoalContinuationStopsForUsageLimitAndRepeatedBlocker(t *testing.T) {
 	}
 }
 
+func TestStageAuditNormalizationUsesDeterministicBaseline(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"delivery_summary.md", "notes.md"} {
+		if err := os.WriteFile(filepath.Join(outDir, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload := map[string]any{"stage": "delivery_summary", "status": "blocked", "summary": "model guessed files are missing", "artifacts": []any{}, "risks": []any{}}
+	corrected, correction := normalizeStageAuditOutput(deck, "delivery_summary", payload)
+	if correction == nil {
+		t.Fatal("expected false blocked audit to be corrected")
+	}
+	if got, _ := corrected["status"].(string); got != "pass" {
+		t.Fatalf("corrected status = %q, want pass", got)
+	}
+	artifacts, _ := corrected["artifacts"].([]map[string]any)
+	if len(artifacts) != 2 {
+		t.Fatalf("corrected artifacts = %d, want 2", len(artifacts))
+	}
+}
+
+func TestProtocolMismatchAllowRecordsAcceptedRisk(t *testing.T) {
+	state := newState(filepath.Join(t.TempDir(), "deck"), "app-server", true)
+	state.CodexRuntime.InstalledVersion = "0.0.0"
+	risk := protocolMismatchAcceptedRisk(state)
+	if risk == nil {
+		t.Fatal("expected allow-mismatch to produce accepted risk")
+	}
+	if risk.Owner != "slidex" || risk.ArtifactLink != "out/slidex_state.json" {
+		t.Fatalf("unexpected risk: %#v", risk)
+	}
+	if _, err := time.Parse(time.RFC3339, risk.Expiration); err != nil {
+		t.Fatalf("risk expiration is not RFC3339: %v", err)
+	}
+}
+
+func TestTokenUsageAndMCPReplayPreserveThreadRouting(t *testing.T) {
+	events := []map[string]any{
+		{
+			"method": "thread/tokenUsage/updated",
+			"params": map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"tokenUsage": map[string]any{
+					"total": map[string]any{
+						"inputTokens":           float64(10),
+						"cachedInputTokens":     float64(2),
+						"outputTokens":          float64(3),
+						"reasoningOutputTokens": float64(4),
+						"totalTokens":           float64(19),
+					},
+					"modelContextWindow": float64(128000),
+				},
+			},
+		},
+	}
+	usage := tokenUsageFromEvents(events)
+	if usage["totalTokens"] != 19 || usage["modelContextWindow"] != 128000 {
+		t.Fatalf("unexpected token usage: %#v", usage)
+	}
+
+	deck := filepath.Join(t.TempDir(), "deck")
+	runDir := filepath.Join(deck, "out", "agent_runs")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(runDir, "qa_appserver_events.jsonl")
+	lines := []string{
+		`{"method":"item/mcpToolCall/progress","params":{"threadId":"thread-1","turnId":"turn-1","requestingThreadId":"parent","itemId":"item-1","message":"start"}}`,
+		`{"method":"item/completed","params":{"threadId":"thread-2","turnId":"turn-2"}}`,
+	}
+	if err := os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record, err := replayMCPEvents(deck, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ThreadCount != 1 || record.EventCount != 1 {
+		t.Fatalf("unexpected replay record: %#v", record)
+	}
+	replayText := readFileOrEmpty(filepath.Join(deck, "out", "agent_runs", "mcp_event_replay.json"))
+	if !strings.Contains(replayText, `"requestingThreadId": "parent"`) {
+		t.Fatalf("replay did not preserve requestingThreadId: %s", replayText)
+	}
+}
+
 func writeTestVisualReviewPass(t *testing.T, deck string, manifest renderManifest) {
 	t.Helper()
 	payload := map[string]any{

@@ -9,6 +9,13 @@ const (
 	MethodMCPServerStatusList     = "mcpServerStatus/list"
 	MethodThreadStart             = "thread/start"
 	MethodTurnStart               = "turn/start"
+	MethodTurnInterrupt           = "turn/interrupt"
+	MethodTurnSteer               = "turn/steer"
+	MethodThreadRead              = "thread/read"
+	MethodThreadTurnsList         = "thread/turns/list"
+	MethodThreadCompactStart      = "thread/compact/start"
 	MethodThreadGoalSet           = "thread/goal/set"
+	MethodThreadGoalGet           = "thread/goal/get"
+	MethodThreadGoalClear         = "thread/goal/clear"
 	MethodReviewStart             = "review/start"
 )

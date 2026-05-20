@@ -236,7 +236,7 @@ Commands:
   package --deck decks/<deck_id>
   clean --deck decks/<deck_id> [--logs] [--older-than DURATION]
   run --deck decks/<deck_id> [--until package|qa|render] [--non-interactive]
-  codex doctor|app-server|schema|exec|models|features|mcp|plugins|threads|review|remote-control
+  codex doctor|app-server|schema|exec|models|features|mcp|plugins|threads|turn|review|remote-control
   goal set|status|pause|resume|complete|clear --deck decks/<deck_id>
   mcp-server --stdio
   migrate --deck decks/<deck_id> [--from legacy-html-pdf|pptx-first] [--write]

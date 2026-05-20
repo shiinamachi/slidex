@@ -46,6 +46,7 @@ type appServerTurnResult struct {
 	TurnsListError   string           `json:"turnsListError,omitempty"`
 	FinalMessage     string           `json:"finalMessage,omitempty"`
 	StructuredOutput map[string]any   `json:"structuredOutput,omitempty"`
+	AuditCorrection  any              `json:"auditCorrection,omitempty"`
 	Events           []map[string]any `json:"events"`
 	EventLog         string           `json:"eventLog,omitempty"`
 }
@@ -259,7 +260,7 @@ func startAppServerWorkflowRun(deckAbs string) (*appServerWorkflowRun, error) {
 		"approvalPolicy":        "never",
 		"sandbox":               "read-only",
 		"serviceName":           "slidex",
-		"model":                 firstNonEmpty(os.Getenv("SLIDEX_CODEX_MODEL"), "gpt-5.4-mini"),
+		"model":                 defaultCodexModel(),
 		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), deckAbs}),
 	}, 20*time.Second)
 	addEvents(events)
@@ -312,7 +313,7 @@ func (r *appServerWorkflowRun) runStructuredTurnWithInput(stage string, input []
 		"cwd":                   mustAbs("."),
 		"approvalPolicy":        "never",
 		"sandboxPolicy":         map[string]any{"type": "readOnly"},
-		"model":                 firstNonEmpty(os.Getenv("SLIDEX_CODEX_MODEL"), "gpt-5.4-mini"),
+		"model":                 defaultCodexModel(),
 		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), r.deckAbs}),
 		"input":                 input,
 		"outputSchema":          schema,
@@ -656,7 +657,7 @@ func appServerGoalRequest(deckAbs, threadID, method string, params map[string]an
 			"approvalPolicy":        "never",
 			"sandbox":               "read-only",
 			"serviceName":           "slidex-goal",
-			"model":                 firstNonEmpty(os.Getenv("SLIDEX_CODEX_MODEL"), "gpt-5.4-mini"),
+			"model":                 defaultCodexModel(),
 			"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), deckAbs}),
 		}, 20*time.Second)
 		allEvents = append(allEvents, events...)
