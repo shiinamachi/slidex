@@ -19,6 +19,7 @@ type appServerClient struct {
 	lines  chan map[string]any
 	nextID int
 	stderr strings.Builder
+	stage  string
 }
 
 type appServerWorkflowRun struct {
@@ -138,6 +139,15 @@ func (c *appServerClient) notify(method string, params map[string]any) error {
 }
 
 func (c *appServerClient) request(method string, params map[string]any, timeout time.Duration) (map[string]any, []map[string]any, error) {
+	if isDangerousAppServerMethod(method) {
+		allowed, err := dangerousAppServerMethodAllowed(method, c.stage)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !allowed {
+			return nil, nil, exitCodeError(4, "dangerous App Server method %s is disabled for stage %q; add an exact stage allowlist entry to slidex.toml", method, firstNonEmpty(c.stage, "*"))
+		}
+	}
 	c.nextID++
 	id := c.nextID
 	req := map[string]any{"id": id, "method": method, "params": params}
@@ -321,6 +331,10 @@ func (r *appServerWorkflowRun) runStructuredTurn(stage, prompt, schemaPath strin
 }
 
 func (r *appServerWorkflowRun) runStructuredTurnWithInput(stage string, input []map[string]any, promptForHash, schemaPath string, timeout time.Duration) (appServerTurnResult, error) {
+	previousStage := r.client.stage
+	r.client.stage = stage
+	defer func() { r.client.stage = previousStage }()
+
 	result := appServerTurnResult{
 		SchemaVersion:    "slidex.appServerTurn.v1",
 		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),

@@ -1,0 +1,28 @@
+[workspace]
+default_deck = ""
+
+[codex]
+mode = "app-server"
+required_version = "0.132.0"
+protocol_bundle = "codex-cli-0.132.0"
+allow_protocol_mismatch = false
+enable_goals = true
+enable_subagents = true
+
+[codex.app_server]
+default_transport = "stdio://"
+shared_transport = "unix://"
+websocket_allowed = false
+websocket_auth_required = true
+
+[codex.app_server.dangerous_api_allowlist]
+# Stage-specific exact App Server methods may be added here when a workflow
+# explicitly requires a host-executing API, for example:
+# build = ["mcpServer/tool/call"]
+
+[logs]
+secure_file_mode = "0600"
+secure_dir_mode = "0700"
+verbose_log = false
+retention_successful_runs = 1
+retention_failed_runs = 1

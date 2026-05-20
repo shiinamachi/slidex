@@ -282,6 +282,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		if ok, _ := protocol["ok"].(bool); !ok {
 			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.protocol_schema", Message: fmt.Sprint(protocol["error"]), Path: "codex app-server generate-json-schema"})
 		}
+		findings = append(findings, codexDoctorFindings(protocol, mcpList, pluginList)...)
 	}
 	if deck != "" {
 		if _, err := inspectDeck(deck); err != nil {
@@ -289,22 +290,257 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		}
 	}
 	return map[string]any{
-		"toolName":        toolName,
-		"version":         toolVersion,
-		"generatedAt":     time.Now().UTC().Format(time.RFC3339),
-		"goModVersion":    goModVersion,
-		"miseGoVersion":   miseGoVersion,
-		"codexVersion":    codexVersion,
-		"requiredCodex":   requiredCodexVersion,
-		"chromeVersion":   chrome,
-		"protocolSchema":  protocol,
-		"codexDoctorJson": json.RawMessage(nullOrRaw(codexDoctor)),
-		"features":        featureList,
-		"mcp":             mcpList,
-		"plugins":         pluginList,
-		"findings":        findings,
-		"status":          statusFromFindings(findings),
+		"toolName":                    toolName,
+		"version":                     toolVersion,
+		"generatedAt":                 time.Now().UTC().Format(time.RFC3339),
+		"goModVersion":                goModVersion,
+		"miseGoVersion":               miseGoVersion,
+		"codexVersion":                codexVersion,
+		"requiredCodex":               requiredCodexVersion,
+		"chromeVersion":               chrome,
+		"protocolSchema":              protocol,
+		"dangerousAppServerApiPolicy": dangerousAppServerPolicySnapshot(),
+		"codexDoctorJson":             json.RawMessage(nullOrRaw(codexDoctor)),
+		"features":                    featureList,
+		"mcp":                         mcpList,
+		"plugins":                     pluginList,
+		"findings":                    findings,
+		"status":                      statusFromFindings(findings),
 	}
+}
+
+func codexDoctorFindings(protocol map[string]any, mcpList, pluginList string) []qaFinding {
+	var findings []qaFinding
+	findings = append(findings, doctorGoalMethodFindings(protocol)...)
+	findings = append(findings, doctorRequiredMCPFindings(mcpList)...)
+	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
+	return findings
+}
+
+func doctorGoalMethodFindings(protocol map[string]any) []qaFinding {
+	if ok, _ := protocol["ok"].(bool); !ok {
+		return nil
+	}
+	optional, ok := boolMapFromAny(protocol["optionalMethods"])
+	if !ok {
+		return []qaFinding{fail("doctor.goal_methods", "protocol schema did not report goal method availability", "codex app-server generate-json-schema")}
+	}
+	var findings []qaFinding
+	for _, method := range []string{"thread/goal/set", "thread/goal/get", "thread/goal/clear"} {
+		if !optional[method] {
+			findings = append(findings, fail("doctor.goal_methods", "Codex App Server goal method is unavailable: "+method, "codex app-server generate-json-schema"))
+		}
+	}
+	return findings
+}
+
+func doctorRequiredMCPFindings(mcpList string) []qaFinding {
+	required := requiredMCPServersFromProjectConfig()
+	if len(required) == 0 {
+		return nil
+	}
+	var findings []qaFinding
+	if commandOutputLooksFailed(mcpList) {
+		findings = append(findings, fail("doctor.mcp_list", "codex mcp list failed while required MCP servers are configured", ".codex/config.toml"))
+		return findings
+	}
+	for _, name := range required {
+		if !mcpServerListedHealthy(mcpList, name) {
+			findings = append(findings, fail("doctor.required_mcp", "required MCP server is missing or unhealthy: "+name, ".codex/config.toml"))
+		}
+	}
+	return findings
+}
+
+func doctorPluginPackageFindings(pluginList string) []qaFinding {
+	var findings []qaFinding
+	checks := []struct {
+		path string
+		kind string
+	}{
+		{filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"), "plugin manifest"},
+		{filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"), "plugin version lock"},
+		{filepath.Join("plugins", "slidex", "hooks", "manifest.json"), "hook manifest"},
+		{filepath.Join("plugins", "slidex", "skills", "slidex", "SKILL.md"), "plugin skill"},
+		{filepath.Join(".agents", "skills", "slidex", "SKILL.md"), "companion skill"},
+	}
+	for _, check := range checks {
+		if _, err := os.Stat(check.path); err != nil {
+			findings = append(findings, fail("doctor.plugin_package", "missing "+check.kind+": "+err.Error(), check.path))
+		}
+	}
+	findings = append(findings, validatePluginJSONManifest(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"))...)
+	findings = append(findings, validatePluginVersionLock(filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"))...)
+	findings = append(findings, validateHookManifest(filepath.Join("plugins", "slidex", "hooks", "manifest.json"))...)
+	if commandOutputLooksFailed(pluginList) {
+		findings = append(findings, fail("doctor.plugin_list", "codex plugin list failed", "codex plugin list"))
+	}
+	return findings
+}
+
+func validatePluginJSONManifest(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return []qaFinding{fail("doctor.plugin_manifest", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if fmt.Sprint(manifest["name"]) != "slidex" {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest name must be slidex", path))
+	}
+	if strings.TrimSpace(fmt.Sprint(manifest["skills"])) == "" {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest must expose skills path", path))
+	}
+	if strings.TrimSpace(fmt.Sprint(manifest["mcpServers"])) == "" {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest must expose MCP server manifest", path))
+	}
+	return findings
+}
+
+func validatePluginVersionLock(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		return []qaFinding{fail("doctor.plugin_version_lock", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if got := fmt.Sprint(lock["requiredCodexCliVersion"]); got != requiredCodexVersion {
+		findings = append(findings, fail("doctor.plugin_version_lock", "requiredCodexCliVersion must be "+requiredCodexVersion+", got "+got, path))
+	}
+	if got := fmt.Sprint(lock["slidexCliVersion"]); got != toolVersion {
+		findings = append(findings, fail("doctor.plugin_version_lock", "slidexCliVersion must be "+toolVersion+", got "+got, path))
+	}
+	if got := fmt.Sprint(lock["goVersion"]); got != readGoModVersion("go.mod") {
+		findings = append(findings, fail("doctor.plugin_version_lock", "goVersion must match go.mod, got "+got, path))
+	}
+	return findings
+}
+
+func validateHookManifest(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return []qaFinding{fail("doctor.hook_manifest", err.Error(), path)}
+	}
+	hooks, _ := manifest["hooks"].([]any)
+	forbidden, _ := manifest["forbiddenActions"].([]any)
+	var findings []qaFinding
+	if len(hooks) == 0 {
+		findings = append(findings, fail("doctor.hook_manifest", "hook manifest must list advisory hooks", path))
+	}
+	if len(forbidden) == 0 {
+		findings = append(findings, fail("doctor.hook_manifest", "hook manifest must list forbidden actions", path))
+	}
+	return findings
+}
+
+func boolMapFromAny(value any) (map[string]bool, bool) {
+	switch typed := value.(type) {
+	case map[string]bool:
+		return typed, true
+	case map[string]any:
+		out := map[string]bool{}
+		for key, value := range typed {
+			if b, ok := value.(bool); ok {
+				out[key] = b
+			}
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func requiredMCPServersFromProjectConfig() []string {
+	return requiredMCPServersFromConfig(filepath.Join(".codex", "config.toml"))
+}
+
+func requiredMCPServersFromConfig(path string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	required := []string{}
+	section := ""
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripTomlComment(scanner.Text()))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+			continue
+		}
+		keyRaw, valueRaw, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key := trimTomlKey(keyRaw)
+		value := strings.TrimSpace(valueRaw)
+		if key == "required_mcp_servers" {
+			required = append(required, parseTomlStringArray(value)...)
+			continue
+		}
+		if key == "required" && strings.EqualFold(value, "true") {
+			if name, ok := mcpServerNameFromSection(section); ok {
+				required = append(required, name)
+			}
+		}
+	}
+	return uniqueStrings(required)
+}
+
+func mcpServerNameFromSection(section string) (string, bool) {
+	for _, prefix := range []string{"mcp_servers.", "mcpServers.", "mcp."} {
+		if strings.HasPrefix(section, prefix) {
+			name := trimTomlKey(strings.TrimPrefix(section, prefix))
+			return name, name != ""
+		}
+	}
+	return "", false
+}
+
+func mcpServerListedHealthy(raw, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.TrimSpace(raw) == "" {
+		return false
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		if !strings.Contains(line, name) {
+			continue
+		}
+		lower := strings.ToLower(line)
+		for _, bad := range []string{"failed", "error", "disabled", "unhealthy", "not running", "stopped"} {
+			if strings.Contains(lower, bad) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func commandOutputLooksFailed(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{"exit status", "executable file not found", "unknown command", "unrecognized command", "no such file or directory"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func runIntake(args []string) error {
@@ -431,11 +667,16 @@ func runFinalize(args []string) error {
 	if *deck == "" {
 		return exitCodeError(2, "--deck is required")
 	}
-	path, err := writeDeliverySummary(*deck)
+	deckAbs := mustAbs(*deck)
+	state := readStateOrNew(deckAbs, "exec", false)
+	if err := ensureRuntimeArtifacts(deckAbs, state); err != nil {
+		return err
+	}
+	path, err := writeDeliverySummary(deckAbs)
 	if err != nil {
 		return err
 	}
-	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "status": "complete", "deliverySummary": path})
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "deliverySummary": path})
 }
 
 func runPipeline(args []string) error {
@@ -745,18 +986,159 @@ func runClean(args []string) error {
 	if *logs {
 		outDir := filepath.Join(mustAbs(*deck), "out")
 		cutoff := time.Now().Add(-d)
-		for _, rel := range []string{"run_log.jsonl", "agent_runs"} {
-			path := filepath.Join(outDir, rel)
-			info, err := os.Stat(path)
-			if err == nil && info.ModTime().Before(cutoff) {
-				if err := os.RemoveAll(path); err != nil {
-					return err
-				}
-				removed = append(removed, path)
+		runLogPath := filepath.Join(outDir, "run_log.jsonl")
+		pruned, retainedRun, err := pruneRunLogByRetention(runLogPath, cutoff, 1, 1)
+		if err != nil {
+			return err
+		}
+		if pruned {
+			removed = append(removed, runLogPath)
+		}
+		agentRuns := filepath.Join(outDir, "agent_runs")
+		info, err := os.Stat(agentRuns)
+		if err == nil && info.ModTime().Before(cutoff) && !retainedRun {
+			if err := os.RemoveAll(agentRuns); err != nil {
+				return err
 			}
+			removed = append(removed, agentRuns)
 		}
 	}
 	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "removed": removed})
+}
+
+type runLogSegment struct {
+	Lines  []string
+	Events []map[string]any
+	Last   time.Time
+}
+
+func pruneRunLogByRetention(path string, cutoff time.Time, keepSuccessful, keepFailed int) (bool, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	segments, err := readRunLogSegments(path, info.ModTime())
+	if err != nil {
+		return false, false, err
+	}
+	keep := map[int]bool{}
+	for i, segment := range segments {
+		if !segment.Last.Before(cutoff) {
+			keep[i] = true
+		}
+	}
+	markLatestRunLogSegments(segments, "success", keepSuccessful, keep)
+	markLatestRunLogSegments(segments, "failed", keepFailed, keep)
+
+	var lines []string
+	retainedTerminalRun := false
+	pruned := false
+	for i, segment := range segments {
+		if !keep[i] {
+			pruned = true
+			continue
+		}
+		lines = append(lines, segment.Lines...)
+		status := runLogSegmentStatus(segment)
+		if status == "success" || status == "failed" {
+			retainedTerminalRun = true
+		}
+	}
+	if !pruned && !info.ModTime().Before(cutoff) {
+		return false, retainedTerminalRun, nil
+	}
+	if len(lines) == 0 {
+		if info.ModTime().Before(cutoff) {
+			return true, false, os.Remove(path)
+		}
+		return false, false, nil
+	}
+	return pruned, retainedTerminalRun, secureWriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+}
+
+func readRunLogSegments(path string, fallback time.Time) ([]runLogSegment, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var segments []runLogSegment
+	current := runLogSegment{}
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		event := map[string]any{}
+		_ = json.Unmarshal([]byte(line), &event)
+		if isRunStartEvent(event) && len(current.Lines) > 0 && runLogSegmentStatus(current) != "incomplete" {
+			segments = append(segments, finalizeRunLogSegment(current, fallback))
+			current = runLogSegment{}
+		}
+		current.Lines = append(current.Lines, line)
+		current.Events = append(current.Events, event)
+		if ts, ok := event["timestamp"].(string); ok {
+			if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+				current.Last = parsed
+			}
+		}
+	}
+	if len(current.Lines) > 0 {
+		segments = append(segments, finalizeRunLogSegment(current, fallback))
+	}
+	return segments, nil
+}
+
+func finalizeRunLogSegment(segment runLogSegment, fallback time.Time) runLogSegment {
+	if segment.Last.IsZero() {
+		segment.Last = fallback
+	}
+	return segment
+}
+
+func isRunStartEvent(event map[string]any) bool {
+	if fmt.Sprint(event["event"]) == "goal_synced" {
+		return true
+	}
+	return fmt.Sprint(event["event"]) == "stage_completed" && fmt.Sprint(event["stage"]) == "resolve_workspace"
+}
+
+func runLogSegmentStatus(segment runLogSegment) string {
+	status := "incomplete"
+	for _, event := range segment.Events {
+		if fmt.Sprint(event["event"]) != "stage_completed" {
+			continue
+		}
+		if fmt.Sprint(event["status"]) == "fail" || fmt.Sprint(event["stopCondition"]) == "blocked" {
+			return "failed"
+		}
+		if fmt.Sprint(event["stage"]) == "package" && fmt.Sprint(event["status"]) == "pass" {
+			status = "success"
+		}
+	}
+	return status
+}
+
+func markLatestRunLogSegments(segments []runLogSegment, status string, limit int, keep map[int]bool) {
+	if limit <= 0 {
+		return
+	}
+	indices := []int{}
+	for i, segment := range segments {
+		if runLogSegmentStatus(segment) == status {
+			indices = append(indices, i)
+		}
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		return segments[indices[i]].Last.After(segments[indices[j]].Last)
+	})
+	for i, idx := range indices {
+		if i >= limit {
+			break
+		}
+		keep[idx] = true
+	}
 }
 
 func runMigrate(args []string) error {
@@ -1278,6 +1660,9 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		if err := requirePrivateFile(ws.TokenFile, "--ws-token-file"); err != nil {
 			return err
 		}
+		if !webSocketTunnelAcknowledged() {
+			return exitCodeError(4, "non-loopback WebSocket requires TLS or SSH tunnel acknowledgement via SLIDEX_WS_TUNNEL_ACK=1")
+		}
 	case "signed-bearer-token":
 		if ws.SharedSecretFile == "" || ws.Issuer == "" || ws.Audience == "" || ws.MaxClockSkewSeconds <= 0 {
 			return exitCodeError(4, "non-loopback WebSocket signed-bearer-token requires --ws-shared-secret-file, --ws-issuer, --ws-audience, and --ws-max-clock-skew-seconds")
@@ -1313,6 +1698,196 @@ func requirePrivateFile(path, flagName string) error {
 
 func webSocketTunnelAcknowledged() bool {
 	return os.Getenv("SLIDEX_WS_TUNNEL_ACK") == "1"
+}
+
+var dangerousAppServerRequestMethods = []string{
+	"thread/shellCommand",
+	"mcpServer/tool/call",
+	"process/spawn",
+	"process/writeStdin",
+	"process/kill",
+	"process/resizePty",
+}
+
+func isDangerousAppServerMethod(method string) bool {
+	for _, dangerous := range dangerousAppServerRequestMethods {
+		if method == dangerous {
+			return true
+		}
+	}
+	return strings.HasPrefix(method, "process/") || strings.HasPrefix(method, "dynamicTool/")
+}
+
+func dangerousAppServerMethodAllowed(method, stage string) (bool, error) {
+	return dangerousAppServerMethodAllowedAtPath(slidexConfigPath(), method, stage)
+}
+
+func dangerousAppServerMethodAllowedAtPath(path, method, stage string) (bool, error) {
+	allowlist, err := loadDangerousAppServerAllowlist(path)
+	if err != nil {
+		return false, err
+	}
+	for _, key := range []string{strings.TrimSpace(stage), "*"} {
+		if key == "" {
+			continue
+		}
+		if allowlist[key][method] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func dangerousAppServerPolicySnapshot() map[string]any {
+	path := slidexConfigPath()
+	allowlist, err := loadDangerousAppServerAllowlist(path)
+	stages := make([]string, 0, len(allowlist))
+	for stage := range allowlist {
+		stages = append(stages, stage)
+	}
+	sort.Strings(stages)
+	status := "default-deny"
+	if err != nil {
+		status = "invalid-config"
+	}
+	return map[string]any{
+		"default":          "deny",
+		"configPath":       path,
+		"status":           status,
+		"error":            errorString(err),
+		"configuredStages": stages,
+		"dangerousMethods": dangerousAppServerRequestMethods,
+	}
+}
+
+func slidexConfigPath() string {
+	if path := strings.TrimSpace(os.Getenv("SLIDEX_CONFIG")); path != "" {
+		return path
+	}
+	return "slidex.toml"
+}
+
+func loadDangerousAppServerAllowlist(path string) (map[string]map[string]bool, error) {
+	allowlist := map[string]map[string]bool{}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return allowlist, nil
+		}
+		return allowlist, err
+	}
+	section := ""
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripTomlComment(scanner.Text()))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+			continue
+		}
+		keyRaw, valueRaw, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key := trimTomlKey(keyRaw)
+		methods := parseTomlStringArray(valueRaw)
+		if len(methods) == 0 {
+			continue
+		}
+		switch {
+		case section == "codex.app_server" && (key == "allow_dangerous_methods" || key == "allow_dangerous_appserver_methods"):
+			addDangerousAllowlistMethods(allowlist, "*", methods)
+		case section == "codex.app_server.dangerous_api_allowlist":
+			addDangerousAllowlistMethods(allowlist, key, methods)
+		default:
+			if stage, ok := dangerousAllowlistStageFromSection(section); ok && (key == "allow_dangerous_methods" || key == "allow_dangerous_appserver_methods") {
+				addDangerousAllowlistMethods(allowlist, stage, methods)
+			}
+		}
+	}
+	return allowlist, scanner.Err()
+}
+
+func dangerousAllowlistStageFromSection(section string) (string, bool) {
+	for _, prefix := range []string{"codex.app_server.stage.", "codex.app_server.stages."} {
+		if strings.HasPrefix(section, prefix) {
+			stage := strings.TrimSpace(strings.TrimPrefix(section, prefix))
+			return trimTomlKey(stage), stage != ""
+		}
+	}
+	if strings.HasPrefix(section, "stages.") && strings.HasSuffix(section, ".app_server") {
+		stage := strings.TrimSuffix(strings.TrimPrefix(section, "stages."), ".app_server")
+		return trimTomlKey(stage), stage != ""
+	}
+	return "", false
+}
+
+func addDangerousAllowlistMethods(allowlist map[string]map[string]bool, stage string, methods []string) {
+	stage = firstNonEmpty(strings.TrimSpace(stage), "*")
+	if allowlist[stage] == nil {
+		allowlist[stage] = map[string]bool{}
+	}
+	for _, method := range methods {
+		method = strings.TrimSpace(method)
+		if method != "" {
+			allowlist[stage][method] = true
+		}
+	}
+}
+
+func stripTomlComment(line string) string {
+	inString := false
+	quote := rune(0)
+	escaped := false
+	for i, r := range line {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString && quote == '"' && r == '\\' {
+			escaped = true
+			continue
+		}
+		if r == '"' || r == '\'' {
+			if !inString {
+				inString = true
+				quote = r
+				continue
+			}
+			if quote == r {
+				inString = false
+				quote = 0
+				continue
+			}
+		}
+		if r == '#' && !inString {
+			return line[:i]
+		}
+	}
+	return line
+}
+
+func trimTomlKey(key string) string {
+	key = strings.TrimSpace(key)
+	key = strings.Trim(key, `"`)
+	key = strings.Trim(key, `'`)
+	return strings.TrimSpace(key)
+}
+
+func parseTomlStringArray(value string) []string {
+	value = stripTomlComment(value)
+	doubleQuoted := regexp.MustCompile(`"((?:\\.|[^"\\])*)"`)
+	singleQuoted := regexp.MustCompile(`'([^']*)'`)
+	values := []string{}
+	for _, match := range doubleQuoted.FindAllStringSubmatch(value, -1) {
+		values = append(values, strings.ReplaceAll(match[1], `\"`, `"`))
+	}
+	for _, match := range singleQuoted.FindAllStringSubmatch(value, -1) {
+		values = append(values, match[1])
+	}
+	return uniqueStrings(values)
 }
 
 func transportRiskForListen(listen string) string {

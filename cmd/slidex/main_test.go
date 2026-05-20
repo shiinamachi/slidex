@@ -162,6 +162,36 @@ func TestMigrateDryRunNeverWritesWithoutWrite(t *testing.T) {
 	}
 }
 
+func TestFinalizeCreatesRuntimeArtifactsForStageByStagePackage(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := copyDir(filepath.Join(root, "fixtures", "minimal_deck"), deck); err != nil {
+		t.Fatal(err)
+	}
+	if err := runFinalize([]string{"--deck", deck}); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(deck, "out", "slidex_state.json")
+	if _, err := os.Stat(statePath); err != nil {
+		t.Fatalf("finalize should create slidex_state.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(deck, "out", "codex_threads.json")); err != nil {
+		t.Fatalf("finalize should create codex_threads.json: %v", err)
+	}
+	if findings := verifyRiskPolicy(statePath); hasFailures(findings) {
+		t.Fatalf("finalize-created state should satisfy risk policy: %#v", findings)
+	}
+}
+
 func TestStrictAppServerSchemasAcceptLocalPayloads(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()
@@ -224,6 +254,40 @@ func TestAppServerTurnCompletionUsesObservedTurnID(t *testing.T) {
 	}
 }
 
+func TestDangerousAppServerMethodsRequireStageAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	blocked := &appServerClient{stage: "build"}
+	if _, _, err := blocked.request("process/spawn", map[string]any{}, time.Second); err == nil {
+		t.Fatal("dangerous process/spawn should be blocked without slidex.toml allowlist")
+	}
+	cfg := `[codex.app_server.dangerous_api_allowlist]
+qa = ["process/spawn"]
+build = ["mcpServer/tool/call"]
+`
+	if err := os.WriteFile(filepath.Join(dir, "slidex.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := dangerousAppServerMethodAllowed("process/spawn", "build"); err != nil || allowed {
+		t.Fatalf("process/spawn should not inherit another stage allowlist, allowed=%v err=%v", allowed, err)
+	}
+	allowedClient := &appServerClient{stdin: &testWriteCloser{}, lines: make(chan map[string]any, 1), stage: "build"}
+	go func() {
+		allowedClient.lines <- map[string]any{"id": 1, "result": map[string]any{"ok": true}}
+	}()
+	if _, _, err := allowedClient.request("mcpServer/tool/call", map[string]any{}, time.Second); err != nil {
+		t.Fatalf("stage-allowlisted dangerous method should be sent: %v", err)
+	}
+}
+
 func TestGoalStatusEnumIsReadFromGeneratedSchema(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()
@@ -255,6 +319,63 @@ func TestRuntimeGateBlocksProtocolMismatchByDefault(t *testing.T) {
 	state.CodexRuntime.AllowMismatch = true
 	if err := enforceCodexRuntimeGate(state); err != nil {
 		t.Fatalf("allow mismatch should bypass version gate: %v", err)
+	}
+}
+
+func TestDoctorGoalMethodsAndRequiredMCPGates(t *testing.T) {
+	protocol := map[string]any{
+		"ok": true,
+		"optionalMethods": map[string]bool{
+			"thread/goal/set":   true,
+			"thread/goal/get":   false,
+			"thread/goal/clear": true,
+		},
+	}
+	if findings := doctorGoalMethodFindings(protocol); !hasFailures(findings) {
+		t.Fatalf("missing goal method should fail doctor gate: %#v", findings)
+	}
+
+	cfgDir := filepath.Join(t.TempDir(), ".codex")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+	cfg := `[mcp_servers.docs]
+command = "docs"
+required = true
+
+[mcp_servers.optional]
+command = "optional"
+required = false
+`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	required := requiredMCPServersFromConfig(cfgPath)
+	if !reflect.DeepEqual(required, []string{"docs"}) {
+		t.Fatalf("required MCP servers = %#v", required)
+	}
+	if !mcpServerListedHealthy("docs running", "docs") {
+		t.Fatal("healthy required MCP line should be accepted")
+	}
+	if mcpServerListedHealthy("docs failed", "docs") {
+		t.Fatal("failed required MCP line should not be accepted")
+	}
+}
+
+func TestDoctorPluginPackageFindingsValidateLocalManifests(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	if findings := doctorPluginPackageFindings("slidex"); hasFailures(findings) {
+		t.Fatalf("local plugin package should satisfy doctor gate: %#v", findings)
 	}
 }
 
@@ -537,6 +658,56 @@ func TestCleanLogsKeepsReviewArtifacts(t *testing.T) {
 	}
 }
 
+func TestCleanLogsRetainsLatestSuccessfulAndFailedRuns(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	runDir := filepath.Join(outDir, "agent_runs")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	lines := []string{
+		runLogLine("old-success", "resolve_workspace", "pass", now.Add(-8*time.Hour)),
+		runLogLine("old-success", "package", "pass", now.Add(-7*time.Hour)),
+		runLogLine("latest-failed", "resolve_workspace", "pass", now.Add(-6*time.Hour)),
+		runLogLine("latest-failed", "qa", "fail", now.Add(-5*time.Hour)),
+		runLogLine("latest-success", "resolve_workspace", "pass", now.Add(-4*time.Hour)),
+		runLogLine("latest-success", "package", "pass", now.Add(-3*time.Hour)),
+		runLogLine("old-failed", "resolve_workspace", "pass", now.Add(-10*time.Hour)),
+		runLogLine("old-failed", "render", "fail", now.Add(-9*time.Hour)),
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "run_log.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "turn.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-2 * time.Hour)
+	if err := os.Chtimes(filepath.Join(outDir, "run_log.jsonl"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(runDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := runClean([]string{"--deck", deck, "--logs", "--older-than", "1h"}); err != nil {
+		t.Fatal(err)
+	}
+	logText := readFileOrEmpty(filepath.Join(outDir, "run_log.jsonl"))
+	for _, want := range []string{"latest-success", "latest-failed"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("retained log missing %s: %s", want, logText)
+		}
+	}
+	for _, removed := range []string{"old-success", "old-failed"} {
+		if strings.Contains(logText, removed) {
+			t.Fatalf("stale non-retained run remained %s: %s", removed, logText)
+		}
+	}
+	if _, err := os.Stat(runDir); err != nil {
+		t.Fatalf("agent_runs should remain while retained run logs exist: %v", err)
+	}
+}
+
 func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
@@ -550,8 +721,14 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	if err := os.Chmod(token, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "")
+	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)})
+	if err == nil {
+		t.Fatal("expected capability token without tunnel acknowledgement to fail")
+	}
+	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "1")
 	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)}); err != nil {
-		t.Fatalf("private capability token should pass: %v", err)
+		t.Fatalf("private capability token with tunnel acknowledgement should pass: %v", err)
 	}
 	secret := filepath.Join(dir, "secret")
 	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
@@ -717,6 +894,26 @@ func TestAppServerThreadCompactWaitsForMatchingThread(t *testing.T) {
 	if got, _ := compacted["turnId"].(string); got != "turn-1" {
 		t.Fatalf("compact turn id = %q", got)
 	}
+}
+
+type testWriteCloser struct {
+	strings.Builder
+}
+
+func (w *testWriteCloser) Close() error {
+	return nil
+}
+
+func runLogLine(label, stage, status string, ts time.Time) string {
+	raw, _ := json.Marshal(map[string]any{
+		"event":         "stage_completed",
+		"runLabel":      label,
+		"stage":         stage,
+		"status":        status,
+		"stopCondition": map[string]string{"pass": "pass", "fail": "blocked"}[status],
+		"timestamp":     ts.Format(time.RFC3339),
+	})
+	return string(raw)
 }
 
 func isChromeSandboxEnvironmentFailure(err error) bool {
