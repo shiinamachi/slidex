@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -318,6 +319,22 @@ func TestTokenUsageAndMCPReplayPreserveThreadRouting(t *testing.T) {
 		{
 			"method": "thread/tokenUsage/updated",
 			"params": map[string]any{
+				"threadId": "other-thread",
+				"turnId":   "turn-x",
+				"tokenUsage": map[string]any{
+					"total": map[string]any{
+						"inputTokens":           float64(999),
+						"cachedInputTokens":     float64(999),
+						"outputTokens":          float64(999),
+						"reasoningOutputTokens": float64(999),
+						"totalTokens":           float64(999),
+					},
+				},
+			},
+		},
+		{
+			"method": "thread/tokenUsage/updated",
+			"params": map[string]any{
 				"threadId": "thread-1",
 				"turnId":   "turn-1",
 				"tokenUsage": map[string]any{
@@ -333,7 +350,7 @@ func TestTokenUsageAndMCPReplayPreserveThreadRouting(t *testing.T) {
 			},
 		},
 	}
-	usage := tokenUsageFromEvents(events)
+	usage := tokenUsageFromEvents(events, "thread-1")
 	if usage["totalTokens"] != 19 || usage["modelContextWindow"] != 128000 {
 		t.Fatalf("unexpected token usage: %#v", usage)
 	}
@@ -361,6 +378,83 @@ func TestTokenUsageAndMCPReplayPreserveThreadRouting(t *testing.T) {
 	replayText := readFileOrEmpty(filepath.Join(deck, "out", "agent_runs", "mcp_event_replay.json"))
 	if !strings.Contains(replayText, `"requestingThreadId": "parent"`) {
 		t.Fatalf("replay did not preserve requestingThreadId: %s", replayText)
+	}
+}
+
+func TestQAReportRecordsCodexRuntimeMode(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := newState(deck, "exec", false)
+	if err := writeState(outDir, state); err != nil {
+		t.Fatal(err)
+	}
+	mode, _ := qaRuntimeForDeck(deck)
+	if mode != "exec" {
+		t.Fatalf("qa runtime mode = %q, want exec", mode)
+	}
+	reportPath := filepath.Join(outDir, "qa_report.md")
+	if err := writeQAReport(reportPath, qaResult{ToolName: toolName, Version: toolVersion, DeckDir: deck, Status: "pass", RuntimeMode: mode}); err != nil {
+		t.Fatal(err)
+	}
+	report := readFileOrEmpty(reportPath)
+	if !strings.Contains(report, "runtimeMode: exec") || !strings.Contains(report, "Runtime mode: `exec`") {
+		t.Fatalf("qa report did not record runtime mode: %s", report)
+	}
+}
+
+func TestExecAuditCorrectionIsWrittenBackToArtifact(t *testing.T) {
+	runPath := filepath.Join(t.TempDir(), "run.json")
+	original := map[string]any{"schemaVersion": "slidex.codexExecRun.v1", "structuredOutput": map[string]any{"status": "blocked"}}
+	if err := secureWriteJSON(runPath, original); err != nil {
+		t.Fatal(err)
+	}
+	corrected := map[string]any{"stage": "delivery_summary", "status": "pass", "summary": "ok", "artifacts": []any{}, "risks": []any{}}
+	correction := map[string]any{"reason": "deterministic baseline complete"}
+	if err := recordCodexExecAuditCorrection(runPath, corrected, correction); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if raw, err := os.ReadFile(runPath); err != nil {
+		t.Fatal(err)
+	} else if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	structured, _ := got["structuredOutput"].(map[string]any)
+	if structured["status"] != "pass" || got["auditCorrection"] == nil {
+		t.Fatalf("correction was not written back: %#v", got)
+	}
+}
+
+func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	risk := "WebSocket App Server is experimental/unsupported and limited to loopback."
+	if err := recordWebSocketTransportRisk(deck, risk, filepath.Join(outDir, "codex-app-server.json")); err != nil {
+		t.Fatal(err)
+	}
+	state := readStateOrNew(deck, "app-server", false)
+	if len(state.AcceptedRisks) != 1 || state.AcceptedRisks[0].Reason != risk {
+		t.Fatalf("risk was not recorded: %#v", state.AcceptedRisks)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "render_manifest.json"), []byte(`{"pdfPageCount":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "qa_report.md"), []byte("# QA\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := writeDeliverySummary(deck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := readFileOrEmpty(path)
+	if !strings.Contains(summary, risk) {
+		t.Fatalf("delivery summary did not include risk: %s", summary)
 	}
 }
 

@@ -137,6 +137,10 @@ slidex package --deck decks/customer-retention
 
 기존 `render --html ... --pdf ...` 형태는 advanced override로 유지합니다.
 
+`/goal`은 Codex TUI 안에서 사용하는 slash command입니다. `slidex goal`은 같은
+목표 상태를 deck의 `out/slidex_state.json`과 가능하면 App Server `thread/goal/*`
+API에 동기화하는 로컬 CLI wrapper입니다.
+
 ## Advanced Prompt Fallback
 
 직접 prompt 파일을 실행하는 방식은 CLI가 없는 환경이나 디버깅용 fallback입니다.

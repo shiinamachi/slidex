@@ -1094,7 +1094,38 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	if err := secureWriteJSON(metaPath, metadata); err != nil {
 		return err
 	}
+	if risk := transportRiskForListen(actualListen); risk != "" && deck != "" {
+		if err := recordWebSocketTransportRisk(mustAbs(deck), risk, metaPath); err != nil {
+			return err
+		}
+	}
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
+}
+
+func recordWebSocketTransportRisk(deckAbs, risk, metadataPath string) error {
+	outDir := filepath.Join(deckAbs, "out")
+	state := readStateOrNew(deckAbs, "app-server", false)
+	state.AcceptedRisks = appendAcceptedRiskOnce(state.AcceptedRisks, acceptedRisk{
+		Reason:       risk,
+		Owner:        "slidex",
+		Expiration:   time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+		ArtifactLink: filepath.ToSlash(metadataPath),
+	})
+	return writeState(outDir, state)
+}
+
+func appendAcceptedRiskOnce(risks []acceptedRisk, risk acceptedRisk) []acceptedRisk {
+	for i := range risks {
+		if risks[i].Reason == risk.Reason && risks[i].ArtifactLink == risk.ArtifactLink {
+			risks[i] = risk
+			return risks
+		}
+	}
+	return append(risks, risk)
+}
+
+func escapeMarkdownInline(value string) string {
+	return strings.ReplaceAll(value, "`", "'")
 }
 
 func statusManagedAppServer() error {
@@ -2157,6 +2188,7 @@ func writeDeliverySummary(deck string) (string, error) {
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		_ = json.Unmarshal(raw, &manifest)
 	}
+	state := readStateOrNew(deckAbs, "app-server", false)
 	var b strings.Builder
 	b.WriteString("# Delivery Summary\n\n")
 	b.WriteString("- Tool: `" + toolName + " " + toolVersion + "`\n")
@@ -2177,7 +2209,23 @@ func writeDeliverySummary(deck string) (string, error) {
 	b.WriteString("- Visual review image set: `out/visual_reviews/image_set.json`\n")
 	b.WriteString("- Manual visual inspection remains a delivery responsibility unless a Codex visual review artifact records pass.\n\n")
 	b.WriteString("## Accepted Risks\n\n")
-	b.WriteString("- None recorded. Any future accepted risk must include reason, owner, expiration, and artifact link.\n\n")
+	if len(state.AcceptedRisks) == 0 {
+		b.WriteString("- None recorded. Any future accepted risk must include reason, owner, expiration, and artifact link.\n\n")
+	} else {
+		for _, risk := range state.AcceptedRisks {
+			b.WriteString("- Reason: `" + escapeMarkdownInline(risk.Reason) + "`; owner: `" + escapeMarkdownInline(risk.Owner) + "`; expiration: `" + escapeMarkdownInline(risk.Expiration) + "`; artifact: `" + escapeMarkdownInline(risk.ArtifactLink) + "`\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("## Unresolved Risks\n\n")
+	if len(state.UnresolvedRisks) == 0 {
+		b.WriteString("- None recorded in `out/slidex_state.json`.\n\n")
+	} else {
+		for _, risk := range state.UnresolvedRisks {
+			b.WriteString("- Reason: `" + escapeMarkdownInline(risk.Reason) + "`; owner: `" + escapeMarkdownInline(risk.Owner) + "`; expiration: `" + escapeMarkdownInline(risk.Expiration) + "`; artifact: `" + escapeMarkdownInline(risk.ArtifactLink) + "`\n")
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("## Review Loop\n\n")
 	b.WriteString("- Structured review artifacts are stored under `out/agent_reviews/` when `slidex codex review` or reviewer gates run.\n")
 	if _, err := os.Stat(notesPath); os.IsNotExist(err) {
@@ -3088,12 +3136,31 @@ func runCodexExecStageAudit(deckAbs, stage string, resume bool, resumeTarget str
 	}
 	if corrected, correction := normalizeStageAuditOutput(deckAbs, stage, payload); correction != nil {
 		payload = corrected
+		_ = recordCodexExecAuditCorrection(path, corrected, correction)
 		_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "stage_audit_corrected", "stage": stage, "runtime": "exec", "execRun": path, "correction": correction})
 	}
 	if status, _ := payload["status"].(string); status != "pass" && status != "pass_with_risks" {
 		return path, exitCodeError(3, "codex exec stage %s returned stop condition %s", stage, status)
 	}
 	return path, nil
+}
+
+func recordCodexExecAuditCorrection(path string, corrected map[string]any, correction map[string]any) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var run map[string]any
+	if err := json.Unmarshal(raw, &run); err != nil {
+		return err
+	}
+	run["structuredOutput"] = corrected
+	run["normalizedStructuredOutput"] = corrected
+	run["auditCorrection"] = correction
+	return secureWriteJSON(path, run)
 }
 
 func stageAuditPrompt(deckAbs string, state slidexState, stage, runtime string) string {
@@ -3206,7 +3273,7 @@ func recordAppServerTurn(outDir, stage string, result appServerTurnResult) error
 			idx.Threads[i].TurnIDs = appendUnique(idx.Threads[i].TurnIDs, result.TurnID)
 			idx.Threads[i].OutputSchemaHash = result.OutputSchemaHash
 			idx.Threads[i].LastEventLog = result.EventLog
-			idx.Threads[i].TokenUsage = mergeTokenUsage(idx.Threads[i].TokenUsage, tokenUsageFromEvents(result.Events))
+			idx.Threads[i].TokenUsage = mergeTokenUsage(idx.Threads[i].TokenUsage, tokenUsageFromEvents(result.Events, result.ThreadID))
 			found = true
 			break
 		}
@@ -3226,7 +3293,7 @@ func recordAppServerTurn(outDir, stage string, result appServerTurnResult) error
 			Sandbox:                 "readOnly",
 			SandboxMode:             "readOnly",
 			EffectiveWorkspaceRoots: []string{mustAbs("."), filepath.Dir(outDir)},
-			TokenUsage:              tokenUsageFromEvents(result.Events),
+			TokenUsage:              tokenUsageFromEvents(result.Events, result.ThreadID),
 			OutputSchemaHash:        result.OutputSchemaHash,
 			LastEventLog:            result.EventLog,
 			PromptTemplateVersion:   toolVersion,
@@ -3897,14 +3964,23 @@ func hashPathSet(root string) string {
 	return sha256Bytes([]byte(b.String()))
 }
 
-func tokenUsageFromEvents(events []map[string]any) map[string]int {
+func tokenUsageFromEvents(events []map[string]any, threadFilter ...string) map[string]int {
 	usage := map[string]int{}
+	filter := ""
+	if len(threadFilter) > 0 {
+		filter = strings.TrimSpace(threadFilter[0])
+	}
 	for _, event := range events {
 		method, _ := event["method"].(string)
 		if method != "thread/tokenUsage/updated" {
 			continue
 		}
 		params, _ := event["params"].(map[string]any)
+		if filter != "" {
+			if threadID, _ := params["threadId"].(string); threadID != "" && threadID != filter {
+				continue
+			}
+		}
 		tokenUsage, _ := params["tokenUsage"].(map[string]any)
 		total, _ := tokenUsage["total"].(map[string]any)
 		for _, key := range []string{"inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"} {

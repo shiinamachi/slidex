@@ -74,6 +74,10 @@ mise exec -- slidex goal status --deck decks/customer-retention
 mise exec -- slidex migrate --deck decks/customer-retention --from legacy-html-pdf
 ```
 
+`/goal`은 Codex TUI slash command이고, `slidex goal`은 deck state와 App Server
+goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slidex goal`을
+사용합니다.
+
 문서와 acceptance 기준의 canonical 이름은 `slidex`입니다.
 
 ## Advanced Prompt Fallback

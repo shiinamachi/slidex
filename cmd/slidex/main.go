@@ -134,6 +134,8 @@ type qaResult struct {
 	Version          string      `json:"version"`
 	DeckDir          string      `json:"deckDir"`
 	Status           string      `json:"status"`
+	RuntimeMode      string      `json:"runtimeMode,omitempty"`
+	RuntimeReason    string      `json:"runtimeReason,omitempty"`
 	VisualReviewMode string      `json:"visualReviewMode,omitempty"`
 	VisualStatus     string      `json:"visualStatus,omitempty"`
 	FilesChecked     []string    `json:"filesChecked"`
@@ -1687,7 +1689,12 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 		ToolName:         toolName,
 		Version:          toolVersion,
 		DeckDir:          deckAbs,
+		RuntimeMode:      "deterministic",
 		VisualReviewMode: visualReview,
+	}
+	if mode, reason := qaRuntimeForDeck(deckAbs); mode != "" {
+		result.RuntimeMode = mode
+		result.RuntimeReason = reason
 	}
 	for _, p := range []string{specPath, htmlPath, manifestPath, pdfPath, montagePath} {
 		if _, err := os.Stat(p); err != nil {
@@ -1847,12 +1854,17 @@ func writeQAReport(path string, result qaResult) error {
 	b.WriteString("  renderManifestSha256: " + firstNonEmpty(mustSHA256(manifestPath), "missing") + "\n")
 	b.WriteString("  pngSetSha256: " + firstNonEmpty(pngSetHash, "missing") + "\n")
 	b.WriteString("  deterministicStatus: " + result.Status + "\n")
+	b.WriteString("  runtimeMode: " + firstNonEmpty(result.RuntimeMode, "deterministic") + "\n")
+	if result.RuntimeReason != "" {
+		b.WriteString("  runtimeReason: " + quoteYAMLScalar(result.RuntimeReason) + "\n")
+	}
 	b.WriteString("  visualStatus: " + firstNonEmpty(result.VisualStatus, "not_run") + "\n")
 	b.WriteString("  visualReviewMode: " + firstNonEmpty(result.VisualReviewMode, "none") + "\n")
 	b.WriteString("```\n\n")
 	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", result.ToolName, result.Version))
 	b.WriteString(fmt.Sprintf("- Deck directory: `%s`\n", result.DeckDir))
 	b.WriteString(fmt.Sprintf("- Overall status: %s\n", result.Status))
+	b.WriteString(fmt.Sprintf("- Runtime mode: `%s`\n", firstNonEmpty(result.RuntimeMode, "deterministic")))
 	b.WriteString(fmt.Sprintf("- Render method: %s\n", firstNonEmpty(result.RenderMethod, "not recorded in render_manifest.json")))
 	b.WriteString(fmt.Sprintf("- Slide count: %d\n", result.SlideCount))
 	b.WriteString(fmt.Sprintf("- PDF page count: %d\n\n", result.PDFPageCount))
@@ -1908,6 +1920,23 @@ func writeQAReport(path string, result qaResult) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func qaRuntimeForDeck(deckAbs string) (string, string) {
+	raw, err := os.ReadFile(filepath.Join(deckAbs, "out", "slidex_state.json"))
+	if err != nil {
+		return "", ""
+	}
+	var state slidexState
+	if json.Unmarshal(raw, &state) != nil {
+		return "", ""
+	}
+	return state.CodexRuntime.Mode, state.CodexRuntime.Reason
+}
+
+func quoteYAMLScalar(value string) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
 }
 
 func writeFindingsForPrefix(b *strings.Builder, findings []qaFinding, prefixes []string) {
