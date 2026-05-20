@@ -92,6 +92,7 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if qa.Status == "fail" {
 		t.Fatalf("qa status should not fail: %+v", qa.Findings)
 	}
+	writeTestVisualReviewPass(t, deck, manifest)
 	if _, err := writeDeliverySummary(deck); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +106,17 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if pkg["status"] != "pass" {
 		t.Fatalf("package should pass, got %#v", pkg)
 	}
+	if status, findings := runVisualReview(deck, manifest, "none"); status != "pass_with_risks" || hasFailures(findings) {
+		t.Fatalf("visual review none should be non-blocking at QA stage, status=%s findings=%v", status, findings)
+	}
+	noVisualPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noVisualPkg["status"] != "fail" {
+		t.Fatalf("package must fail when visual review is disabled, got %#v", noVisualPkg)
+	}
+	writeTestVisualReviewPass(t, deck, manifest)
 	if err := os.WriteFile(filepath.Join(outDir, "final_deck.html"), []byte(readFileOrEmpty(filepath.Join(outDir, "final_deck.html"))+"\n<!-- stale edit -->\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +135,41 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	var coded interface{ ExitCode() int }
 	if !errors.As(err, &coded) || coded.ExitCode() != 5 {
 		t.Fatalf("runPackage stale exit code = %v, %v; want 5", coded, err)
+	}
+}
+
+func TestMigrateDryRunNeverWritesWithoutWrite(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := copyDir(filepath.Join(repoRootForTest(t), "fixtures", "minimal_deck"), deck); err != nil {
+		t.Fatal(err)
+	}
+	err := runMigrate([]string{"--deck", deck, "--dry-run=false"})
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 2 {
+		t.Fatalf("expected --dry-run=false without --write to fail with exit 2, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(deck, "out", "slidex_state.json")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run=false without --write must not create state, stat err=%v", err)
+	}
+}
+
+func writeTestVisualReviewPass(t *testing.T, deck string, manifest renderManifest) {
+	t.Helper()
+	payload := map[string]any{
+		"schemaVersion": "slidex.reviewFindings.v1",
+		"stage":         "visual_qa",
+		"round":         1,
+		"mode":          "manual",
+		"status":        "pass",
+		"imageEvidence": visualReviewEvidence(deck, manifest),
+		"findings":      []qaFinding{},
+	}
+	path := filepath.Join(deck, "out", "visual_reviews", "latest_review.json")
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureWriteJSON(path, payload); err != nil {
+		t.Fatal(err)
 	}
 }
 

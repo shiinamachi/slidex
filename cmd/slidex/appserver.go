@@ -168,6 +168,40 @@ func appServerCapabilitySnapshot(deckAbs string, startThread bool) (map[string]a
 	return snapshot, nil
 }
 
+func appServerThreadFeatureProbe(threadID string) (map[string]any, error) {
+	client, err := newAppServerClient()
+	if err != nil {
+		return nil, err
+	}
+	defer client.close()
+	snapshot := map[string]any{
+		"schemaVersion": "slidex.threadFeatureProbe.v1",
+		"generatedAt":   time.Now().UTC().Format(time.RFC3339),
+		"codexVersion":  installedCodexVersion(),
+		"threadId":      threadID,
+		"events":        []map[string]any{},
+	}
+	initResp, events, err := client.request("initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "slidex", "title": "slidex CLI", "version": toolVersion},
+		"capabilities": map[string]any{"experimentalApi": true},
+	}, 10*time.Second)
+	snapshot["events"] = events
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot["initialize"] = initResp["result"]
+	resp, events, err := client.request("experimentalFeature/list", map[string]any{"threadId": threadID}, 20*time.Second)
+	if len(events) > 0 {
+		existing, _ := snapshot["events"].([]map[string]any)
+		snapshot["events"] = append(existing, events...)
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot["experimentalFeature_thread_scoped"] = resp["result"]
+	return snapshot, nil
+}
+
 func extractThreadID(v any) string {
 	obj, _ := v.(map[string]any)
 	thread, _ := obj["thread"].(map[string]any)

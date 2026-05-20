@@ -2464,6 +2464,8 @@ func runPackage(args []string) error {
 			return exitCodeError(5, "package verification failed: stale artifacts")
 		}
 		return errors.New("package verification failed")
+	} else if status == "pass_with_risks" {
+		return exitCodeError(6, "package verification has unresolved or unaccepted risks")
 	}
 	return nil
 }

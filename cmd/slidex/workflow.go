@@ -402,7 +402,7 @@ func runPipeline(args []string) error {
 	codexMode := fs.String("codex-mode", "app-server", "app-server, exec, or exec_fallback")
 	allowMismatch := fs.Bool("allow-codex-protocol-mismatch", false, "continue with recorded risk on protocol mismatch")
 	chromeNoSandbox := fs.Bool("chrome-no-sandbox", false, "allow Chrome --no-sandbox fallback")
-	visualReview := fs.String("visual-review", "none", "visual review mode: codex, manual, or none")
+	visualReview := fs.String("visual-review", "codex", "visual review mode: codex, manual, or none")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -465,10 +465,24 @@ func runPipeline(args []string) error {
 				if err := writeJSONFile(filepath.Join(outDir, "protocol_diagnostics.json"), snapshot); err != nil {
 					return err
 				}
+				if err := writeThreadIndex(outDir, threadIndexFromAppServerSnapshot(deckAbs, snapshot)); err != nil {
+					return err
+				}
 				state.CodexRuntime.ProtocolBundleHash = hashPathSet(filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion))
 			}
 		}
-		return ensureRuntimeArtifacts(deckAbs, state)
+		if err := ensureRuntimeArtifacts(deckAbs, state); err != nil {
+			return err
+		}
+		if *codexMode == "app-server" {
+			if snapshotRaw, err := os.ReadFile(filepath.Join(outDir, "protocol_diagnostics.json")); err == nil {
+				var snapshot map[string]any
+				if json.Unmarshal(snapshotRaw, &snapshot) == nil {
+					return writeThreadIndex(outDir, threadIndexFromAppServerSnapshot(deckAbs, snapshot))
+				}
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -550,6 +564,9 @@ func runPipeline(args []string) error {
 		if result["status"] == "fail" {
 			return errors.New("package verification failed")
 		}
+		if result["status"] != "pass" {
+			return exitCodeError(6, "package verification has unresolved or unaccepted risks")
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -606,10 +623,11 @@ func runMigrate(args []string) error {
 	outDir := filepath.Join(deckAbs, "out")
 	findings := migrationFindings(deckAbs, *from)
 	created := []string{}
-	if *write {
-		*dryRun = false
+	if !*dryRun && !*write {
+		return exitCodeError(2, "--dry-run=false is not allowed without --write")
 	}
-	if !*dryRun {
+	effectiveWrite := *write
+	if effectiveWrite {
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			return err
 		}
@@ -633,7 +651,11 @@ func runMigrate(args []string) error {
 		}
 		created = append(created, filepath.Join(outDir, "codex_threads.json"))
 	}
-	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "mode": map[bool]string{true: "dry-run", false: "write"}[*dryRun], "from": *from, "findings": findings, "created": created})
+	mode := "dry-run"
+	if effectiveWrite {
+		mode = "write"
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "mode": mode, "from": *from, "findings": findings, "created": created})
 }
 
 func runCodex(args []string) error {
@@ -662,7 +684,7 @@ func runCodex(args []string) error {
 		}
 		_ = jsonOut
 		if *thread != "" {
-			snapshot, err := appServerCapabilitySnapshot(mustAbs("."), true)
+			snapshot, err := appServerThreadFeatureProbe(*thread)
 			if err != nil {
 				return err
 			}
@@ -865,6 +887,9 @@ func runGoal(args []string) error {
 		}
 		if result["status"] == "fail" {
 			return exitCodeError(5, "goal cannot complete because package gate is not fresh")
+		}
+		if result["status"] != "pass" {
+			return exitCodeError(6, "goal cannot complete because package gate has unresolved or unaccepted risks")
 		}
 		state := readStateOrNew(deck, "app-server", false)
 		state.Goal.Status = "complete"
@@ -1616,6 +1641,60 @@ func writeThreadIndex(outDir string, idx codexThreadIndex) error {
 	return secureWriteJSON(filepath.Join(outDir, "codex_threads.json"), idx)
 }
 
+func threadIndexFromAppServerSnapshot(deckAbs string, snapshot map[string]any) codexThreadIndex {
+	idx := codexThreadIndex{
+		SchemaVersion: threadsSchemaVersion,
+		CodexVersion:  installedCodexVersion(),
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	threadResult, _ := snapshot["thread_start"].(map[string]any)
+	threadObj, _ := threadResult["thread"].(map[string]any)
+	threadID, _ := threadObj["id"].(string)
+	if threadID == "" {
+		threadID = "app-server-probe"
+	}
+	model, _ := threadResult["model"].(string)
+	serviceTier, _ := threadResult["serviceTier"].(string)
+	cwd, _ := threadResult["cwd"].(string)
+	approval, _ := threadResult["approvalPolicy"].(string)
+	sandboxMode := ""
+	if sandbox, ok := threadResult["sandbox"].(map[string]any); ok {
+		sandboxMode, _ = sandbox["type"].(string)
+	}
+	roots := []string{}
+	if rawRoots, ok := threadResult["runtimeWorkspaceRoots"].([]any); ok {
+		for _, raw := range rawRoots {
+			if s, _ := raw.(string); s != "" {
+				roots = append(roots, s)
+			}
+		}
+	}
+	if len(roots) == 0 {
+		roots = []string{mustAbs(".")}
+	}
+	idx.Threads = []threadState{{
+		ThreadID:                 threadID,
+		ThreadName:               filepath.Base(deckAbs) + "-app-server-probe",
+		Stage:                    "resolve_workspace",
+		Model:                    model,
+		ServiceTier:              serviceTier,
+		ApprovalPolicy:           approval,
+		ApprovalMode:             approval,
+		Sandbox:                  sandboxMode,
+		SandboxMode:              sandboxMode,
+		EffectiveWorkspaceRoots:  roots,
+		TokenUsage:               map[string]int{},
+		GlobalFeatureProbe:       snapshot["experimentalFeature_list"],
+		ThreadScopedFeatureProbe: snapshot["experimentalFeature_thread_scoped"],
+		OutputSchemaHash:         mustSHA256(filepath.Join("schemas", "stage_result.schema.json")),
+		PromptTemplateVersion:    toolVersion,
+	}}
+	if cwd != "" {
+		idx.Threads[0].EffectiveWorkspaceRoots = append(idx.Threads[0].EffectiveWorkspaceRoots, "cwd:"+cwd)
+	}
+	return idx
+}
+
 func appendRunLog(outDir string, event map[string]any) error {
 	event["timestamp"] = time.Now().UTC().Format(time.RFC3339)
 	redacted := redactSecretsInAny(event)
@@ -1727,9 +1806,17 @@ func migrationFindings(deckAbs, from string) []string {
 	if strings.Contains(strings.ToLower(specRaw), "pptx") || strings.Contains(strings.ToLower(specRaw), "powerpoint") {
 		findings = append(findings, "deck_spec.json contains PPTX or PowerPoint fields that must be removed or reported.")
 	}
-	for _, legacy := range []string{"brief.md", "assets", "brand", "data", "out"} {
-		if _, err := os.Stat(legacy); err == nil && !strings.HasPrefix(deckAbs, mustAbs("decks")+string(os.PathSeparator)) {
-			findings = append(findings, "Legacy root-level workspace material detected: "+legacy)
+	if deckAbs == mustAbs(".") {
+		for _, legacy := range []string{"brief.md", "assets", "brand", "data", "out"} {
+			if _, err := os.Stat(filepath.Join(deckAbs, legacy)); err == nil {
+				findings = append(findings, "Legacy root-level workspace material detected: "+legacy)
+			}
+		}
+	} else if !strings.HasPrefix(deckAbs, mustAbs("decks")+string(os.PathSeparator)) {
+		for _, legacy := range []string{"brief.md", "assets", "brand", "data", "out"} {
+			if _, err := os.Stat(filepath.Join(deckAbs, legacy)); err == nil && legacy == "out" {
+				findings = append(findings, "Non-standard deck path uses out/ compatibility mode: "+legacy)
+			}
 		}
 	}
 	if len(findings) == 0 {
@@ -1769,6 +1856,7 @@ func runVisualReview(deckAbs string, manifest renderManifest, mode string) (stri
 	}
 	switch mode {
 	case "none":
+		payload["status"] = "pass_with_risks"
 		payload["findings"] = []qaFinding{{Severity: "info", Check: "visual_review.disabled", Message: "Visual review explicitly disabled for deterministic run.", Path: reviewPath}}
 	case "manual":
 		if !visualReviewArtifactFresh(reviewPath, manifest) {
@@ -1802,7 +1890,8 @@ func runVisualReview(deckAbs string, manifest renderManifest, mode string) (stri
 	if err := secureWriteJSON(reviewPath, payload); err != nil {
 		return "blocked", []qaFinding{fail("visual_review.write", err.Error(), reviewPath)}
 	}
-	return "pass", nil
+	status, _ := payload["status"].(string)
+	return firstNonEmpty(status, "pass"), nil
 }
 
 func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]any {
