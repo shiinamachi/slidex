@@ -1,0 +1,1687 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	requiredCodexVersion = "0.132.0"
+	stateSchemaVersion   = "slidex.state.v1"
+	threadsSchemaVersion = "slidex.codexThreads.v1"
+)
+
+type codedError struct {
+	code int
+	err  error
+}
+
+func (e codedError) Error() string {
+	return e.err.Error()
+}
+
+func (e codedError) Unwrap() error {
+	return e.err
+}
+
+func (e codedError) ExitCode() int {
+	return e.code
+}
+
+func exitCodeError(code int, format string, args ...any) error {
+	return codedError{code: code, err: fmt.Errorf(format, args...)}
+}
+
+type stageRecord struct {
+	Stage         string     `json:"stage"`
+	Status        string     `json:"status"`
+	Inputs        []artifact `json:"inputs,omitempty"`
+	Outputs       []artifact `json:"outputs,omitempty"`
+	Runtime       any        `json:"runtime,omitempty"`
+	Verifier      any        `json:"verifier,omitempty"`
+	StopCondition string     `json:"stopCondition,omitempty"`
+	StartedAt     string     `json:"startedAt,omitempty"`
+	CompletedAt   string     `json:"completedAt,omitempty"`
+	Error         string     `json:"error,omitempty"`
+}
+
+type runtimeState struct {
+	Mode                string   `json:"mode"`
+	RequiredVersion     string   `json:"requiredVersion"`
+	InstalledVersion    string   `json:"installedVersion,omitempty"`
+	ProtocolBundle      string   `json:"protocolBundle,omitempty"`
+	ProtocolBundleHash  string   `json:"protocolBundleHash,omitempty"`
+	AllowMismatch       bool     `json:"allowMismatch"`
+	Reason              string   `json:"reason,omitempty"`
+	MissingCapabilities []string `json:"missingCapabilities,omitempty"`
+}
+
+type goalMirror struct {
+	Objective                string `json:"objective,omitempty"`
+	ObjectiveFile            string `json:"objectiveFile,omitempty"`
+	Status                   string `json:"status,omitempty"`
+	TokenBudget              int    `json:"tokenBudget,omitempty"`
+	UsageLimitReached        bool   `json:"usageLimitReached,omitempty"`
+	RepeatedBlockerSignature string `json:"repeatedBlockerSignature,omitempty"`
+}
+
+type slidexState struct {
+	SchemaVersion        string         `json:"schemaVersion"`
+	ToolName             string         `json:"toolName"`
+	ToolVersion          string         `json:"toolVersion"`
+	GeneratedAt          string         `json:"generatedAt"`
+	ActiveDeckID         string         `json:"activeDeckId"`
+	DeckDir              string         `json:"deckDir"`
+	OutDir               string         `json:"outDir"`
+	RequiredCodexVersion string         `json:"requiredCodexVersion"`
+	CodexRuntime         runtimeState   `json:"codexRuntime"`
+	Stages               []stageRecord  `json:"stages"`
+	Goal                 goalMirror     `json:"goal"`
+	UnresolvedRisks      []acceptedRisk `json:"unresolvedRisks,omitempty"`
+	AcceptedRisks        []acceptedRisk `json:"acceptedRisks,omitempty"`
+}
+
+type codexThreadIndex struct {
+	SchemaVersion string        `json:"schemaVersion"`
+	CodexVersion  string        `json:"codexVersion"`
+	GeneratedAt   string        `json:"generatedAt"`
+	Threads       []threadState `json:"threads"`
+}
+
+type threadState struct {
+	ThreadID                 string         `json:"threadId"`
+	ThreadName               string         `json:"threadName"`
+	Stage                    string         `json:"stage"`
+	Model                    string         `json:"model,omitempty"`
+	ServiceTier              string         `json:"serviceTier,omitempty"`
+	ApprovalPolicy           string         `json:"approvalPolicy,omitempty"`
+	ApprovalMode             string         `json:"approvalMode,omitempty"`
+	Sandbox                  string         `json:"sandbox,omitempty"`
+	SandboxMode              string         `json:"sandboxMode,omitempty"`
+	EffectiveWorkspaceRoots  []string       `json:"effectiveWorkspaceRoots,omitempty"`
+	TokenUsage               map[string]int `json:"tokenUsage,omitempty"`
+	GlobalFeatureProbe       any            `json:"globalFeatureProbe,omitempty"`
+	ThreadScopedFeatureProbe any            `json:"threadScopedFeatureProbe,omitempty"`
+	OutputSchemaHash         string         `json:"outputSchemaHash,omitempty"`
+	PromptTemplateVersion    string         `json:"promptTemplateVersion,omitempty"`
+}
+
+type acceptedRisk struct {
+	Reason       string `json:"reason"`
+	Owner        string `json:"owner"`
+	Expiration   string `json:"expiration"`
+	ArtifactLink string `json:"artifactLink"`
+}
+
+type visualReviewImageSet struct {
+	SchemaVersion         string          `json:"schemaVersion"`
+	GeneratedAt           string          `json:"generatedAt"`
+	HTMLSha256            string          `json:"htmlSha256"`
+	ManifestSha256        string          `json:"manifestSha256"`
+	ImageSetSha256        string          `json:"imageSetSha256"`
+	RequestedFidelity     string          `json:"requestedFidelity"`
+	FidelitySupportStatus string          `json:"fidelitySupportStatus"`
+	Images                []renderedImage `json:"images"`
+}
+
+func runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fromTemplate := fs.String("from-template", "decks/_template", "template deck directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return exitCodeError(2, "usage: slidex init <deck_id> [--from-template decks/_template]")
+	}
+	deckID := fs.Arg(0)
+	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(deckID) {
+		return exitCodeError(2, "deck_id must contain only letters, numbers, underscore, dash, and dot")
+	}
+	dst := filepath.Join("decks", deckID)
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("deck already exists: %s", dst)
+	}
+	if err := copyDir(*fromTemplate, dst); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "version": toolVersion, "deckDir": dst, "status": "created"})
+}
+
+func runDoctor(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	checkCodex := fs.Bool("codex", false, "check Codex CLI integration")
+	checkRender := fs.Bool("render", false, "check Chrome/Chromium render dependency")
+	jsonOut := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	report := doctorReport(*deck, *checkCodex, *checkRender)
+	if *jsonOut {
+		if err := printJSON(report); err != nil {
+			return err
+		}
+	} else {
+		printDoctorHuman(report)
+	}
+	if doctorHasUnsupported(report) {
+		return exitCodeError(4, "doctor found unsupported Codex/App Server features")
+	}
+	if doctorHasFail(report) {
+		return errors.New("doctor found failures")
+	}
+	return nil
+}
+
+func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
+	findings := []qaFinding{}
+	goModVersion := readGoModVersion("go.mod")
+	miseGoVersion := readMiseGoVersion(".mise.toml")
+	if goModVersion == "" {
+		findings = append(findings, fail("doctor.go_mod", "go.mod go directive missing", "go.mod"))
+	}
+	if miseGoVersion == "" {
+		findings = append(findings, fail("doctor.mise", ".mise.toml go pin missing", ".mise.toml"))
+	}
+	if goModVersion != "" && miseGoVersion != "" && goModVersion != miseGoVersion {
+		findings = append(findings, fail("doctor.go_pin", "go.mod and .mise.toml Go versions differ", "go.mod"))
+	}
+	if goModVersion != "" && !isExactVersion(goModVersion) {
+		findings = append(findings, fail("doctor.go_pin", "Go version must be exact", "go.mod"))
+	}
+	if _, err := os.Stat(".agents/skills/slidex/SKILL.md"); err != nil {
+		findings = append(findings, fail("doctor.skill_path", "missing companion skill at .agents/skills/slidex/SKILL.md", ".agents/skills/slidex/SKILL.md"))
+	}
+	if _, err := os.Stat(".codex/skills/slidex/SKILL.md"); err == nil {
+		findings = append(findings, fail("doctor.forbidden_skill_path", "forbidden companion skill path exists", ".codex/skills/slidex/SKILL.md"))
+	}
+	chrome := ""
+	if checkRender {
+		if path, err := resolveChrome(""); err != nil {
+			findings = append(findings, fail("doctor.chrome", err.Error(), "PATH"))
+		} else {
+			chrome = chromeVersion(path)
+			if !hasExactVersionToken(chrome) {
+				findings = append(findings, fail("doctor.chrome_version", "Chrome/Chromium version must be exact", path))
+			}
+		}
+	}
+	codexVersion := ""
+	codexDoctor := ""
+	featureList := ""
+	mcpList := ""
+	pluginList := ""
+	protocol := map[string]any{}
+	if checkCodex {
+		codexVersion = installedCodexVersion()
+		if codexVersion != requiredCodexVersion {
+			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.codex_version", Message: "Codex CLI version must be " + requiredCodexVersion + ", got " + firstNonEmpty(codexVersion, "missing"), Path: "codex"})
+		}
+		codexDoctor = commandOutput(8*time.Second, "codex", "doctor", "--json")
+		featureList = commandOutput(8*time.Second, "codex", "features", "list")
+		mcpList = commandOutput(8*time.Second, "codex", "mcp", "list")
+		pluginList = commandOutput(8*time.Second, "codex", "plugin", "list")
+		protocol = probeProtocolSchema()
+		if ok, _ := protocol["ok"].(bool); !ok {
+			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.protocol_schema", Message: fmt.Sprint(protocol["error"]), Path: "codex app-server generate-json-schema"})
+		}
+	}
+	if deck != "" {
+		if _, err := inspectDeck(deck); err != nil {
+			findings = append(findings, fail("doctor.deck", err.Error(), deck))
+		}
+	}
+	return map[string]any{
+		"toolName":        toolName,
+		"version":         toolVersion,
+		"generatedAt":     time.Now().UTC().Format(time.RFC3339),
+		"goModVersion":    goModVersion,
+		"miseGoVersion":   miseGoVersion,
+		"codexVersion":    codexVersion,
+		"requiredCodex":   requiredCodexVersion,
+		"chromeVersion":   chrome,
+		"protocolSchema":  protocol,
+		"codexDoctorJson": json.RawMessage(nullOrRaw(codexDoctor)),
+		"features":        featureList,
+		"mcp":             mcpList,
+		"plugins":         pluginList,
+		"findings":        findings,
+		"status":          statusFromFindings(findings),
+	}
+}
+
+func runIntake(args []string) error {
+	fs := flag.NewFlagSet("intake", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	answers := fs.String("answers", "", "answers file for batch intake")
+	interactive := fs.Bool("interactive", false, "reserved for interactive intake")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	_ = interactive
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	deckAbs := mustAbs(*deck)
+	inv, err := inspectDeck(deckAbs)
+	if err != nil {
+		return err
+	}
+	if err := writeSourceInventory(inv); err != nil {
+		return err
+	}
+	if *answers != "" {
+		if err := applyIntakeAnswers(deckAbs, *answers); err != nil {
+			return err
+		}
+		if err := writeIntakeQuestions(deckAbs, nil, "complete"); err != nil {
+			return err
+		}
+		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "answersApplied": *answers})
+	}
+	questions := intakeQuestionsForDeck(deckAbs)
+	status := "complete"
+	if len(questions) > 0 {
+		status = "user_input_required"
+	}
+	if err := writeIntakeQuestions(deckAbs, questions, status); err != nil {
+		return err
+	}
+	if len(questions) > 0 {
+		_ = printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": status, "questions": questions})
+		return exitCodeError(3, "intake requires user input; questions written to %s", filepath.Join(deckAbs, "out", "intake_questions.md"))
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": status})
+}
+
+func runStrategy(args []string) error {
+	fs := flag.NewFlagSet("strategy", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	force := fs.Bool("force", false, "rewrite strategy.md")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	path, err := ensureStrategy(*deck, *force)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "status": "complete", "strategy": path})
+}
+
+func runSpec(args []string) error {
+	fs := flag.NewFlagSet("spec", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	force := fs.Bool("force", false, "rewrite deck_spec.json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	path, err := ensureSpec(*deck, *force)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "status": "complete", "spec": path})
+}
+
+func runBuild(args []string) error {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	force := fs.Bool("force", false, "rewrite final_deck.html")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	path, err := ensureHTML(*deck, *force)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "status": "complete", "html": path})
+}
+
+func runRevise(args []string) error {
+	fs := flag.NewFlagSet("revise", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	until := fs.String("until", "pass", "pass or risk-accepted")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	qa, err := qaDeck(*deck, true)
+	if err != nil && qa.Status == "fail" {
+		return err
+	}
+	if *until == "pass" && qa.Status != "pass" {
+		return exitCodeError(6, "revise stopped with accepted or unresolved risks: %s", qa.Status)
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "status": qa.Status, "stopCondition": *until})
+}
+
+func runFinalize(args []string) error {
+	fs := flag.NewFlagSet("finalize", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	path, err := writeDeliverySummary(*deck)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "status": "complete", "deliverySummary": path})
+}
+
+func runPipeline(args []string) error {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	until := fs.String("until", "package", "package, qa, or render")
+	nonInteractive := fs.Bool("non-interactive", false, "do not open TUI")
+	codexMode := fs.String("codex-mode", "app-server", "app-server, exec, or exec_fallback")
+	allowMismatch := fs.Bool("allow-codex-protocol-mismatch", false, "continue with recorded risk on protocol mismatch")
+	chromeNoSandbox := fs.Bool("chrome-no-sandbox", false, "allow Chrome --no-sandbox fallback")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	_ = nonInteractive
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	deckAbs := mustAbs(*deck)
+	outDir := filepath.Join(deckAbs, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	unlock, err := acquireRunLock(outDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	state := newState(deckAbs, *codexMode, *allowMismatch)
+	recorder := func(stage string, fn func() error) error {
+		start := time.Now().UTC().Format(time.RFC3339)
+		err := fn()
+		status := "pass"
+		stop := "pass"
+		msg := ""
+		if err != nil {
+			status = "fail"
+			stop = "blocked"
+			msg = err.Error()
+			var coded interface{ ExitCode() int }
+			if errors.As(err, &coded) && coded.ExitCode() == 3 {
+				stop = "user_input_required"
+			}
+		}
+		state.Stages = append(state.Stages, stageRecord{Stage: stage, Status: status, StopCondition: stop, StartedAt: start, CompletedAt: time.Now().UTC().Format(time.RFC3339), Error: msg})
+		_ = writeState(outDir, state)
+		_ = appendRunLog(outDir, map[string]any{"event": "stage_completed", "stage": stage, "status": status, "stopCondition": stop, "error": msg})
+		return err
+	}
+	if err := recorder("resolve_workspace", func() error { return ensureRuntimeArtifacts(deckAbs, state) }); err != nil {
+		return err
+	}
+	if err := recorder("inspect_inputs", func() error {
+		inv, err := inspectDeck(deckAbs)
+		if err != nil {
+			return err
+		}
+		return writeSourceInventory(inv)
+	}); err != nil {
+		return err
+	}
+	if err := recorder("intake", func() error {
+		questions := intakeQuestionsForDeck(deckAbs)
+		if err := writeIntakeQuestions(deckAbs, questions, statusForQuestions(questions)); err != nil {
+			return err
+		}
+		if len(questions) > 0 {
+			return exitCodeError(3, "intake requires user input")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := recorder("strategy", func() error { _, err := ensureStrategy(deckAbs, false); return err }); err != nil {
+		return err
+	}
+	if err := recorder("spec", func() error { _, err := ensureSpec(deckAbs, false); return err }); err != nil {
+		return err
+	}
+	if err := recorder("build_html", func() error { _, err := ensureHTML(deckAbs, false); return err }); err != nil {
+		return err
+	}
+	if err := recorder("baseline_html", func() error {
+		return copyFile(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "final_deck.generated_baseline.html"))
+	}); err != nil {
+		return err
+	}
+	renderStage := func() error {
+		cfg, err := renderConfigFromFlags(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", 1920, 1080, "pretendard", "", *chromeNoSandbox)
+		if err != nil {
+			return err
+		}
+		_, err = renderHTML(cfg)
+		return err
+	}
+	if err := recorder("render", renderStage); err != nil {
+		return err
+	}
+	if *until == "render" {
+		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
+	}
+	if err := recorder("qa", func() error {
+		qa, err := qaDeck(deckAbs, true)
+		if err != nil && qa.Status == "fail" {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if *until == "qa" {
+		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
+	}
+	if err := recorder("delivery_summary", func() error { _, err := writeDeliverySummary(deckAbs); return err }); err != nil {
+		return err
+	}
+	if err := recorder("package", func() error {
+		result, err := packageDeck(deckAbs, false)
+		if err != nil {
+			return err
+		}
+		if result["status"] == "fail" {
+			return errors.New("package verification failed")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until, "state": filepath.Join(outDir, "slidex_state.json")})
+}
+
+func runClean(args []string) error {
+	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	logs := fs.Bool("logs", false, "clean logs")
+	olderThan := fs.String("older-than", "168h", "duration")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	d, err := time.ParseDuration(*olderThan)
+	if err != nil {
+		return err
+	}
+	removed := []string{}
+	if *logs {
+		outDir := filepath.Join(mustAbs(*deck), "out")
+		cutoff := time.Now().Add(-d)
+		for _, rel := range []string{"run_log.jsonl", "agent_runs", "agent_reviews", "visual_reviews"} {
+			path := filepath.Join(outDir, rel)
+			info, err := os.Stat(path)
+			if err == nil && info.ModTime().Before(cutoff) {
+				if err := os.RemoveAll(path); err != nil {
+					return err
+				}
+				removed = append(removed, path)
+			}
+		}
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "removed": removed})
+}
+
+func runMigrate(args []string) error {
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	from := fs.String("from", "legacy-html-pdf", "legacy-html-pdf or pptx-first")
+	write := fs.Bool("write", false, "apply safe migration changes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	deckAbs := mustAbs(*deck)
+	outDir := filepath.Join(deckAbs, "out")
+	findings := migrationFindings(deckAbs, *from)
+	created := []string{}
+	if *write {
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return err
+		}
+		htmlPath := filepath.Join(outDir, "final_deck.html")
+		basePath := filepath.Join(outDir, "final_deck.generated_baseline.html")
+		if _, err := os.Stat(basePath); os.IsNotExist(err) {
+			if _, err := os.Stat(htmlPath); err == nil {
+				if err := copyFile(htmlPath, basePath); err != nil {
+					return err
+				}
+				created = append(created, basePath)
+			}
+		}
+		state := newState(deckAbs, "exec", false)
+		if err := writeState(outDir, state); err != nil {
+			return err
+		}
+		created = append(created, filepath.Join(outDir, "slidex_state.json"))
+		if err := writeThreadIndex(outDir, codexThreadIndex{SchemaVersion: threadsSchemaVersion, CodexVersion: installedCodexVersion(), GeneratedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+			return err
+		}
+		created = append(created, filepath.Join(outDir, "codex_threads.json"))
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "mode": map[bool]string{true: "write", false: "dry-run"}[*write], "from": *from, "findings": findings, "created": created})
+}
+
+func runCodex(args []string) error {
+	if len(args) == 0 {
+		return exitCodeError(2, "usage: slidex codex <doctor|app-server|schema|models|features|mcp|plugins|threads|review|remote-control>")
+	}
+	switch args[0] {
+	case "doctor":
+		return runDoctor(append(args[1:], "--codex"))
+	case "schema":
+		return runCodexSchema(args[1:])
+	case "app-server":
+		return runCodexAppServer(args[1:])
+	case "models":
+		return printCommandJSON("codex", "model/list", commandOutput(8*time.Second, "codex", "--help"))
+	case "features":
+		cmdArgs := []string{"features", "list"}
+		if len(args) > 1 && args[1] == "--json" {
+			cmdArgs = []string{"features", "list"}
+		}
+		return printCommandJSON("codex", "features", commandOutput(8*time.Second, "codex", cmdArgs...))
+	case "mcp":
+		return printCommandJSON("codex", "mcp", commandOutput(8*time.Second, "codex", "mcp", "list"))
+	case "plugins":
+		return printCommandJSON("codex", "plugins", commandOutput(8*time.Second, "codex", "plugin", "list"))
+	case "threads":
+		return runCodexThreads(args[1:])
+	case "review":
+		return runCodexReview(args[1:])
+	case "remote-control":
+		return printCommandJSON("codex", "remote-control", commandOutput(8*time.Second, "codex", "remote-control", "status", "--json"))
+	default:
+		return exitCodeError(2, "unknown codex command: %s", args[0])
+	}
+}
+
+func runCodexSchema(args []string) error {
+	if len(args) == 0 || args[0] != "refresh" {
+		return exitCodeError(2, "usage: slidex codex schema refresh [--codex-version 0.132.0]")
+	}
+	fs := flag.NewFlagSet("codex schema refresh", flag.ContinueOnError)
+	version := fs.String("codex-version", requiredCodexVersion, "Codex CLI version")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *version != requiredCodexVersion {
+		return exitCodeError(4, "unsupported Codex protocol version: %s", *version)
+	}
+	if installed := installedCodexVersion(); installed != requiredCodexVersion {
+		return exitCodeError(4, "Codex CLI version mismatch: need %s, got %s", requiredCodexVersion, firstNonEmpty(installed, "missing"))
+	}
+	outDir := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion, "schema")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	help := commandOutput(8*time.Second, "codex", "app-server", "generate-json-schema", "--help")
+	cmdArgs := []string{"app-server", "generate-json-schema", "--out", outDir}
+	if strings.Contains(help, "--experimental") {
+		cmdArgs = append(cmdArgs, "--experimental")
+	}
+	cmd := exec.Command("codex", cmdArgs...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("schema refresh failed: %w\n%s", err, string(out))
+	}
+	manifest, err := writeProtocolManifest(filepath.Dir(outDir))
+	if err != nil {
+		return err
+	}
+	if err := writeMethodConstants(filepath.Dir(outDir)); err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "status": "complete", "schemaDir": outDir, "manifest": manifest})
+}
+
+func runCodexAppServer(args []string) error {
+	if len(args) == 0 {
+		return exitCodeError(2, "usage: slidex codex app-server <start|status|stop|probe>")
+	}
+	switch args[0] {
+	case "probe":
+		return printJSON(probeProtocolSchema())
+	case "start":
+		return printCommandJSON("codex", "app-server.start", commandOutput(15*time.Second, "codex", "app-server", "daemon", "start"))
+	case "status":
+		return printCommandJSON("codex", "app-server.status", commandOutput(8*time.Second, "codex", "app-server", "daemon", "version"))
+	case "stop":
+		return printCommandJSON("codex", "app-server.stop", commandOutput(15*time.Second, "codex", "app-server", "daemon", "stop"))
+	default:
+		return exitCodeError(2, "unknown app-server command: %s", args[0])
+	}
+}
+
+func runCodexThreads(args []string) error {
+	if len(args) == 0 {
+		return exitCodeError(2, "usage: slidex codex threads list|read")
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("codex threads list", flag.ContinueOnError)
+		deck := fs.String("deck", "", "deck workspace directory")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *deck == "" {
+			return exitCodeError(2, "--deck is required")
+		}
+		idx := readThreadIndex(filepath.Join(mustAbs(*deck), "out"))
+		return printJSON(idx)
+	case "read":
+		if len(args) < 2 {
+			return exitCodeError(2, "thread id is required")
+		}
+		return printJSON(map[string]any{"threadId": args[1], "status": "local mirror only; App Server thread/read is used during live runs when schema supports it"})
+	default:
+		return exitCodeError(2, "unknown threads command: %s", args[0])
+	}
+}
+
+func runCodexReview(args []string) error {
+	fs := flag.NewFlagSet("codex review", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	stage := fs.String("stage", "delivery", "design, html, qa, or delivery")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	path, err := writeStructuredReview(*deck, *stage, 1)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "stage": *stage, "review": path, "mode": "parallel_reviewer_threads"})
+}
+
+func runGoal(args []string) error {
+	if len(args) == 0 {
+		return exitCodeError(2, "usage: slidex goal set|status|pause|resume|complete|clear --deck decks/<deck_id>")
+	}
+	switch args[0] {
+	case "set":
+		fs := flag.NewFlagSet("goal set", flag.ContinueOnError)
+		deck := fs.String("deck", "", "deck workspace directory")
+		objective := fs.String("objective", "", "objective")
+		tokenBudget := fs.Int("token-budget", 0, "token budget")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *deck == "" {
+			return exitCodeError(2, "--deck is required")
+		}
+		if strings.TrimSpace(*objective) == "" {
+			return exitCodeError(2, "goal objective must be non-empty")
+		}
+		state := readStateOrNew(*deck, "app-server", false)
+		if len([]rune(*objective)) > 4000 {
+			path := filepath.Join(mustAbs(*deck), "out", "goal_objective.md")
+			if err := secureWriteFile(path, []byte(*objective+"\n"), 0o600); err != nil {
+				return err
+			}
+			state.Goal = goalMirror{ObjectiveFile: filepath.ToSlash(filepath.Join("out", "goal_objective.md")), Status: "active", TokenBudget: *tokenBudget}
+		} else {
+			state.Goal = goalMirror{Objective: *objective, Status: "active", TokenBudget: *tokenBudget}
+		}
+		if err := writeState(filepath.Join(mustAbs(*deck), "out"), state); err != nil {
+			return err
+		}
+		return printJSON(state.Goal)
+	case "status":
+		deck, err := deckFlag(args[1:])
+		if err != nil {
+			return err
+		}
+		return printJSON(readStateOrNew(deck, "app-server", false).Goal)
+	case "pause", "resume", "clear":
+		deck, err := deckFlag(args[1:])
+		if err != nil {
+			return err
+		}
+		state := readStateOrNew(deck, "app-server", false)
+		switch args[0] {
+		case "pause":
+			state.Goal.Status = "paused"
+		case "resume":
+			state.Goal.Status = "active"
+		case "clear":
+			state.Goal = goalMirror{}
+		}
+		if err := writeState(filepath.Join(mustAbs(deck), "out"), state); err != nil {
+			return err
+		}
+		return printJSON(state.Goal)
+	case "complete":
+		deck, err := deckFlag(args[1:])
+		if err != nil {
+			return err
+		}
+		result, err := packageDeck(deck, false)
+		if err != nil {
+			return err
+		}
+		if result["status"] == "fail" {
+			return exitCodeError(5, "goal cannot complete because package gate is not fresh")
+		}
+		state := readStateOrNew(deck, "app-server", false)
+		state.Goal.Status = "complete"
+		if err := writeState(filepath.Join(mustAbs(deck), "out"), state); err != nil {
+			return err
+		}
+		return printJSON(state.Goal)
+	default:
+		return exitCodeError(2, "unknown goal command: %s", args[0])
+	}
+}
+
+func runMCPServer(args []string) error {
+	fs := flag.NewFlagSet("mcp-server", flag.ContinueOnError)
+	stdio := fs.Bool("stdio", false, "serve over stdio")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*stdio {
+		return exitCodeError(2, "--stdio is required")
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	enc := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var req map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			_ = enc.Encode(map[string]any{"error": err.Error()})
+			continue
+		}
+		method, _ := req["method"].(string)
+		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"tool": "slidex", "method": method, "supported": []string{"inspect", "render", "qa", "package", "state/read"}}})
+	}
+	return scanner.Err()
+}
+
+func ensureStrategy(deck string, force bool) (string, error) {
+	deckAbs := mustAbs(deck)
+	outDir := filepath.Join(deckAbs, "out")
+	path := filepath.Join(outDir, "strategy.md")
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	brief := readFileOrEmpty(filepath.Join(deckAbs, "brief.md"))
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("# Strategy\n\n")
+	b.WriteString("- Source: `brief.md`\n")
+	b.WriteString("- Document type: `custom`\n")
+	b.WriteString("- Audience: confirmed in brief or treated as an assumption until intake closes.\n")
+	b.WriteString("- Purpose: produce an HTML-first business document that supports a concrete decision.\n")
+	b.WriteString("- Claim policy: unsupported metrics and customer/product claims are removed or marked as assumptions.\n")
+	b.WriteString("- Risk policy: unresolved risks require owner, reason, expiration, and artifact link before package.\n\n")
+	b.WriteString("## Brief Summary\n\n")
+	b.WriteString(strings.TrimSpace(firstNRunes(brief, 1200)))
+	b.WriteString("\n")
+	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func ensureSpec(deck string, force bool) (string, error) {
+	deckAbs := mustAbs(deck)
+	outDir := filepath.Join(deckAbs, "out")
+	path := filepath.Join(outDir, "deck_spec.json")
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+	deckID := filepath.Base(deckAbs)
+	title := firstMarkdownHeading(filepath.Join(deckAbs, "brief.md"))
+	if title == "" {
+		title = deckID + " business document"
+	}
+	inv, _ := inspectDeck(deckAbs)
+	sourceRefs := []map[string]any{}
+	for _, item := range inv.Inputs {
+		sourceRefs = append(sourceRefs, map[string]any{"path": item.Path, "kind": item.Kind, "priority": "supporting", "sha256": item.SHA256})
+	}
+	slides := []map[string]any{
+		makeSpecSlide("slide_01", "cover", title, "문서의 목적과 의사결정 맥락을 한 문장으로 정리합니다.", []string{"현재 확인된 입력을 기준으로 작성", "부족한 사실은 가정으로 분리"}),
+		makeSpecSlide("slide_02", "executive_summary", "핵심 판단은 근거와 가정을 분리해 제시합니다", "검증된 자료, 사용자 확인, 가정을 명확히 나눕니다.", []string{"주요 근거", "남은 확인사항", "리스크"}),
+		makeSpecSlide("slide_03", "next_steps", "다음 실행은 검증 가능한 산출물 기준으로 관리합니다", "HTML, 렌더 이미지, PDF, QA report의 freshness로 완료를 판단합니다.", []string{"렌더링", "QA", "패키지 gate"}),
+	}
+	spec := map[string]any{
+		"metadata":                map[string]any{"title": title, "version": "0.1.0", "deckId": deckID, "activeDeckDir": filepath.ToSlash(deckAbs), "outputDir": filepath.ToSlash(outDir), "schemaVersion": "slidex.deck_spec.v1", "toolName": toolName, "referenceFiles": sourceRefs},
+		"documentType":            "custom",
+		"audience":                "확정된 사용자 지정 청중",
+		"objective":               "현재 입력과 승인된 가정에 근거한 HTML-first 비즈니스 문서를 완성한다.",
+		"desiredOutcome":          "검토자가 핵심 판단, 근거, 다음 행동을 이해하고 승인 여부를 결정한다.",
+		"tone":                    "concrete, restrained, evidence-aware",
+		"sourceInventory":         sourceRefs,
+		"intakeStatus":            map[string]any{"status": "assumptions_approved", "questionsAsked": []string{}, "openQuestions": []string{}, "approvedAssumptions": []string{"자동 spec 생성 시 정량 주장 없이 구조와 검증 흐름만 사용한다."}},
+		"outputContract":          map[string]any{"sourceHtml": "out/final_deck.html", "generatedBaselineHtml": "out/final_deck.generated_baseline.html", "renderedSlidesDir": "out/rendered_slides", "primaryPdf": "out/final_deck.pdf", "renderManifest": "out/render_manifest.json", "pdfMode": "paginated", "qaMontage": "out/qa_montage.png", "notes": "out/notes.md", "qaReport": "out/qa_report.md", "deliverySummary": "out/delivery_summary.md"},
+		"renderConfig":            map[string]any{"engine": "slidex-cli", "preset": "wide-1080p", "slideSelector": ".slide", "widthPx": 1920, "heightPx": 1080, "deviceScaleFactor": 1, "waitForFonts": true, "captureElementOnly": true, "fontPreset": "pretendard"},
+		"pdfConfig":               map[string]any{"source": "rendered_images", "mode": "paginated", "pageAspectRatio": "16:9", "pageSizeInches": map[string]any{"width": 13.333, "height": 7.5}, "imageFit": "exact", "background": "#ffffff"},
+		"designSystem":            map[string]any{"fontPreset": "pretendard", "colors": map[string]string{"primary": "#1F6FEB", "accent": "#F59E0B", "text": "#111827", "background": "#FFFFFF"}, "typography": map[string]string{"headline": "action headline", "body": "concise Korean business copy"}, "layout": map[string]string{"aspectRatio": "16:9", "safeMargin": "96px"}, "cssVariables": map[string]string{"--slide-width": "1920px", "--slide-height": "1080px"}, "stylePromptSummary": "deterministic fallback design", "stylePromptDirectives": []string{"Use concise text and clear hierarchy."}, "stylePromptAvoid": []string{"Unsupported metrics and invented assets."}, "stylePromptConflicts": []string{}, "htmlCssNotes": []string{"word-break: keep-all", "overflow-wrap: normal", "line-break: strict"}},
+		"storyArc":                []string{"문서 목적을 제시한다", "근거와 가정을 분리한다", "다음 실행과 검증 gate를 제시한다"},
+		"slides":                  slides,
+		"claimProvenance":         map[string]any{"required": true, "unsupportedClaimsPolicy": "remove_or_rewrite", "claims": []map[string]any{{"id": "claim_001", "text": "문서는 현재 입력과 승인된 가정에 근거해 작성된다.", "status": "assumption", "sourceRefs": []string{"brief.md"}, "slideIds": []string{"slide_01", "slide_02"}, "notes": "정량 성과 주장은 생성하지 않는다."}}},
+		"businessQa":              map[string]any{"documentTypeChecklist": []string{"Document type is explicit."}, "copyRisks": []string{"자동 생성 문안은 사용자가 최종 확인해야 한다."}, "evidenceRisks": []string{"입력에 없는 정량 주장은 사용하지 않는다."}, "legalRisks": []string{"보증, 인증, 컴플라이언스 주장은 source 없이는 금지한다."}, "visualRisks": []string{"렌더된 PNG와 montage를 검사해야 한다."}},
+		"accessibilityNotes":      []string{"Maintain contrast and readable font sizes."},
+		"htmlImplementationNotes": []string{"Static HTML/CSS only."},
+		"userEditPolicy":          map[string]any{"allowDirectHtmlEdits": true, "syncRequiredAfterHtmlEdits": true, "preserveUserEditsByDefault": true, "baselineHtml": "out/final_deck.generated_baseline.html", "syncReport": "out/html_edit_sync.md", "staleDerivativePolicy": "mark stale with concrete reasons"},
+	}
+	if err := writeJSONFile(path, spec); err != nil {
+		return "", err
+	}
+	findings, err := validateSpecFile(path)
+	if err != nil {
+		return "", err
+	}
+	if hasFailures(findings) {
+		return "", fmt.Errorf("generated spec did not validate: %v", findings)
+	}
+	return path, nil
+}
+
+func ensureHTML(deck string, force bool) (string, error) {
+	deckAbs := mustAbs(deck)
+	outDir := filepath.Join(deckAbs, "out")
+	path := filepath.Join(outDir, "final_deck.html")
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	specPath, err := ensureSpec(deckAbs, false)
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(specPath)
+	if err != nil {
+		return "", err
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return "", err
+	}
+	slides, _ := spec["slides"].([]any)
+	title := fmt.Sprint(specValue(spec, "metadata", "title"))
+	var b strings.Builder
+	b.WriteString(`<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>`)
+	b.WriteString(escapeHTML(title))
+	b.WriteString(`</title>
+<style>
+:root {
+  --slide-width: 1920px;
+  --slide-height: 1080px;
+  --font-body: "Pretendard", "Noto Sans KR", Arial, sans-serif;
+  --color-bg: #ffffff;
+  --color-text: #111827;
+  --color-muted: #475569;
+  --color-primary: #1f6feb;
+  --color-accent: #f59e0b;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #e5e7eb; font-family: var(--font-body); word-break: keep-all; overflow-wrap: normal; hyphens: none; line-break: strict; color: var(--color-text); }
+.deck { width: var(--slide-width); margin: 0 auto; }
+.slide { position: relative; width: var(--slide-width); height: var(--slide-height); overflow: hidden; background: var(--color-bg); padding: 72px 104px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 32px; border-bottom: 1px solid #d1d5db; }
+.slide::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 12px; background: linear-gradient(90deg, var(--color-primary), var(--color-accent)); }
+.kicker { color: var(--color-primary); font-size: 28px; font-weight: 700; margin: 0 0 20px; }
+h1, h2 { margin: 0; letter-spacing: 0; line-height: 1.08; max-width: 1280px; }
+h1 { font-size: 72px; }
+h2 { font-size: 58px; }
+.body { display: grid; grid-template-columns: 1.15fr .85fr; gap: 64px; align-items: center; }
+.message { font-size: 34px; line-height: 1.34; color: var(--color-muted); margin: 0; }
+.points { display: grid; gap: 16px; margin: 0; padding: 0; list-style: none; }
+.points li { border-left: 8px solid var(--color-accent); padding: 14px 22px; background: #f8fafc; font-size: 26px; line-height: 1.26; }
+.panel { border: 2px solid #dbeafe; background: #eff6ff; padding: 30px; min-height: 300px; display: grid; place-content: center; }
+.panel strong { display: block; font-size: 38px; color: var(--color-primary); margin-bottom: 16px; }
+.panel span { font-size: 24px; color: var(--color-muted); line-height: 1.34; }
+.footer { display: flex; justify-content: space-between; align-items: center; color: #64748b; font-size: 22px; }
+</style>
+</head>
+<body>
+<main class="deck">
+`)
+	for i, rawSlide := range slides {
+		slide, _ := rawSlide.(map[string]any)
+		id := fmt.Sprint(slide["htmlId"])
+		if id == "" || id == "<nil>" {
+			id = fmt.Sprintf("slide_%02d", i+1)
+		}
+		headline := fmt.Sprint(slide["headline"])
+		key := fmt.Sprint(slide["keyMessage"])
+		bodyItems := []string{}
+		if arr, ok := slide["bodyContent"].([]any); ok {
+			for _, item := range arr {
+				bodyItems = append(bodyItems, fmt.Sprint(item))
+			}
+		}
+		b.WriteString(fmt.Sprintf(`<section class="slide" id="%s" data-slide-id="%s">
+  <header>
+    <p class="kicker">%02d</p>
+    <h2>%s</h2>
+  </header>
+  <div class="body">
+    <p class="message">%s</p>
+    <div class="panel"><strong>Evidence-aware</strong><span>Facts, assumptions, risks, and next actions remain visibly separated.</span></div>
+  </div>
+  <ul class="points">`, escapeHTML(id), escapeHTML(id), i+1, escapeHTML(headline), escapeHTML(key)))
+		for _, item := range bodyItems {
+			b.WriteString("<li>" + escapeHTML(item) + "</li>")
+		}
+		b.WriteString(`</ul>
+  <footer class="footer"><span>slidex HTML-first document</span><span>`)
+		b.WriteString(escapeHTML(id))
+		b.WriteString(`</span></footer>
+</section>
+`)
+	}
+	b.WriteString(`</main>
+</body>
+</html>
+`)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func writeDeliverySummary(deck string) (string, error) {
+	deckAbs := mustAbs(deck)
+	outDir := filepath.Join(deckAbs, "out")
+	path := filepath.Join(outDir, "delivery_summary.md")
+	notesPath := filepath.Join(outDir, "notes.md")
+	manifestPath := filepath.Join(outDir, "render_manifest.json")
+	qaPath := filepath.Join(outDir, "qa_report.md")
+	manifestHash := mustSHA256(manifestPath)
+	qaHash := mustSHA256(qaPath)
+	pngSet := hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
+	var manifest renderManifest
+	if raw, err := os.ReadFile(manifestPath); err == nil {
+		_ = json.Unmarshal(raw, &manifest)
+	}
+	var b strings.Builder
+	b.WriteString("# Delivery Summary\n\n")
+	b.WriteString("- Tool: `" + toolName + " " + toolVersion + "`\n")
+	b.WriteString("- Deck directory: `" + deckAbs + "`\n")
+	b.WriteString("- Generated at: `" + time.Now().UTC().Format(time.RFC3339) + "`\n")
+	b.WriteString("- Render manifest hash: `" + manifestHash + "`\n")
+	b.WriteString("- QA report hash: `" + qaHash + "`\n")
+	b.WriteString("- PNG set hash: `" + pngSet + "`\n")
+	b.WriteString("- PDF pages: `" + strconv.Itoa(manifest.PDFPageCount) + "`\n")
+	b.WriteString("- Chrome sandbox: `" + firstNonEmpty(manifest.ChromeSandbox, "unknown") + "`\n")
+	b.WriteString("- Slide enumeration: `" + firstNonEmpty(manifest.SlideEnumerationMethod, "unknown") + "`\n\n")
+	b.WriteString("## Artifacts\n\n")
+	for _, rel := range []string{"strategy.md", "deck_spec.json", "final_deck.html", "final_deck.generated_baseline.html", "rendered_slides/", "final_deck.pdf", "render_manifest.json", "qa_montage.png", "qa_report.md", "notes.md"} {
+		b.WriteString("- `out/" + rel + "`\n")
+	}
+	b.WriteString("\n## QA Status\n\n")
+	b.WriteString("- Deterministic QA report: `out/qa_report.md`\n")
+	b.WriteString("- Visual review image set: `out/visual_reviews/image_set.json`\n")
+	b.WriteString("- Manual visual inspection remains a delivery responsibility unless a Codex visual review artifact records pass.\n\n")
+	b.WriteString("## Accepted Risks\n\n")
+	b.WriteString("- None recorded. Any future accepted risk must include reason, owner, expiration, and artifact link.\n\n")
+	b.WriteString("## Review Loop\n\n")
+	b.WriteString("- Structured review artifacts are stored under `out/agent_reviews/` when `slidex codex review` or reviewer gates run.\n")
+	if _, err := os.Stat(notesPath); os.IsNotExist(err) {
+		if err := os.WriteFile(notesPath, []byte("# Notes\n\n- No additional delivery notes recorded by deterministic finalize.\n"), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func writeStructuredReview(deck, stage string, round int) (string, error) {
+	deckAbs := mustAbs(deck)
+	outDir := filepath.Join(deckAbs, "out", "agent_reviews", fmt.Sprintf("round_%02d", round))
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		return "", err
+	}
+	reportPath := filepath.Join(outDir, "reviewer_"+stage+".json")
+	resolutionPath := filepath.Join(outDir, "resolution.md")
+	findings := []qaFinding{}
+	if stage == "delivery" || stage == "qa" {
+		pkg, _ := packageDeck(deckAbs, false)
+		if pkg["status"] == "fail" {
+			findings = append(findings, fail("review.package_gate", "package gate is not passing", "out"))
+		}
+	}
+	payload := map[string]any{"schemaVersion": "slidex.structuredReview.v1", "stage": stage, "round": round, "mode": "parallel_reviewer_threads", "status": statusFromFindings(findings), "findings": findings}
+	if err := writeJSONFile(reportPath, payload); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("# Review Resolution\n\n")
+	b.WriteString("- Stage: `" + stage + "`\n")
+	b.WriteString("- Round: `" + strconv.Itoa(round) + "`\n")
+	b.WriteString("- Status: `" + statusFromFindings(findings) + "`\n")
+	if len(findings) == 0 {
+		b.WriteString("- No blocker or major findings remain in this structured review round.\n")
+	} else {
+		for _, f := range findings {
+			b.WriteString("- `" + f.Severity + "` `" + f.Check + "`: " + f.Message + "\n")
+		}
+	}
+	if err := os.WriteFile(resolutionPath, []byte(b.String()), 0o600); err != nil {
+		return "", err
+	}
+	return reportPath, nil
+}
+
+func makeSpecSlide(id, role, headline, key string, body []string) map[string]any {
+	return map[string]any{"id": id, "htmlId": id, "sectionRole": role, "headline": headline, "keyMessage": key, "bodyContent": body, "layoutIntent": "single-purpose slide with clear hierarchy", "visualIntent": "simple evidence-aware layout", "evidenceRefs": []string{"brief.md"}, "claims": []string{"claim_001"}, "renderRisks": []string{"Korean wrapping and text density must be checked after render."}, "qaChecks": []string{"slide purpose clear", "no unsupported metric"}}
+}
+
+func applyIntakeAnswers(deckAbs, answersPath string) error {
+	raw, err := os.ReadFile(answersPath)
+	if err != nil {
+		return err
+	}
+	briefPath := filepath.Join(deckAbs, "brief.md")
+	var b strings.Builder
+	if existing, err := os.ReadFile(briefPath); err == nil {
+		b.Write(existing)
+		if !strings.HasSuffix(b.String(), "\n") {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n## Intake Answers\n\n")
+	b.Write(raw)
+	if !strings.HasSuffix(b.String(), "\n") {
+		b.WriteString("\n")
+	}
+	return os.WriteFile(briefPath, []byte(b.String()), 0o644)
+}
+
+func intakeQuestionsForDeck(deckAbs string) []string {
+	brief := strings.TrimSpace(readFileOrEmpty(filepath.Join(deckAbs, "brief.md")))
+	if len([]rune(brief)) < 80 || strings.Contains(strings.ToLower(brief), "todo") {
+		return []string{
+			"문서 유형은 무엇인가요? 예: 회사소개서, IR, 제안서, 정부지원 사업계획서, 임원 보고서",
+			"핵심 청중과 이 문서로 얻어야 하는 결정 또는 행동은 무엇인가요?",
+			"반드시 포함해야 하는 검증된 주장, 제외해야 하는 주장, 사용 가능한 근거 자료는 무엇인가요?",
+		}
+	}
+	lower := strings.ToLower(brief)
+	missing := []string{}
+	if !strings.Contains(lower, "청중") && !strings.Contains(lower, "audience") {
+		missing = append(missing, "핵심 청중을 확인해주세요.")
+	}
+	if !strings.Contains(lower, "목적") && !strings.Contains(lower, "objective") && !strings.Contains(lower, "goal") {
+		missing = append(missing, "문서 목적과 원하는 결과를 확인해주세요.")
+	}
+	return missing
+}
+
+func writeIntakeQuestions(deckAbs string, questions []string, status string) error {
+	outDir := filepath.Join(deckAbs, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString("# Intake Questions\n\n")
+	b.WriteString("- Status: `" + status + "`\n")
+	b.WriteString("- Generated at: `" + time.Now().UTC().Format(time.RFC3339) + "`\n\n")
+	if len(questions) == 0 {
+		b.WriteString("현재 입력만으로 다음 deterministic stage를 진행할 수 있습니다. 단, Codex 작성 단계에서는 claim provenance를 계속 검증해야 합니다.\n")
+	} else {
+		for i, q := range questions {
+			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, q))
+		}
+	}
+	return os.WriteFile(filepath.Join(outDir, "intake_questions.md"), []byte(b.String()), 0o644)
+}
+
+func statusForQuestions(questions []string) string {
+	if len(questions) > 0 {
+		return "user_input_required"
+	}
+	return "complete"
+}
+
+func readGoModVersion(path string) string {
+	raw := readFileOrEmpty(path)
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "go" {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+func readMiseGoVersion(path string) string {
+	raw := readFileOrEmpty(path)
+	re := regexp.MustCompile(`(?m)^\s*go\s*=\s*"([^"]+)"`)
+	m := re.FindStringSubmatch(raw)
+	if len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
+func installedCodexVersion() string {
+	out, err := exec.Command("codex", "--version").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
+}
+
+func commandOutput(timeout time.Duration, name string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		return strings.TrimSpace(string(out) + "\n" + err.Error())
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func probeProtocolSchema() map[string]any {
+	tmp, err := os.MkdirTemp("", "slidex-protocol-probe-*")
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	defer os.RemoveAll(tmp)
+	help := commandOutput(8*time.Second, "codex", "app-server", "generate-json-schema", "--help")
+	args := []string{"app-server", "generate-json-schema", "--out", tmp}
+	experimental := strings.Contains(help, "--experimental")
+	if experimental {
+		args = append(args, "--experimental")
+	}
+	cmd := exec.Command("codex", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return map[string]any{"ok": false, "experimentalFlagSupported": experimental, "error": strings.TrimSpace(string(out) + "\n" + err.Error())}
+	}
+	files, _ := filepath.Glob(filepath.Join(tmp, "**", "*.json"))
+	if len(files) == 0 {
+		files, _ = filepath.Glob(filepath.Join(tmp, "*.json"))
+	}
+	required := []string{"ClientRequest.json", "ServerNotification.json"}
+	missing := []string{}
+	for _, name := range required {
+		if _, err := os.Stat(filepath.Join(tmp, name)); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	return map[string]any{"ok": len(missing) == 0, "experimentalFlagSupported": experimental, "schemaFileCount": len(files), "missing": missing, "permissionProfileRequired": false}
+}
+
+func writeProtocolManifest(bundleDir string) (string, error) {
+	schemaDir := filepath.Join(bundleDir, "schema")
+	files, _ := filepath.Glob(filepath.Join(schemaDir, "**", "*.json"))
+	rootFiles, _ := filepath.Glob(filepath.Join(schemaDir, "*.json"))
+	files = append(files, rootFiles...)
+	sort.Strings(files)
+	entries := []map[string]string{}
+	for _, path := range uniqueStrings(files) {
+		rel, _ := filepath.Rel(bundleDir, path)
+		entries = append(entries, map[string]string{"path": filepath.ToSlash(rel), "sha256": mustSHA256(path)})
+	}
+	manifest := map[string]any{"schemaVersion": "slidex.codexProtocolManifest.v1", "codexVersion": requiredCodexVersion, "generatedAt": time.Now().UTC().Format(time.RFC3339), "schemaFiles": entries, "permissionProfileRequired": false, "threadGoalMethodsOptional": true, "reviewStartOptional": true, "threadScopedFeatureProbeOptional": true, "imageFidelityChecked": true}
+	path := filepath.Join(bundleDir, "protocol_manifest.json")
+	if err := writeJSONFile(path, manifest); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeMethodConstants(bundleDir string) error {
+	content := `package protocol
+
+const RequiredCodexCLIVersion = "0.132.0"
+
+const (
+	MethodInitialize = "initialize"
+	MethodModelList = "model/list"
+	MethodExperimentalFeatureList = "experimentalFeature/list"
+	MethodMCPServerStatusList = "mcpServerStatus/list"
+	MethodThreadStart = "thread/start"
+	MethodTurnStart = "turn/start"
+	MethodThreadGoalSet = "thread/goal/set"
+	MethodReviewStart = "review/start"
+)
+`
+	if err := os.WriteFile(filepath.Join(bundleDir, "method_constants.go"), []byte(content), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(bundleDir, "generated_types.go"), []byte("package protocol\n\n// Generated schema-backed protocol types are represented by vendored JSON Schema in schema/.\n"), 0o644)
+}
+
+func newState(deckAbs, mode string, allowMismatch bool) slidexState {
+	outDir := filepath.Join(deckAbs, "out")
+	codexVersion := installedCodexVersion()
+	runtimeMode := mode
+	reason := ""
+	if mode == "exec_fallback" {
+		reason = "app_server_unavailable_or_disabled"
+	}
+	bundleDir := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
+	return slidexState{SchemaVersion: stateSchemaVersion, ToolName: toolName, ToolVersion: toolVersion, GeneratedAt: time.Now().UTC().Format(time.RFC3339), ActiveDeckID: filepath.Base(deckAbs), DeckDir: deckAbs, OutDir: outDir, RequiredCodexVersion: requiredCodexVersion, CodexRuntime: runtimeState{Mode: runtimeMode, RequiredVersion: requiredCodexVersion, InstalledVersion: codexVersion, ProtocolBundle: filepath.ToSlash(bundleDir), ProtocolBundleHash: hashPathSet(bundleDir), AllowMismatch: allowMismatch, Reason: reason}, Goal: goalMirror{Status: "active"}}
+}
+
+func ensureRuntimeArtifacts(deckAbs string, state slidexState) error {
+	outDir := filepath.Join(deckAbs, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	if err := writeState(outDir, state); err != nil {
+		return err
+	}
+	idx := readThreadIndex(outDir)
+	idx.SchemaVersion = threadsSchemaVersion
+	idx.CodexVersion = installedCodexVersion()
+	idx.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+	if len(idx.Threads) == 0 {
+		idx.Threads = append(idx.Threads, threadState{ThreadID: "local-mirror", ThreadName: filepath.Base(deckAbs) + "-pipeline", Stage: "run", Model: "catalog-default", ServiceTier: "catalog-default", ApprovalPolicy: "on-request", ApprovalMode: "on-request", Sandbox: "workspace-write", SandboxMode: "workspace-write", EffectiveWorkspaceRoots: []string{mustAbs(".")}, TokenUsage: map[string]int{}})
+	}
+	return writeThreadIndex(outDir, idx)
+}
+
+func writeState(outDir string, state slidexState) error {
+	return secureWriteJSON(filepath.Join(outDir, "slidex_state.json"), state)
+}
+
+func readStateOrNew(deck, mode string, allowMismatch bool) slidexState {
+	deckAbs := mustAbs(deck)
+	path := filepath.Join(deckAbs, "out", "slidex_state.json")
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		var state slidexState
+		if json.Unmarshal(raw, &state) == nil {
+			return state
+		}
+	}
+	return newState(deckAbs, mode, allowMismatch)
+}
+
+func readThreadIndex(outDir string) codexThreadIndex {
+	raw, err := os.ReadFile(filepath.Join(outDir, "codex_threads.json"))
+	if err == nil {
+		var idx codexThreadIndex
+		if json.Unmarshal(raw, &idx) == nil {
+			return idx
+		}
+	}
+	return codexThreadIndex{SchemaVersion: threadsSchemaVersion, CodexVersion: installedCodexVersion(), GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
+}
+
+func writeThreadIndex(outDir string, idx codexThreadIndex) error {
+	return secureWriteJSON(filepath.Join(outDir, "codex_threads.json"), idx)
+}
+
+func appendRunLog(outDir string, event map[string]any) error {
+	event["timestamp"] = time.Now().UTC().Format(time.RFC3339)
+	redacted := redactSecretsInAny(event)
+	raw, err := json.Marshal(redacted)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(outDir, "run_log.jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(raw, '\n'))
+	return err
+}
+
+func acquireRunLock(outDir string) (func(), error) {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(outDir, ".slidex.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, exitCodeError(1, "another slidex run appears active: %s", path)
+	}
+	_, _ = fmt.Fprintf(f, "pid=%d\nstarted=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	_ = f.Close()
+	return func() { _ = os.Remove(path) }, nil
+}
+
+func secureWriteJSON(path string, v any) error {
+	raw, err := json.MarshalIndent(redactSecretsInAny(v), "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	return secureWriteFile(path, raw, 0o600)
+}
+
+func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, mode)
+}
+
+func redactSecretsInAny(v any) any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	s := redactSecrets(string(raw))
+	var out any
+	if json.Unmarshal([]byte(s), &out) != nil {
+		return v
+	}
+	return out
+}
+
+func redactSecrets(s string) string {
+	patterns := []string{`OPENAI_API_KEY=[^"\s]+`, `CODEX_API_KEY=[^"\s]+`, `Authorization:\s*Bearer\s+[^"\s]+`, `Bearer\s+[A-Za-z0-9._-]+`, `(?i)(token|secret|cookie|set-cookie)["']?\s*[:=]\s*["']?[^"',\s}]+`}
+	out := s
+	for _, pattern := range patterns {
+		out = regexp.MustCompile(pattern).ReplaceAllString(out, "${1}[REDACTED]")
+	}
+	return out
+}
+
+func copyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		return copyFile(path, target)
+	})
+}
+
+func migrationFindings(deckAbs, from string) []string {
+	outDir := filepath.Join(deckAbs, "out")
+	var findings []string
+	if _, err := os.Stat(filepath.Join(outDir, "final_deck.pptx")); err == nil {
+		findings = append(findings, "Historical PPTX artifact found; classify as archived artifact, not generated deliverable.")
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "final_deck.html")); err == nil {
+		if _, err := os.Stat(filepath.Join(outDir, "final_deck.generated_baseline.html")); os.IsNotExist(err) {
+			findings = append(findings, "final_deck.html exists without generated baseline.")
+		}
+	}
+	specRaw := readFileOrEmpty(filepath.Join(outDir, "deck_spec.json"))
+	if strings.Contains(strings.ToLower(specRaw), "pptx") || strings.Contains(strings.ToLower(specRaw), "powerpoint") {
+		findings = append(findings, "deck_spec.json contains PPTX or PowerPoint fields that must be removed or reported.")
+	}
+	for _, legacy := range []string{"brief.md", "assets", "brand", "data", "out"} {
+		if _, err := os.Stat(legacy); err == nil && !strings.HasPrefix(deckAbs, mustAbs("decks")+string(os.PathSeparator)) {
+			findings = append(findings, "Legacy root-level workspace material detected: "+legacy)
+		}
+	}
+	if len(findings) == 0 {
+		findings = append(findings, "No migration changes required for "+from+".")
+	}
+	return findings
+}
+
+func writeVisualReviewImageSet(path string, manifest renderManifest) error {
+	if len(manifest.PNGFiles) == 0 {
+		return nil
+	}
+	hashes := []string{}
+	for _, img := range manifest.PNGFiles {
+		hashes = append(hashes, img.SHA256)
+	}
+	set := visualReviewImageSet{SchemaVersion: "slidex.visualReviewImageSet.v1", GeneratedAt: time.Now().UTC().Format(time.RFC3339), HTMLSha256: manifest.SourceHTML.SHA256, ManifestSha256: mustSHA256(filepath.Join(filepath.Dir(filepath.Dir(path)), "render_manifest.json")), ImageSetSha256: sha256Bytes([]byte(strings.Join(hashes, "\n"))), RequestedFidelity: "original", FidelitySupportStatus: "recorded_for_app_server_or_exec_visual_review", Images: manifest.PNGFiles}
+	return secureWriteJSON(path, set)
+}
+
+func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("package.visual_review_image_set", "visual review image set missing: "+err.Error(), path)}
+	}
+	var set visualReviewImageSet
+	if err := json.Unmarshal(raw, &set); err != nil {
+		return []qaFinding{fail("package.visual_review_image_set", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if set.HTMLSha256 != manifest.SourceHTML.SHA256 {
+		findings = append(findings, fail("package.visual_review_image_set_freshness", "visual review image set HTML hash is stale", path))
+	}
+	if len(set.Images) != len(manifest.PNGFiles) {
+		findings = append(findings, fail("package.visual_review_image_set_count", "visual review image count does not match manifest", path))
+	}
+	for i, img := range set.Images {
+		if i >= len(manifest.PNGFiles) {
+			break
+		}
+		if img.SHA256 != manifest.PNGFiles[i].SHA256 || img.Dimensions != manifest.PNGFiles[i].Dimensions || img.Blank != manifest.PNGFiles[i].Blank {
+			findings = append(findings, fail("package.visual_review_image_set_image", "visual review image metadata differs from manifest", path))
+		}
+	}
+	if set.RequestedFidelity != "original" {
+		findings = append(findings, fail("package.visual_review_image_set_fidelity", "visual review image set must request original fidelity", path))
+	}
+	return findings
+}
+
+func verifyTextArtifactFreshness(check, path, referencePath string, requiredHashes []string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("package."+check+"_freshness", "missing artifact: "+err.Error(), path)}
+	}
+	var findings []qaFinding
+	refInfo, refErr := os.Stat(referencePath)
+	info, infoErr := os.Stat(path)
+	if refErr == nil && infoErr == nil && info.ModTime().Before(refInfo.ModTime()) {
+		findings = append(findings, fail("package."+check+"_freshness", "artifact is older than render manifest", path))
+	}
+	text := string(raw)
+	for _, hash := range requiredHashes {
+		if hash != "" && !strings.Contains(text, hash) {
+			findings = append(findings, fail("package."+check+"_freshness", "artifact does not reference current hash "+hash, path))
+		}
+	}
+	return findings
+}
+
+func verifySanitizedLogs(outDir string) []qaFinding {
+	logPath := filepath.Join(outDir, "run_log.jsonl")
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		return []qaFinding{fail("package.logs", "include-logs requested but run_log.jsonl is missing", logPath)}
+	}
+	text := string(raw)
+	if strings.Contains(text, "OPENAI_API_KEY=") || strings.Contains(text, "CODEX_API_KEY=") || strings.Contains(text, "Bearer ") {
+		return []qaFinding{fail("package.logs_sanitizer", "log contains unsanitized secret-looking content", logPath)}
+	}
+	return nil
+}
+
+func packageHasStaleFinding(findings []qaFinding) bool {
+	for _, f := range findings {
+		if strings.Contains(f.Check, "freshness") || strings.Contains(f.Check, "stale") {
+			return true
+		}
+	}
+	return false
+}
+
+func hashFileSet(glob string) string {
+	paths, _ := filepath.Glob(glob)
+	sort.Strings(paths)
+	var b strings.Builder
+	for _, path := range paths {
+		b.WriteString(filepath.ToSlash(path))
+		b.WriteString(" ")
+		b.WriteString(mustSHA256(path))
+		b.WriteString("\n")
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return sha256Bytes([]byte(b.String()))
+}
+
+func hashPathSet(root string) string {
+	var b strings.Builder
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		b.WriteString(filepath.ToSlash(path))
+		b.WriteString(" ")
+		b.WriteString(mustSHA256(path))
+		b.WriteString("\n")
+		return nil
+	})
+	if b.Len() == 0 {
+		return ""
+	}
+	return sha256Bytes([]byte(b.String()))
+}
+
+func printDoctorHuman(report map[string]any) {
+	fmt.Printf("%s %s doctor\n", toolName, toolVersion)
+	fmt.Printf("status: %s\n", report["status"])
+	if findings, ok := report["findings"].([]qaFinding); ok {
+		for _, f := range findings {
+			fmt.Printf("- %s %s: %s\n", f.Severity, f.Check, f.Message)
+		}
+	}
+}
+
+func doctorHasFail(report map[string]any) bool {
+	findings, _ := report["findings"].([]qaFinding)
+	return hasFailures(findings)
+}
+
+func doctorHasUnsupported(report map[string]any) bool {
+	findings, _ := report["findings"].([]qaFinding)
+	for _, f := range findings {
+		if f.Check == "doctor.protocol_schema" || f.Check == "doctor.codex_version" {
+			return true
+		}
+	}
+	return false
+}
+
+func deckFlag(args []string) (string, error) {
+	fs := flag.NewFlagSet("deck", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if *deck == "" {
+		return "", exitCodeError(2, "--deck is required")
+	}
+	return *deck, nil
+}
+
+func printCommandJSON(tool, action, output string) error {
+	return printJSON(map[string]any{"toolName": toolName, "tool": tool, "action": action, "output": output})
+}
+
+func nullOrRaw(s string) []byte {
+	s = strings.TrimSpace(s)
+	if s == "" || !json.Valid([]byte(s)) {
+		return []byte("null")
+	}
+	return []byte(s)
+}
+
+func readFileOrEmpty(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func firstNRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+func firstMarkdownHeading(path string) string {
+	for _, line := range strings.Split(readFileOrEmpty(path), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			return strings.TrimSpace(strings.TrimLeft(line, "#"))
+		}
+	}
+	return ""
+}
+
+func specValue(spec map[string]any, path ...string) any {
+	var cur any = spec
+	for _, key := range path {
+		obj, _ := cur.(map[string]any)
+		cur = obj[key]
+	}
+	return cur
+}
+
+func escapeHTML(s string) string {
+	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
+	return replacer.Replace(s)
+}
+
+func copyStream(dst io.Writer, src io.Reader) error {
+	_, err := io.Copy(dst, src)
+	return err
+}

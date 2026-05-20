@@ -25,6 +25,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const (
@@ -90,30 +92,34 @@ type renderedImage struct {
 }
 
 type renderManifest struct {
-	ToolName            string          `json:"toolName"`
-	Version             string          `json:"version"`
-	RenderTimestamp     string          `json:"renderTimestamp"`
-	SourceHTML          artifact        `json:"sourceHtml"`
-	Stylesheets         []dependency    `json:"stylesheets"`
-	Assets              []dependency    `json:"assets"`
-	Fonts               []dependency    `json:"fonts"`
-	FontPreset          string          `json:"fontPreset"`
-	SlideSelector       string          `json:"slideSelector"`
-	OrderedSlideIDs     []string        `json:"orderedSlideIds"`
-	ExpectedDimensions  dimension       `json:"expectedDimensions"`
-	ActualDimensions    []dimension     `json:"actualSlideImageDimensions"`
-	PNGFiles            []renderedImage `json:"pngFiles"`
-	PDF                 artifact        `json:"pdf"`
-	PDFMode             string          `json:"pdfMode"`
-	PDFPageCount        int             `json:"pdfPageCount"`
-	PDFPageSizePoints   dimension       `json:"pdfPageSizePoints"`
-	PDFImageFit         string          `json:"pdfImageFit"`
-	QAMontage           artifact        `json:"qaMontage"`
-	QAMontageDimensions dimension       `json:"qaMontageDimensions"`
-	ChromeVersion       string          `json:"chromeVersion"`
-	OperatingSystem     string          `json:"operatingSystem"`
-	RenderMethod        string          `json:"renderMethod"`
-	Warnings            []string        `json:"unresolvedRenderWarnings,omitempty"`
+	ToolName               string          `json:"toolName"`
+	Version                string          `json:"version"`
+	RenderTimestamp        string          `json:"renderTimestamp"`
+	SourceHTML             artifact        `json:"sourceHtml"`
+	Stylesheets            []dependency    `json:"stylesheets"`
+	Assets                 []dependency    `json:"assets"`
+	Fonts                  []dependency    `json:"fonts"`
+	FontPreset             string          `json:"fontPreset"`
+	SlideSelector          string          `json:"slideSelector"`
+	OrderedSlideIDs        []string        `json:"orderedSlideIds"`
+	ExpectedDimensions     dimension       `json:"expectedDimensions"`
+	ActualDimensions       []dimension     `json:"actualSlideImageDimensions"`
+	PNGFiles               []renderedImage `json:"pngFiles"`
+	PDF                    artifact        `json:"pdf"`
+	PDFMode                string          `json:"pdfMode"`
+	PDFPageCount           int             `json:"pdfPageCount"`
+	PDFPageSizePoints      dimension       `json:"pdfPageSizePoints"`
+	PDFImageFit            string          `json:"pdfImageFit"`
+	QAMontage              artifact        `json:"qaMontage"`
+	QAMontageDimensions    dimension       `json:"qaMontageDimensions"`
+	ChromeVersion          string          `json:"chromeVersion"`
+	ChromeSandbox          string          `json:"chromeSandbox"`
+	ChromeNoSandboxReason  string          `json:"chromeNoSandboxReason,omitempty"`
+	OperatingSystem        string          `json:"operatingSystem"`
+	RenderMethod           string          `json:"renderMethod"`
+	SlideEnumerationMethod string          `json:"slideEnumerationMethod"`
+	RepoRelativePaths      bool            `json:"repoRelativePaths"`
+	Warnings               []string        `json:"unresolvedRenderWarnings,omitempty"`
 }
 
 type qaFinding struct {
@@ -144,29 +150,62 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "init":
+		err = runInit(os.Args[2:])
+	case "doctor":
+		err = runDoctor(os.Args[2:])
 	case "inspect":
 		err = runInspect(os.Args[2:])
+	case "intake":
+		err = runIntake(os.Args[2:])
+	case "strategy":
+		err = runStrategy(os.Args[2:])
+	case "spec":
+		err = runSpec(os.Args[2:])
+	case "build":
+		err = runBuild(os.Args[2:])
 	case "validate-spec":
 		err = runValidateSpec(os.Args[2:])
 	case "render":
 		err = runRender(os.Args[2:])
 	case "qa":
 		err = runQA(os.Args[2:])
+	case "revise":
+		err = runRevise(os.Args[2:])
 	case "sync-html-edits":
 		err = runSyncHTMLEdits(os.Args[2:])
+	case "finalize":
+		err = runFinalize(os.Args[2:])
 	case "package":
 		err = runPackage(os.Args[2:])
+	case "clean":
+		err = runClean(os.Args[2:])
+	case "run":
+		err = runPipeline(os.Args[2:])
+	case "codex":
+		err = runCodex(os.Args[2:])
+	case "goal":
+		err = runGoal(os.Args[2:])
+	case "mcp-server":
+		err = runMCPServer(os.Args[2:])
+	case "migrate":
+		err = runMigrate(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("%s %s\n", toolName, toolVersion)
 		return
 	default:
 		usage()
-		err = fmt.Errorf("unknown command: %s", os.Args[1])
+		err = exitCodeError(2, "unknown command: %s", os.Args[1])
 	}
 
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		code := 1
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			code = coded.ExitCode()
+		}
+		os.Exit(code)
 	}
 }
 
@@ -174,12 +213,27 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `%s %s
 
 Commands:
+  init <deck_id>
+  doctor [--deck decks/<deck_id>] [--codex] [--render] [--json]
   inspect --deck decks/<deck_id>
+  intake --deck decks/<deck_id> [--interactive|--answers FILE]
+  strategy --deck decks/<deck_id>
+  spec --deck decks/<deck_id>
+  build --deck decks/<deck_id>
   validate-spec --spec decks/<deck_id>/out/deck_spec.json
+  render --deck decks/<deck_id>
   render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
   qa --deck decks/<deck_id>
+  revise --deck decks/<deck_id>
   sync-html-edits --deck decks/<deck_id>
+  finalize --deck decks/<deck_id>
   package --deck decks/<deck_id>
+  clean --deck decks/<deck_id> [--logs] [--older-than DURATION]
+  run --deck decks/<deck_id> [--until package|qa|render] [--non-interactive]
+  codex doctor|app-server|schema|models|features|mcp|plugins|threads|review|remote-control
+  goal set|status|pause|resume|complete|clear --deck decks/<deck_id>
+  mcp-server --stdio
+  migrate --deck decks/<deck_id> [--from legacy-html-pdf|pptx-first] [--write]
 `, toolName, toolVersion)
 }
 
@@ -383,7 +437,7 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 	if schema, err := loadSpecSchema(); err != nil {
 		findings = append(findings, qaFinding{Severity: "warn", Check: "schema.load", Message: "could not load schemas/deck_spec.schema.json for full schema validation: " + err.Error(), Path: path})
 	} else {
-		findings = append(findings, validateJSONSchema(spec, schema, schema, "$", path)...)
+		findings = append(findings, validateWithFullJSONSchema(raw, schema, path)...)
 	}
 	required := []string{
 		"metadata", "documentType", "audience", "objective", "desiredOutcome", "tone",
@@ -481,6 +535,26 @@ func loadSpecSchema() (map[string]any, error) {
 		}
 	}
 	return nil, errors.New("schemas/deck_spec.schema.json not found from current working directory")
+}
+
+func validateWithFullJSONSchema(instanceRaw []byte, schema map[string]any, sourcePath string) []qaFinding {
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(instanceRaw))
+	if err != nil {
+		return []qaFinding{fail("schema.full_json_schema", "could not decode instance for full JSON Schema validation: "+err.Error(), sourcePath)}
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("deck_spec.schema.json", schema); err != nil {
+		return []qaFinding{fail("schema.full_json_schema", "could not load schema resource: "+err.Error(), sourcePath)}
+	}
+	compiled, err := compiler.Compile("deck_spec.schema.json")
+	if err != nil {
+		return []qaFinding{fail("schema.full_json_schema", "could not compile schema: "+err.Error(), sourcePath)}
+	}
+	if err := compiled.Validate(instance); err != nil {
+		return []qaFinding{fail("schema.full_json_schema", err.Error(), sourcePath)}
+	}
+	return nil
 }
 
 func validateJSONSchema(value any, schema map[string]any, root map[string]any, path string, sourcePath string) []qaFinding {
@@ -675,6 +749,7 @@ func findForbiddenKeys(v any, prefix string) []string {
 
 func runRender(args []string) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
 	htmlPath := fs.String("html", "", "source HTML path")
 	outDir := fs.String("out", "", "rendered slide output directory")
 	pdfPath := fs.String("pdf", "", "PDF output path")
@@ -685,10 +760,24 @@ func runRender(args []string) error {
 	height := fs.Int("height", 1080, "render height")
 	fontPreset := fs.String("font-preset", "pretendard", "font preset")
 	chromePath := fs.String("chrome", "", "Chrome/Chromium binary")
+	chromeNoSandbox := fs.Bool("chrome-no-sandbox", false, "run Chrome with --no-sandbox and record the risk")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := renderConfigFromFlags(*htmlPath, *outDir, *pdfPath, *manifestPath, *pdfMode, *selector, *width, *height, *fontPreset, *chromePath)
+	if *deck != "" && *htmlPath == "" {
+		out := filepath.Join(mustAbs(*deck), "out")
+		*htmlPath = filepath.Join(out, "final_deck.html")
+		if *outDir == "" {
+			*outDir = filepath.Join(out, "rendered_slides")
+		}
+		if *pdfPath == "" {
+			*pdfPath = filepath.Join(out, "final_deck.pdf")
+		}
+		if *manifestPath == "" {
+			*manifestPath = filepath.Join(out, "render_manifest.json")
+		}
+	}
+	cfg, err := renderConfigFromFlags(*htmlPath, *outDir, *pdfPath, *manifestPath, *pdfMode, *selector, *width, *height, *fontPreset, *chromePath, *chromeNoSandbox)
 	if err != nil {
 		return err
 	}
@@ -700,22 +789,23 @@ func runRender(args []string) error {
 }
 
 type renderConfig struct {
-	HTMLPath     string
-	OutDir       string
-	PDFPath      string
-	ManifestPath string
-	MontagePath  string
-	PDFMode      string
-	Selector     string
-	Width        int
-	Height       int
-	FontPreset   string
-	ChromePath   string
+	HTMLPath        string
+	OutDir          string
+	PDFPath         string
+	ManifestPath    string
+	MontagePath     string
+	PDFMode         string
+	Selector        string
+	Width           int
+	Height          int
+	FontPreset      string
+	ChromePath      string
+	ChromeNoSandbox bool
 }
 
-func renderConfigFromFlags(htmlPath, outDir, pdfPath, manifestPath, pdfMode, selector string, width, height int, fontPreset, chromePath string) (renderConfig, error) {
+func renderConfigFromFlags(htmlPath, outDir, pdfPath, manifestPath, pdfMode, selector string, width, height int, fontPreset, chromePath string, chromeNoSandbox bool) (renderConfig, error) {
 	if htmlPath == "" {
-		return renderConfig{}, errors.New("--html is required")
+		return renderConfig{}, errors.New("--html or --deck is required")
 	}
 	if pdfMode != "paginated" {
 		return renderConfig{}, errors.New("--pdf-mode must be paginated")
@@ -738,17 +828,18 @@ func renderConfigFromFlags(htmlPath, outDir, pdfPath, manifestPath, pdfMode, sel
 		manifestPath = filepath.Join(htmlDir, "render_manifest.json")
 	}
 	return renderConfig{
-		HTMLPath:     htmlAbs,
-		OutDir:       mustAbs(outDir),
-		PDFPath:      mustAbs(pdfPath),
-		ManifestPath: mustAbs(manifestPath),
-		MontagePath:  filepath.Join(filepath.Dir(mustAbs(manifestPath)), "qa_montage.png"),
-		PDFMode:      pdfMode,
-		Selector:     selector,
-		Width:        width,
-		Height:       height,
-		FontPreset:   fontPreset,
-		ChromePath:   chromePath,
+		HTMLPath:        htmlAbs,
+		OutDir:          mustAbs(outDir),
+		PDFPath:         mustAbs(pdfPath),
+		ManifestPath:    mustAbs(manifestPath),
+		MontagePath:     filepath.Join(filepath.Dir(mustAbs(manifestPath)), "qa_montage.png"),
+		PDFMode:         pdfMode,
+		Selector:        selector,
+		Width:           width,
+		Height:          height,
+		FontPreset:      fontPreset,
+		ChromePath:      chromePath,
+		ChromeNoSandbox: chromeNoSandbox,
 	}, nil
 }
 
@@ -757,16 +848,24 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err != nil {
 		return renderManifest{}, err
 	}
-	if cfg.Selector != ".slide" {
-		return renderManifest{}, errors.New("only .slide selector is currently supported")
-	}
-	slides := extractSlides(string(raw))
-	if len(slides) == 0 {
-		return renderManifest{}, errors.New("no .slide elements found in HTML")
-	}
 	chromePath, err := resolveChrome(cfg.ChromePath)
 	if err != nil {
 		return renderManifest{}, err
+	}
+	if cfg.Selector != ".slide" {
+		return renderManifest{}, errors.New("only .slide selector is currently supported")
+	}
+	slides, enumMethod, enumErr := extractSlidesWithChrome(chromePath, cfg.HTMLPath, cfg.Selector, cfg.ChromeNoSandbox)
+	if enumErr != nil || len(slides) == 0 {
+		parserSlides := extractSlides(string(raw))
+		if len(parserSlides) == 0 {
+			if enumErr != nil {
+				return renderManifest{}, fmt.Errorf("no .slide elements found in HTML; chrome DOM enumeration failed: %w", enumErr)
+			}
+			return renderManifest{}, errors.New("no .slide elements found in HTML")
+		}
+		slides = parserSlides
+		enumMethod = "go-html-parser-fallback"
 	}
 	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
 		return renderManifest{}, err
@@ -795,7 +894,16 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	manifest.PDFImageFit = "exact"
 	manifest.OperatingSystem = runtime.GOOS + "/" + runtime.GOARCH
 	manifest.ChromeVersion = chromeVersion(chromePath)
-	manifest.RenderMethod = "headless Chrome element-isolated wrapper screenshots, then PNG-to-PDF assembly"
+	if cfg.ChromeNoSandbox {
+		manifest.ChromeSandbox = "disabled"
+		manifest.ChromeNoSandboxReason = "explicit --chrome-no-sandbox flag"
+		manifest.Warnings = append(manifest.Warnings, "Chrome sandbox disabled by explicit flag; use only in root/container CI fallback contexts.")
+	} else {
+		manifest.ChromeSandbox = "enabled"
+	}
+	manifest.RenderMethod = "headless Chrome DOM enumeration and element-isolated wrapper screenshots, then PNG-to-PDF assembly"
+	manifest.SlideEnumerationMethod = enumMethod
+	manifest.RepoRelativePaths = true
 
 	for i, slide := range slides {
 		if slide.ID == "" {
@@ -808,7 +916,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o644); err != nil {
 			return manifest, err
 		}
-		overflowIssues, err := checkOverflowWithChrome(chromePath, wrapperPath)
+		overflowIssues, err := checkOverflowWithChrome(chromePath, wrapperPath, cfg.ChromeNoSandbox)
 		if err != nil {
 			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("overflow check could not run for %s: %v", slide.ID, err))
 		}
@@ -816,7 +924,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 			return manifest, fmt.Errorf("visible clipping or overflow risk on %s: %s", slide.ID, strings.Join(overflowIssues, "; "))
 		}
 		pngPath := filepath.Join(cfg.OutDir, fmt.Sprintf("slide_%02d.png", i+1))
-		if err := captureScreenshot(chromePath, wrapperPath, pngPath, cfg.Width, cfg.Height); err != nil {
+		if err := captureScreenshot(chromePath, wrapperPath, pngPath, cfg.Width, cfg.Height, cfg.ChromeNoSandbox); err != nil {
 			return manifest, err
 		}
 		dim, blank, err := validatePNG(pngPath, cfg.Width, cfg.Height)
@@ -862,6 +970,13 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 }
 
 func extractSlides(src string) []slideInfo {
+	if slides := extractSlidesHTMLParser(src); len(slides) > 0 {
+		return slides
+	}
+	return extractSlidesRegex(src)
+}
+
+func extractSlidesRegex(src string) []slideInfo {
 	re := regexp.MustCompile(`(?is)<section\b([^>]*)>(.*?)</section>`)
 	var slides []slideInfo
 	matches := re.FindAllStringSubmatchIndex(src, -1)
@@ -1043,18 +1158,20 @@ func chromeVersion(chromePath string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int) error {
+func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, chromeNoSandbox bool) error {
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(htmlPath)}
 	args := []string{
 		"--headless=new",
 		"--disable-gpu",
-		"--no-sandbox",
 		"--hide-scrollbars",
 		fmt.Sprintf("--window-size=%d,%d", width, height),
 		"--force-device-scale-factor=1",
 		"--virtual-time-budget=3000",
 		"--screenshot=" + pngPath,
 		u.String(),
+	}
+	if chromeNoSandbox {
+		args = append([]string{"--no-sandbox"}, args...)
 	}
 	cmd := exec.Command(chromePath, args...)
 	out, err := cmd.CombinedOutput()
@@ -1067,17 +1184,20 @@ func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int) 
 	return nil
 }
 
-func checkOverflowWithChrome(chromePath, htmlPath string) ([]string, error) {
+func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) ([]string, error) {
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(htmlPath)}
-	cmd := exec.Command(chromePath,
+	args := []string{
 		"--headless=new",
 		"--disable-gpu",
-		"--no-sandbox",
 		"--hide-scrollbars",
 		"--virtual-time-budget=3000",
 		"--dump-dom",
 		u.String(),
-	)
+	}
+	if chromeNoSandbox {
+		args = append([]string{"--no-sandbox"}, args...)
+	}
+	cmd := exec.Command(chromePath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
@@ -1616,6 +1736,14 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 			if manifest.FontPreset == "" {
 				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "font.preset", Message: "render manifest does not record a font preset", Path: manifestPath})
 			}
+			if manifest.ChromeSandbox == "disabled" {
+				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "runtime.chrome_sandbox", Message: "Chrome ran with --no-sandbox: " + manifest.ChromeNoSandboxReason, Path: manifestPath})
+			} else if manifest.ChromeSandbox == "" {
+				result.Findings = append(result.Findings, fail("runtime.chrome_sandbox", "render manifest must record chromeSandbox", manifestPath))
+			}
+			if manifest.SlideEnumerationMethod == "" {
+				result.Findings = append(result.Findings, fail("render.slide_enumeration", "render manifest must record slide enumeration method", manifestPath))
+			}
 			result.Findings = append(result.Findings, dependencyPinFindings("manifest.stylesheet_pin", manifest.Stylesheets, manifestPath)...)
 			result.Findings = append(result.Findings, dependencyPinFindings("manifest.asset_pin", manifest.Assets, manifestPath)...)
 			result.Findings = append(result.Findings, dependencyPinFindings("manifest.font_pin", manifest.Fonts, manifestPath)...)
@@ -1649,6 +1777,10 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 	} else {
 		result.Status = "pass"
 	}
+	if err := writeVisualReviewImageSet(filepath.Join(outDir, "visual_reviews", "image_set.json"), manifest); err != nil {
+		result.Findings = append(result.Findings, fail("visual_review.image_set", err.Error(), filepath.Join(outDir, "visual_reviews", "image_set.json")))
+		result.Status = "fail"
+	}
 	if writeReport {
 		reportPath := filepath.Join(outDir, "qa_report.md")
 		if err := writeQAReport(reportPath, result); err != nil {
@@ -1666,7 +1798,21 @@ func localDependencies(htmlPath, src string) []dependency {
 
 func writeQAReport(path string, result qaResult) error {
 	var b strings.Builder
+	outDir := filepath.Dir(path)
+	htmlPath := filepath.Join(outDir, "final_deck.html")
+	manifestPath := filepath.Join(outDir, "render_manifest.json")
+	pngSetHash := hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
 	b.WriteString("# QA Report\n\n")
+	b.WriteString("```yaml\n")
+	b.WriteString("slidexQaReport:\n")
+	b.WriteString("  schemaVersion: slidex.qaReport.v1\n")
+	b.WriteString("  generatedAt: " + time.Now().UTC().Format(time.RFC3339) + "\n")
+	b.WriteString("  htmlSha256: " + firstNonEmpty(mustSHA256(htmlPath), "missing") + "\n")
+	b.WriteString("  renderManifestSha256: " + firstNonEmpty(mustSHA256(manifestPath), "missing") + "\n")
+	b.WriteString("  pngSetSha256: " + firstNonEmpty(pngSetHash, "missing") + "\n")
+	b.WriteString("  deterministicStatus: " + result.Status + "\n")
+	b.WriteString("  visualStatus: pending\n")
+	b.WriteString("```\n\n")
 	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", result.ToolName, result.Version))
 	b.WriteString(fmt.Sprintf("- Deck directory: `%s`\n", result.DeckDir))
 	b.WriteString(fmt.Sprintf("- Overall status: %s\n", result.Status))
@@ -1845,7 +1991,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	var renderErr string
 	var qaErr string
 	if changeDetected {
-		cfg, err := renderConfigFromFlags(htmlPath, filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", width, height, fontPreset, chromePath)
+		cfg, err := renderConfigFromFlags(htmlPath, filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", width, height, fontPreset, chromePath, false)
 		if err != nil {
 			renderStatus = "failed"
 			renderErr = err.Error()
@@ -2276,13 +2422,14 @@ func appendSyncFindingsToQAReport(path string, stale []string, accepted []string
 func runPackage(args []string) error {
 	fs := flag.NewFlagSet("package", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
+	includeLogs := fs.Bool("include-logs", false, "include only sanitized log excerpts in package verification")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *deck == "" {
 		return errors.New("--deck is required")
 	}
-	result, err := packageDeck(*deck)
+	result, err := packageDeck(*deck, *includeLogs)
 	if err != nil {
 		return err
 	}
@@ -2290,12 +2437,15 @@ func runPackage(args []string) error {
 		return err
 	}
 	if status, _ := result["status"].(string); status == "fail" {
+		if findings, ok := result["findings"].([]qaFinding); ok && packageHasStaleFinding(findings) {
+			return exitCodeError(5, "package verification failed: stale artifacts")
+		}
 		return errors.New("package verification failed")
 	}
 	return nil
 }
 
-func packageDeck(deck string) (map[string]any, error) {
+func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	deckAbs := mustAbs(deck)
 	outDir := filepath.Join(deckAbs, "out")
 	required := []string{
@@ -2324,6 +2474,9 @@ func packageDeck(deck string) (map[string]any, error) {
 	}
 	manifestPath := filepath.Join(outDir, "render_manifest.json")
 	htmlPath := filepath.Join(outDir, "final_deck.html")
+	qaReportPath := filepath.Join(outDir, "qa_report.md")
+	deliverySummaryPath := filepath.Join(outDir, "delivery_summary.md")
+	visualImageSetPath := filepath.Join(outDir, "visual_reviews", "image_set.json")
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		var manifest renderManifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -2375,7 +2528,25 @@ func packageDeck(deck string) (map[string]any, error) {
 			} else if hash != manifest.QAMontage.SHA256 {
 				findings = append(findings, fail("package.montage_hash", "QA montage hash does not match manifest", manifest.QAMontage.Path))
 			}
+			if manifest.ChromeSandbox == "disabled" {
+				findings = append(findings, qaFinding{Severity: "warn", Check: "package.chrome_sandbox", Message: "Chrome sandbox was disabled: " + manifest.ChromeNoSandboxReason, Path: manifestPath})
+			} else if manifest.ChromeSandbox == "" {
+				findings = append(findings, fail("package.chrome_sandbox", "manifest must record Chrome sandbox status", manifestPath))
+			}
+			if manifest.SlideEnumerationMethod == "" {
+				findings = append(findings, fail("package.slide_enumeration", "manifest must record slide enumeration method", manifestPath))
+			}
+			if reportFindings := verifyTextArtifactFreshness("qa_report", qaReportPath, manifestPath, []string{manifest.SourceHTML.SHA256, mustSHA256(manifestPath), hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))}); len(reportFindings) > 0 {
+				findings = append(findings, reportFindings...)
+			}
+			if summaryFindings := verifyTextArtifactFreshness("delivery_summary", deliverySummaryPath, manifestPath, []string{mustSHA256(manifestPath)}); len(summaryFindings) > 0 {
+				findings = append(findings, summaryFindings...)
+			}
+			findings = append(findings, verifyVisualReviewImageSet(visualImageSetPath, manifest)...)
 		}
+	}
+	if includeLogs {
+		findings = append(findings, verifySanitizedLogs(outDir)...)
 	}
 	status := statusFromFindings(findings)
 	return map[string]any{
@@ -2401,7 +2572,7 @@ func verifyManifestDependencies(kind string, manifestDeps []dependency, currentD
 				findings = append(findings, fail("package."+kind+"_dependency", "dependency hash does not match manifest", dep.Path))
 			}
 		}
-		if dep.Path == "" && dep.URL == "" && dep.Kind != "inline_css" {
+		if dep.Path == "" && dep.URL == "" && dep.Kind != "inline_css" && dep.Kind != "font_preset" {
 			findings = append(findings, qaFinding{Severity: "warn", Check: "package." + kind + "_dependency", Message: "dependency has no path or URL", Path: manifestPath})
 		}
 	}
