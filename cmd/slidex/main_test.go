@@ -98,6 +98,9 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 		t.Fatalf("qa status should not fail: %+v", qa.Findings)
 	}
 	writeTestVisualReviewPass(t, deck, manifest)
+	if err := ensureRuntimeArtifacts(deck, newState(deck, "exec", false)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := writeDeliverySummary(deck); err != nil {
 		t.Fatal(err)
 	}

@@ -2593,6 +2593,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	if includeLogs {
 		findings = append(findings, verifySanitizedLogs(outDir)...)
 	}
+	findings = append(findings, verifyRiskPolicy(filepath.Join(outDir, "slidex_state.json"))...)
 	status := statusFromFindings(findings)
 	return map[string]any{
 		"toolName": toolName,
@@ -2602,6 +2603,35 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		"status":   status,
 		"findings": findings,
 	}, nil
+}
+
+func verifyRiskPolicy(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("package.risk_policy", "missing state file: "+err.Error(), path)}
+	}
+	var state slidexState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return []qaFinding{fail("package.risk_policy", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if len(state.UnresolvedRisks) > 0 {
+		findings = append(findings, fail("package.unresolved_risks", "unresolved risks remain in slidex_state.json", path))
+	}
+	for i, risk := range state.AcceptedRisks {
+		prefix := fmt.Sprintf("accepted risk %d", i+1)
+		if strings.TrimSpace(risk.Reason) == "" || strings.TrimSpace(risk.Owner) == "" || strings.TrimSpace(risk.Expiration) == "" || strings.TrimSpace(risk.ArtifactLink) == "" {
+			findings = append(findings, fail("package.accepted_risk_policy", prefix+" must include reason, owner, expiration, and artifactLink", path))
+			continue
+		}
+		expiration, err := time.Parse(time.RFC3339, risk.Expiration)
+		if err != nil {
+			findings = append(findings, fail("package.accepted_risk_policy", prefix+" expiration must be RFC3339", path))
+		} else if time.Now().After(expiration) {
+			findings = append(findings, fail("package.accepted_risk_policy", prefix+" is expired", path))
+		}
+	}
+	return findings
 }
 
 func verifyManifestDependencies(kind string, manifestDeps []dependency, currentDeps []dependency, manifestPath string) []qaFinding {
