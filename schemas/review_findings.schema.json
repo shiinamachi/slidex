@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.review_findings.schema.json",
+  "title": "slidex Structured Review Findings",
+  "type": "object",
+  "required": ["stage", "mode", "status", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "stage": {"type": "string", "minLength": 1},
+    "schemaVersion": {"type": "string"},
+    "round": {"type": "integer", "minimum": 1},
+    "mode": {
+      "type": "string",
+      "enum": ["structured_turn", "review_start_normalized", "parallel_reviewer_threads", "codex_subagent"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "pass_with_risks", "fail"]
+    },
+    "imageEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slideId", "repoRelativePath", "sha256", "dimensions", "fidelity"],
+        "additionalProperties": false,
+        "properties": {
+          "slideId": {"type": "string"},
+          "repoRelativePath": {"type": "string"},
+          "absolutePath": {"type": "string"},
+          "sha256": {"type": "string"},
+          "blank": {"type": "boolean"},
+          "fidelity": {"type": "string"},
+          "dimensions": {
+            "type": "object",
+            "required": ["width", "height"],
+            "additionalProperties": false,
+            "properties": {
+              "width": {"type": "integer", "minimum": 1},
+              "height": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "check", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {"type": "string", "enum": ["fail", "warn", "info"]},
+          "check": {"type": "string"},
+          "message": {"type": "string"},
+          "path": {"type": "string"}
+        }
+      }
+    }
+  }
+}

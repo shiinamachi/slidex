@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.intake_questions.schema.json",
+  "title": "slidex Intake Questions",
+  "type": "object",
+  "required": ["status", "questions"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["complete", "user_input_required", "blocked"]
+    },
+    "questions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "sourceInventorySha256": {"type": "string"},
+    "notes": {"type": "string"}
+  }
+}
+

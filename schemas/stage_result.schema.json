@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.stage_result.schema.json",
+  "title": "slidex Stage Result",
+  "type": "object",
+  "required": ["stage", "status", "summary", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "stage": {"type": "string", "minLength": 1},
+    "status": {
+      "type": "string",
+      "enum": ["pass", "pass_with_risks", "blocked", "user_input_required", "usage_limited", "repeated_blocker"]
+    },
+    "summary": {"type": "string"},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string"},
+          "kind": {"type": "string"}
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/risk"}
+    }
+  },
+  "$defs": {
+    "risk": {
+      "type": "object",
+      "required": ["reason", "owner", "expiration", "artifactLink"],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "expiration": {"type": "string", "minLength": 1},
+        "artifactLink": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
+

@@ -230,7 +230,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		if codexVersion != requiredCodexVersion {
 			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.codex_version", Message: "Codex CLI version must be " + requiredCodexVersion + ", got " + firstNonEmpty(codexVersion, "missing"), Path: "codex"})
 		}
-		codexDoctor = commandOutput(8*time.Second, "codex", "doctor", "--json")
+		codexDoctor = commandOutput(30*time.Second, "codex", "doctor", "--json")
 		featureList = commandOutput(8*time.Second, "codex", "features", "list")
 		mcpList = commandOutput(8*time.Second, "codex", "mcp", "list")
 		pluginList = commandOutput(8*time.Second, "codex", "plugin", "list")
@@ -1091,6 +1091,9 @@ func writeStructuredReview(deck, stage string, round int) (string, error) {
 		}
 	}
 	payload := map[string]any{"schemaVersion": "slidex.structuredReview.v1", "stage": stage, "round": round, "mode": "parallel_reviewer_threads", "status": statusFromFindings(findings), "findings": findings}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		return "", err
+	}
 	if err := writeJSONFile(reportPath, payload); err != nil {
 		return "", err
 	}
@@ -1172,6 +1175,10 @@ func writeIntakeQuestions(deckAbs string, questions []string, status string) err
 		for i, q := range questions {
 			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, q))
 		}
+	}
+	payload := map[string]any{"status": status, "questions": questions, "sourceInventorySha256": mustSHA256(filepath.Join(outDir, "source_inventory.md"))}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "intake_questions.schema.json")); err != nil {
+		return err
 	}
 	return os.WriteFile(filepath.Join(outDir, "intake_questions.md"), []byte(b.String()), 0o644)
 }
@@ -1545,6 +1552,26 @@ func verifySanitizedLogs(outDir string) []qaFinding {
 	text := string(raw)
 	if strings.Contains(text, "OPENAI_API_KEY=") || strings.Contains(text, "CODEX_API_KEY=") || strings.Contains(text, "Bearer ") {
 		return []qaFinding{fail("package.logs_sanitizer", "log contains unsanitized secret-looking content", logPath)}
+	}
+	return nil
+}
+
+func validatePayloadAgainstSchema(payload any, schemaPath string) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	schemaRaw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return err
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+		return err
+	}
+	findings := validateWithFullJSONSchema(raw, schema, schemaPath)
+	if hasFailures(findings) {
+		return fmt.Errorf("payload failed %s validation: %v", schemaPath, findings)
 	}
 	return nil
 }
