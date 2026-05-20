@@ -1373,7 +1373,7 @@ func appendRunLog(outDir string, event map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(outDir, 0o700); err != nil {
+	if err := ensureSecureDir(outDir); err != nil {
 		return err
 	}
 	path := filepath.Join(outDir, "run_log.jsonl")
@@ -1410,10 +1410,17 @@ func secureWriteJSON(path string, v any) error {
 }
 
 func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := ensureSecureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	return os.WriteFile(path, raw, mode)
+}
+
+func ensureSecureDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700)
 }
 
 func redactSecretsInAny(v any) any {

@@ -117,6 +117,38 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	}
 }
 
+func TestStateAndRunLogUseSecurePermissionsAndRedaction(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	state := newState(deck, "exec", false)
+	if err := ensureRuntimeArtifacts(deck, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendRunLog(outDir, map[string]any{"message": "CODEX_API_KEY=secret-token Authorization: Bearer raw-token"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(outDir, "slidex_state.json"), filepath.Join(outDir, "codex_threads.json"), filepath.Join(outDir, "run_log.jsonl")} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %o, want 0600", path, info.Mode().Perm())
+		}
+	}
+	outInfo, err := os.Stat(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("out dir mode = %o, want 0700", outInfo.Mode().Perm())
+	}
+	logText := readFileOrEmpty(filepath.Join(outDir, "run_log.jsonl"))
+	if strings.Contains(logText, "secret-token") || strings.Contains(logText, "raw-token") {
+		t.Fatalf("run log was not redacted: %s", logText)
+	}
+}
+
 func repoRootForTest(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
