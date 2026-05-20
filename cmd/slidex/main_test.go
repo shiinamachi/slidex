@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,11 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	findings, ok := stale["findings"].([]qaFinding)
 	if !ok || !packageHasStaleFinding(findings) {
 		t.Fatalf("stale package should produce stale finding, got %#v", stale["findings"])
+	}
+	err = runPackage([]string{"--deck", deck})
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 5 {
+		t.Fatalf("runPackage stale exit code = %v, %v; want 5", coded, err)
 	}
 }
 
