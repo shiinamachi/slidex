@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.app_review_findings.strict.schema.json",
+  "title": "slidex App Server Review Findings Strict",
+  "type": "object",
+  "required": ["schemaVersion", "stage", "round", "mode", "status", "imageEvidence", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"type": "string"},
+    "stage": {"type": "string", "minLength": 1},
+    "round": {"type": "integer", "minimum": 1},
+    "mode": {
+      "type": "string",
+      "enum": ["structured_turn", "review_start_normalized", "parallel_reviewer_threads", "codex_subagent", "none", "manual"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "pass_with_risks", "fail"]
+    },
+    "imageEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slideId", "repoRelativePath", "absolutePath", "sha256", "blank", "fidelity", "dimensions"],
+        "additionalProperties": false,
+        "properties": {
+          "slideId": {"type": "string"},
+          "repoRelativePath": {"type": "string"},
+          "absolutePath": {"type": "string"},
+          "sha256": {"type": "string"},
+          "blank": {"type": "boolean"},
+          "fidelity": {"type": "string"},
+          "dimensions": {
+            "type": "object",
+            "required": ["width", "height"],
+            "additionalProperties": false,
+            "properties": {
+              "width": {"type": "integer", "minimum": 1},
+              "height": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "check", "message", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {"type": "string", "enum": ["fail", "warn", "info"]},
+          "check": {"type": "string"},
+          "message": {"type": "string"},
+          "path": {"type": "string"}
+        }
+      }
+    }
+  }
+}
