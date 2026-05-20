@@ -432,6 +432,9 @@ func runPipeline(args []string) error {
 	if state.Goal.Status == "" {
 		state.Goal.Status = "active"
 	}
+	if err := enforceCodexRuntimeGate(state); err != nil {
+		return err
+	}
 	var appRun *appServerWorkflowRun
 	defer func() {
 		if appRun != nil {
@@ -446,7 +449,7 @@ func runPipeline(args []string) error {
 		if err == nil && shouldRunAgentStageAudit(stage) {
 			var auditPath string
 			var auditErr error
-			switch *codexMode {
+			switch state.CodexRuntime.Mode {
 			case "app-server":
 				if appRun != nil && appRun.threadID != "" {
 					auditPath, auditErr = runAppServerStageAudit(appRun, deckAbs, state, stage)
@@ -494,7 +497,7 @@ func runPipeline(args []string) error {
 		return err
 	}
 	if err := recorder("resolve_workspace", func() error {
-		if *codexMode == "app-server" {
+		if state.CodexRuntime.Mode == "app-server" {
 			run, err := startAppServerWorkflowRun(deckAbs)
 			if err != nil {
 				state.CodexRuntime.Mode = "exec_fallback"
@@ -523,10 +526,10 @@ func runPipeline(args []string) error {
 		if err := ensureRuntimeArtifacts(deckAbs, state); err != nil {
 			return err
 		}
-		if *codexMode == "app-server" {
+		if state.CodexRuntime.Mode == "app-server" {
 			if snapshotRaw, err := os.ReadFile(filepath.Join(outDir, "protocol_diagnostics.json")); err == nil {
 				var snapshot map[string]any
-				if json.Unmarshal(snapshotRaw, &snapshot) == nil {
+				if json.Unmarshal(snapshotRaw, &snapshot) == nil && snapshot["thread_start"] != nil {
 					return writeThreadIndex(outDir, threadIndexFromAppServerSnapshot(deckAbs, snapshot))
 				}
 			}
@@ -603,7 +606,7 @@ func runPipeline(args []string) error {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
 	}
 	if err := recorder("review_loop", func() error {
-		_, err := writeStructuredReviewForRuntime(deckAbs, "delivery", 1, *codexMode, appRun)
+		_, err := writeStructuredReviewForRuntime(deckAbs, "delivery", 1, state.CodexRuntime.Mode, appRun)
 		return err
 	}); err != nil {
 		return err
@@ -2288,6 +2291,27 @@ func newState(deckAbs, mode string, allowMismatch bool) slidexState {
 	}
 	bundleDir := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
 	return slidexState{SchemaVersion: stateSchemaVersion, ToolName: toolName, ToolVersion: toolVersion, GeneratedAt: time.Now().UTC().Format(time.RFC3339), ActiveDeckID: filepath.Base(deckAbs), DeckDir: deckAbs, OutDir: outDir, RequiredCodexVersion: requiredCodexVersion, CodexRuntime: runtimeState{Mode: runtimeMode, RequiredVersion: requiredCodexVersion, InstalledVersion: codexVersion, ProtocolBundle: filepath.ToSlash(bundleDir), ProtocolBundleHash: hashPathSet(bundleDir), AllowMismatch: allowMismatch, Reason: reason}, Goal: goalMirror{Status: "active"}}
+}
+
+func enforceCodexRuntimeGate(state slidexState) error {
+	if state.CodexRuntime.Mode != "app-server" && state.CodexRuntime.Mode != "exec" && state.CodexRuntime.Mode != "exec_fallback" {
+		return exitCodeError(4, "unsupported Codex runtime mode: %s", state.CodexRuntime.Mode)
+	}
+	if state.CodexRuntime.InstalledVersion != requiredCodexVersion {
+		if state.CodexRuntime.AllowMismatch {
+			return nil
+		}
+		return exitCodeError(4, "Codex CLI version mismatch: need %s, got %s", requiredCodexVersion, firstNonEmpty(state.CodexRuntime.InstalledVersion, "missing"))
+	}
+	expectedBundle := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
+	expectedHash := hashPathSet(expectedBundle)
+	if expectedHash == "" {
+		return exitCodeError(4, "Codex App Server protocol bundle missing: %s", expectedBundle)
+	}
+	if state.CodexRuntime.ProtocolBundleHash != "" && state.CodexRuntime.ProtocolBundleHash != expectedHash && !state.CodexRuntime.AllowMismatch {
+		return exitCodeError(4, "Codex App Server protocol bundle hash mismatch")
+	}
+	return nil
 }
 
 func stageInputs(deckAbs, stage string) []artifact {

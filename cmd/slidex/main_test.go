@@ -245,6 +245,18 @@ func TestGoalStatusEnumIsReadFromGeneratedSchema(t *testing.T) {
 	}
 }
 
+func TestRuntimeGateBlocksProtocolMismatchByDefault(t *testing.T) {
+	state := newState(filepath.Join(t.TempDir(), "deck"), "app-server", false)
+	state.CodexRuntime.InstalledVersion = "0.0.0"
+	if err := enforceCodexRuntimeGate(state); err == nil {
+		t.Fatal("expected version mismatch to fail")
+	}
+	state.CodexRuntime.AllowMismatch = true
+	if err := enforceCodexRuntimeGate(state); err != nil {
+		t.Fatalf("allow mismatch should bypass version gate: %v", err)
+	}
+}
+
 func writeTestVisualReviewPass(t *testing.T, deck string, manifest renderManifest) {
 	t.Helper()
 	payload := map[string]any{
