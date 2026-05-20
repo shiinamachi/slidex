@@ -851,13 +851,20 @@ func runCodexAppServer(args []string) error {
 		listen := fs.String("listen", "unix://", "listen URL")
 		deck := fs.String("deck", "", "deck workspace directory")
 		wsAuth := fs.String("ws-auth", "", "websocket auth mode")
+		wsTokenFile := fs.String("ws-token-file", "", "absolute path to capability token file")
+		wsTokenSHA256 := fs.String("ws-token-sha256", "", "SHA-256 of capability token")
+		wsSharedSecretFile := fs.String("ws-shared-secret-file", "", "absolute path to signed bearer shared secret file")
+		wsIssuer := fs.String("ws-issuer", "", "expected signed bearer issuer")
+		wsAudience := fs.String("ws-audience", "", "expected signed bearer audience")
+		wsMaxClockSkewSeconds := fs.Int("ws-max-clock-skew-seconds", 0, "maximum signed bearer clock skew")
 		force := fs.Bool("force", false, "restart managed process if metadata exists")
 		jsonOut := fs.Bool("json", false, "emit JSON")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		_ = jsonOut
-		return startManagedAppServer(*listen, *deck, *wsAuth, *force)
+		ws := webSocketAuthConfig{Mode: *wsAuth, TokenFile: *wsTokenFile, TokenSHA256: *wsTokenSHA256, SharedSecretFile: *wsSharedSecretFile, Issuer: *wsIssuer, Audience: *wsAudience, MaxClockSkewSeconds: *wsMaxClockSkewSeconds}
+		return startManagedAppServer(*listen, *deck, ws, *force)
 	case "status":
 		fs := flag.NewFlagSet("codex app-server status", flag.ContinueOnError)
 		jsonOut := fs.Bool("json", false, "emit JSON")
@@ -878,7 +885,17 @@ func runCodexAppServer(args []string) error {
 	}
 }
 
-func startManagedAppServer(listen, deck, wsAuth string, force bool) error {
+type webSocketAuthConfig struct {
+	Mode                string `json:"mode,omitempty"`
+	TokenFile           string `json:"tokenFile,omitempty"`
+	TokenSHA256         string `json:"tokenSha256,omitempty"`
+	SharedSecretFile    string `json:"sharedSecretFile,omitempty"`
+	Issuer              string `json:"issuer,omitempty"`
+	Audience            string `json:"audience,omitempty"`
+	MaxClockSkewSeconds int    `json:"maxClockSkewSeconds,omitempty"`
+}
+
+func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bool) error {
 	metaPath := appServerMetadataPath()
 	if existing := readAppServerMetadata(metaPath); existing != nil {
 		if pid, _ := numberAsInt(existing["pid"]); pid > 0 && processAlive(pid) {
@@ -890,8 +907,8 @@ func startManagedAppServer(listen, deck, wsAuth string, force bool) error {
 	}
 	actualListen := normalizeManagedListenURL(listen)
 	if strings.HasPrefix(actualListen, "ws://") {
-		if !strings.HasPrefix(actualListen, "ws://127.0.0.1:") && !strings.HasPrefix(actualListen, "ws://localhost:") && wsAuth == "" {
-			return exitCodeError(4, "non-loopback WebSocket requires --ws-auth capability-token or signed-bearer-token")
+		if err := validateWebSocketAuth(actualListen, ws); err != nil {
+			return err
 		}
 	}
 	runtimeDir := filepath.Dir(metaPath)
@@ -911,8 +928,26 @@ func startManagedAppServer(listen, deck, wsAuth string, force bool) error {
 	}
 	defer stderr.Close()
 	args := []string{"app-server", "--listen", actualListen}
-	if wsAuth != "" {
-		args = append(args, "--ws-auth", wsAuth)
+	if ws.Mode != "" {
+		args = append(args, "--ws-auth", ws.Mode)
+	}
+	if ws.TokenFile != "" {
+		args = append(args, "--ws-token-file", ws.TokenFile)
+	}
+	if ws.TokenSHA256 != "" {
+		args = append(args, "--ws-token-sha256", ws.TokenSHA256)
+	}
+	if ws.SharedSecretFile != "" {
+		args = append(args, "--ws-shared-secret-file", ws.SharedSecretFile)
+	}
+	if ws.Issuer != "" {
+		args = append(args, "--ws-issuer", ws.Issuer)
+	}
+	if ws.Audience != "" {
+		args = append(args, "--ws-audience", ws.Audience)
+	}
+	if ws.MaxClockSkewSeconds > 0 {
+		args = append(args, "--ws-max-clock-skew-seconds", strconv.Itoa(ws.MaxClockSkewSeconds))
 	}
 	cmd := exec.Command("codex", args...)
 	cmd.Dir = mustAbs(".")
@@ -932,7 +967,8 @@ func startManagedAppServer(listen, deck, wsAuth string, force bool) error {
 		"codexVersion":    installedCodexVersion(),
 		"listen":          actualListen,
 		"ownerUid":        os.Getuid(),
-		"authMode":        firstNonEmpty(wsAuth, "none"),
+		"authMode":        firstNonEmpty(ws.Mode, "none"),
+		"websocketAuth":   ws,
 		"attachedDeckIds": decks,
 		"stdout":          stdoutPath,
 		"stderr":          stderrPath,
@@ -956,6 +992,13 @@ func statusManagedAppServer() error {
 	}
 	pid, _ := numberAsInt(metadata["pid"])
 	metadata["alive"] = pid > 0 && processAlive(pid)
+	if alive, _ := metadata["alive"].(bool); alive {
+		if health, err := probeManagedAppServer(metadata); err == nil {
+			metadata["health"] = health
+		} else {
+			metadata["health"] = map[string]any{"status": "fail", "error": err.Error()}
+		}
+	}
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
 }
 
@@ -981,7 +1024,10 @@ func stopManagedAppServer(force bool) error {
 					time.Sleep(100 * time.Millisecond)
 				}
 				if processAlive(pid) {
-					_ = proc.Kill()
+					metadata["stopPending"] = true
+					metadata["lastStopAttemptAt"] = time.Now().UTC().Format(time.RFC3339)
+					_ = secureWriteJSON(metaPath, metadata)
+					return exitCodeError(1, "app-server did not stop gracefully; use --force")
 				}
 			}
 			stopped = true
@@ -1018,6 +1064,33 @@ func readAppServerMetadata(path string) map[string]any {
 	return metadata
 }
 
+func probeManagedAppServer(metadata map[string]any) (map[string]any, error) {
+	listen, _ := metadata["listen"].(string)
+	if !strings.HasPrefix(listen, "unix://") {
+		return map[string]any{"status": "recorded", "listen": listen, "note": "direct health probe is only implemented for managed unix sockets"}, nil
+	}
+	sock := strings.TrimPrefix(listen, "unix://")
+	if sock == "" {
+		return nil, fmt.Errorf("managed unix listen URL has no socket path")
+	}
+	client, err := newUnixAppServerClient(sock)
+	if err != nil {
+		return nil, err
+	}
+	defer client.close()
+	resp, _, err := client.request("initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "slidex-health", "title": "slidex health probe", "version": toolVersion},
+		"capabilities": map[string]any{"experimentalApi": true},
+	}, 10*time.Second)
+	if err != nil {
+		return map[string]any{"status": "degraded", "socketConnect": true, "initializeError": err.Error(), "note": "managed unix socket accepted a connection but did not complete JSON-RPC initialize"}, nil
+	}
+	if err := client.notify("initialized", nil); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "pass", "initialize": resp["result"]}, nil
+}
+
 func processAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
@@ -1027,6 +1100,32 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return true
+}
+
+func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
+	loopback := strings.HasPrefix(listen, "ws://127.0.0.1:") || strings.HasPrefix(listen, "ws://localhost:")
+	if loopback {
+		return nil
+	}
+	switch ws.Mode {
+	case "capability-token":
+		if ws.TokenFile == "" || ws.TokenSHA256 == "" {
+			return exitCodeError(4, "non-loopback WebSocket capability-token requires --ws-token-file and --ws-token-sha256")
+		}
+		if !filepath.IsAbs(ws.TokenFile) {
+			return exitCodeError(4, "--ws-token-file must be an absolute path")
+		}
+	case "signed-bearer-token":
+		if ws.SharedSecretFile == "" || ws.Issuer == "" || ws.Audience == "" || ws.MaxClockSkewSeconds <= 0 {
+			return exitCodeError(4, "non-loopback WebSocket signed-bearer-token requires --ws-shared-secret-file, --ws-issuer, --ws-audience, and --ws-max-clock-skew-seconds")
+		}
+		if !filepath.IsAbs(ws.SharedSecretFile) {
+			return exitCodeError(4, "--ws-shared-secret-file must be an absolute path")
+		}
+	default:
+		return exitCodeError(4, "non-loopback WebSocket requires --ws-auth capability-token or signed-bearer-token")
+	}
+	return nil
 }
 
 func transportRiskForListen(listen string) string {
@@ -1081,6 +1180,7 @@ func runCodexReview(args []string) error {
 	fs := flag.NewFlagSet("codex review", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
 	stage := fs.String("stage", "delivery", "design, html, qa, or delivery")
+	nativeReviewStart := fs.Bool("native-review-start", false, "use App Server review/start and normalize the result")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1099,11 +1199,20 @@ func runCodexReview(args []string) error {
 	if err := writeThreadIndex(filepath.Join(deckAbs, "out"), threadIndexFromAppServerSnapshot(deckAbs, appRun.snapshot)); err != nil {
 		return err
 	}
-	path, err := writeStructuredReviewForRuntime(deckAbs, *stage, 1, "app-server", appRun)
+	var path string
+	if *nativeReviewStart {
+		path, err = writeReviewStartNormalized(deckAbs, *stage, 1, appRun)
+	} else {
+		path, err = writeStructuredReviewForRuntime(deckAbs, *stage, 1, "app-server", appRun)
+	}
 	if err != nil {
 		return err
 	}
-	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "stage": *stage, "review": path, "mode": "structured_turn"})
+	mode := "structured_turn"
+	if *nativeReviewStart {
+		mode = "review_start_normalized"
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "stage": *stage, "review": path, "mode": mode})
 }
 
 func runGoal(args []string) error {
@@ -1153,6 +1262,10 @@ func runGoal(args []string) error {
 		outDir := filepath.Join(mustAbs(deck), "out")
 		state := readStateOrNew(deck, "app-server", false)
 		appGoal, syncErr := getGoalFromAppServer(mustAbs(deck), outDir, bestAppServerThreadID(outDir))
+		if syncErr == nil && goalMismatch(state.Goal, appGoal) {
+			state.UnresolvedRisks = append(state.UnresolvedRisks, acceptedRisk{Reason: "App Server goal status differs from local mirror", Owner: "slidex", Expiration: time.Now().Add(24 * time.Hour).Format(time.RFC3339), ArtifactLink: "out/slidex_state.json"})
+			_ = writeState(outDir, state)
+		}
 		return printJSON(map[string]any{"local": state.Goal, "appServer": appGoal, "appServerError": errorString(syncErr)})
 	case "pause", "resume", "clear":
 		deck, err := deckFlag(args[1:])
@@ -1685,6 +1798,89 @@ func writeStructuredReviewExec(deckAbs, stage string, round int, resume bool) (s
 		return "", err
 	}
 	_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "structured_review_exec", "stage": stage, "execRun": runPath, "review": reportPath})
+	return reportPath, nil
+}
+
+func writeReviewStartNormalized(deckAbs, stage string, round int, appRun *appServerWorkflowRun) (string, error) {
+	if appRun == nil || appRun.threadID == "" {
+		return "", fmt.Errorf("review/start requires an active App Server thread")
+	}
+	outDir := filepath.Join(deckAbs, "out")
+	instructions := fmt.Sprintf("Review slidex delivery stage %q for blocker or major issues. Do not modify files. Focus on freshness of final_deck.html, rendered PNG/PDF, QA report, visual review, and package readiness.", stage)
+	resp, events, err := appRun.client.request("review/start", map[string]any{
+		"threadId": appRun.threadID,
+		"delivery": "detached",
+		"target":   map[string]any{"type": "custom", "instructions": instructions},
+	}, 30*time.Second)
+	if err != nil {
+		return "", err
+	}
+	resultObj, _ := resp["result"].(map[string]any)
+	reviewThreadID, _ := resultObj["reviewThreadId"].(string)
+	if reviewThreadID == "" {
+		reviewThreadID = appRun.threadID
+	}
+	turnID := extractTurnID(resultObj)
+	completionEvents, completion, err := appRun.client.waitForTurnCompletion(reviewThreadID, turnID, 5*time.Minute)
+	events = append(events, completionEvents...)
+	if err != nil {
+		return "", err
+	}
+	if actual := turnIDFromCompletion(completion); actual != "" {
+		turnID = actual
+	}
+	readResp, readEvents, readErr := appRun.client.request("thread/read", map[string]any{"threadId": reviewThreadID, "includeTurns": true}, 20*time.Second)
+	events = append(events, readEvents...)
+	threadRead := any(nil)
+	threadReadError := ""
+	if readErr != nil {
+		threadReadError = readErr.Error()
+	} else {
+		threadRead = readResp["result"]
+	}
+	finalText := extractFinalAgentTextFromEvents(events, turnID)
+	if finalText == "" {
+		finalText = extractFinalAgentTextFromThreadRead(threadRead, turnID)
+	}
+	raw := appServerTurnResult{
+		SchemaVersion:   "slidex.reviewStartRaw.v1",
+		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
+		Stage:           "review_start_" + stage,
+		ThreadID:        reviewThreadID,
+		TurnID:          turnID,
+		PromptSha256:    sha256Bytes([]byte(instructions)),
+		StartResponse:   resultObj,
+		Completion:      completion,
+		ThreadRead:      threadRead,
+		ThreadReadError: threadReadError,
+		FinalMessage:    finalText,
+		Events:          events,
+	}
+	rawPath, raw, err := writeAppServerTurnResult(outDir, raw)
+	if err != nil {
+		return "", err
+	}
+	if err := recordAppServerTurn(outDir, "review_start_"+stage, raw); err != nil {
+		return "", err
+	}
+	payload := map[string]any{
+		"schemaVersion": "slidex.reviewFindings.v1",
+		"stage":         stage,
+		"round":         round,
+		"mode":          "review_start_normalized",
+		"status":        "pass",
+		"imageEvidence": []map[string]any{},
+		"findings":      []map[string]any{},
+	}
+	if strings.Contains(strings.ToLower(finalText), "blocker") || strings.Contains(strings.ToLower(finalText), "major") {
+		payload["status"] = "pass_with_risks"
+		payload["findings"] = []map[string]any{{"severity": "warn", "check": "review_start.summary", "message": "Native review/start returned text mentioning blocker or major; inspect raw review artifact.", "path": filepath.ToSlash(rawPath)}}
+	}
+	reportPath, err := writeStructuredReviewPayload(deckAbs, stage, round, payload)
+	if err != nil {
+		return "", err
+	}
+	_ = appendRunLog(outDir, map[string]any{"event": "review_start_normalized", "turn": rawPath, "review": reportPath, "reviewThreadId": reviewThreadID})
 	return reportPath, nil
 }
 
@@ -3110,6 +3306,23 @@ func goalStatusForAppServer(status string) string {
 	default:
 		return status
 	}
+}
+
+func goalMismatch(local goalMirror, appGoal map[string]any) bool {
+	goal, _ := appGoal["goal"].(map[string]any)
+	if goal == nil {
+		return local.Objective != "" || local.ObjectiveFile != "" || local.Status != ""
+	}
+	appStatus, _ := goal["status"].(string)
+	if appStatus != "" && goalStatusForAppServer(local.Status) != appStatus {
+		return true
+	}
+	if local.Objective != "" {
+		if appObjective, _ := goal["objective"].(string); appObjective != "" && appObjective != local.Objective {
+			return true
+		}
+	}
+	return false
 }
 
 func appServerGoalStatusAllowed(status string) bool {

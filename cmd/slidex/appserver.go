@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,7 +51,25 @@ type appServerTurnResult struct {
 }
 
 func newAppServerClient() (*appServerClient, error) {
-	cmd := exec.Command("codex", "app-server", "--listen", "stdio://")
+	return newAppServerClientCommand("codex", "app-server", "--listen", "stdio://")
+}
+
+func newAppServerProxyClient(sock string) (*appServerClient, error) {
+	return newAppServerClientCommand("codex", "app-server", "proxy", "--sock", sock)
+}
+
+func newUnixAppServerClient(sock string) (*appServerClient, error) {
+	conn, err := net.DialTimeout("unix", sock, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	client := &appServerClient{stdin: conn, lines: make(chan map[string]any, 256)}
+	go client.scanStdout(conn)
+	return client, nil
+}
+
+func newAppServerClientCommand(name string, args ...string) (*appServerClient, error) {
+	cmd := exec.Command(name, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -96,11 +115,15 @@ func (c *appServerClient) scanStdout(stdout io.Reader) {
 }
 
 func (c *appServerClient) close() {
-	_ = c.stdin.Close()
-	if c.cmd.Process != nil {
+	if c.stdin != nil {
+		_ = c.stdin.Close()
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
 	}
-	_ = c.cmd.Wait()
+	if c.cmd != nil {
+		_ = c.cmd.Wait()
+	}
 }
 
 func (c *appServerClient) notify(method string, params map[string]any) error {
