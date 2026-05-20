@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,8 +108,10 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if _, err := writeDeliverySummary(deck); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writeStructuredReview(deck, "delivery", 1); err != nil {
-		t.Fatal(err)
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
 	}
 	pkg, err := packageDeck(deck, false)
 	if err != nil {
@@ -219,6 +224,86 @@ func TestStrictAppServerSchemasAcceptLocalPayloads(t *testing.T) {
 	if err := validatePayloadAgainstSchema(reviewPayload, filepath.Join("schemas", "app_review_findings.strict.schema.json")); err != nil {
 		t.Fatal(err)
 	}
+	authoringPayload := map[string]any{
+		"schemaVersion":    "slidex.appAuthoringResult.v1",
+		"stage":            "strategy",
+		"status":           "pass",
+		"summary":          "authored",
+		"strategyMarkdown": "## Purpose\n\n검증 가능한 목적.",
+		"slideBlueprints":  []map[string]any{},
+		"htmlNotes":        []string{},
+		"claimPolicy":      "unsupported claims are assumptions",
+		"risks":            []map[string]any{},
+	}
+	if err := validatePayloadAgainstSchema(authoringPayload, filepath.Join("schemas", "app_authoring_result.strict.schema.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureStrategyAndSpecConsumeCodexAuthoring(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := copyDir(filepath.Join(root, "fixtures", "minimal_deck"), deck); err != nil {
+		t.Fatal(err)
+	}
+	strategyPayload := map[string]any{
+		"schemaVersion":    "slidex.appAuthoringResult.v1",
+		"stage":            "strategy",
+		"status":           "pass",
+		"summary":          "Codex strategy summary",
+		"strategyMarkdown": "## Codex Authored Purpose\n\n현재 입력만 근거로 의사결정 목적을 정리합니다.",
+		"slideBlueprints":  []map[string]any{},
+		"htmlNotes":        []string{},
+		"claimPolicy":      "unsupported claims are assumptions",
+		"risks":            []map[string]any{},
+	}
+	specPayload := map[string]any{
+		"schemaVersion":    "slidex.appAuthoringResult.v1",
+		"stage":            "spec",
+		"status":           "pass",
+		"summary":          "Codex spec summary",
+		"strategyMarkdown": "",
+		"slideBlueprints": []map[string]any{{
+			"sectionRole":  "codex_cover",
+			"headline":     "Codex가 검증된 입력으로 첫 판단을 정리합니다",
+			"keyMessage":   "입력 기반 가정과 근거를 분리합니다.",
+			"bodyContent":  []string{"근거", "가정", "다음 행동"},
+			"evidenceRefs": []string{"brief.md"},
+			"claims":       []string{"claim_001"},
+		}},
+		"htmlNotes":   []string{},
+		"claimPolicy": "unsupported claims are assumptions",
+		"risks":       []map[string]any{},
+	}
+	if err := writeAuthoringTurnForTest(deck, "strategy", strategyPayload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAuthoringTurnForTest(deck, "spec", specPayload); err != nil {
+		t.Fatal(err)
+	}
+	strategyPath, err := ensureStrategy(deck, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readFileOrEmpty(strategyPath), "Codex Authored Purpose") {
+		t.Fatalf("strategy did not consume Codex authoring: %s", readFileOrEmpty(strategyPath))
+	}
+	specPath, err := ensureSpec(deck, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readFileOrEmpty(specPath), "Codex가 검증된 입력") {
+		t.Fatalf("spec did not consume Codex slide blueprint: %s", readFileOrEmpty(specPath))
+	}
 }
 
 func TestCodexExecResumeArgsKeepOutputSchema(t *testing.T) {
@@ -285,6 +370,12 @@ build = ["mcpServer/tool/call"]
 	}()
 	if _, _, err := allowedClient.request("mcpServer/tool/call", map[string]any{}, time.Second); err != nil {
 		t.Fatalf("stage-allowlisted dangerous method should be sent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slidex.toml"), []byte("[codex.app_server]\nallow_dangerous_methods = [\"process/spawn\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dangerousAppServerMethodAllowed("process/spawn", "build"); err == nil {
+		t.Fatal("global dangerous App Server allowlist should be rejected")
 	}
 }
 
@@ -745,6 +836,39 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	}
 }
 
+func TestWebSocketHealthProbeUsesHTTPAndPing(t *testing.T) {
+	listen := startFakeWebSocketServer(t,
+		func(conn net.Conn) { handleFakeHTTPHealth(t, conn) },
+		func(conn net.Conn) { handleFakeHTTPHealth(t, conn) },
+		func(conn net.Conn) { handleFakeWebSocketPing(t, conn) },
+	)
+	health, err := probeManagedAppServer(map[string]any{"listen": listen, "websocketAuth": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "pass" {
+		t.Fatalf("websocket health status = %#v", health)
+	}
+	ping, _ := health["websocketPing"].(map[string]any)
+	if ping["status"] != "pass" {
+		t.Fatalf("websocket ping did not pass: %#v", health)
+	}
+}
+
+func TestWebSocketPingRetriesOverload(t *testing.T) {
+	listen := startFakeWebSocketServer(t,
+		func(conn net.Conn) { handleFakeWebSocketOverload(t, conn) },
+		func(conn net.Conn) { handleFakeWebSocketPing(t, conn) },
+	)
+	ping := webSocketPingWithRetry(listen, webSocketAuthConfig{}, webSocketProbePolicy{InitialDelay: time.Millisecond, MaxDelay: time.Millisecond, MaxAttempts: 2, PingTimeout: time.Second})
+	if ping["status"] != "pass" {
+		t.Fatalf("retrying websocket ping should pass: %#v", ping)
+	}
+	if attempts, _ := numberAsInt(ping["attempts"]); attempts != 2 {
+		t.Fatalf("websocket ping attempts = %d, want 2", attempts)
+	}
+}
+
 func writeTestVisualReviewPass(t *testing.T, deck string, manifest renderManifest) {
 	t.Helper()
 	payload := map[string]any{
@@ -914,6 +1038,80 @@ func runLogLine(label, stage, status string, ts time.Time) string {
 		"timestamp":     ts.Format(time.RFC3339),
 	})
 	return string(raw)
+}
+
+func writeAuthoringTurnForTest(deck, stage string, payload map[string]any) error {
+	path := filepath.Join(deck, "out", "agent_runs", "authoring_"+stage+"_appserver_turn.json")
+	return secureWriteJSON(path, map[string]any{
+		"schemaVersion":    "slidex.appServerTurn.v1",
+		"stage":            "authoring_" + stage,
+		"structuredOutput": payload,
+	})
+}
+
+func startFakeWebSocketServer(t *testing.T, handlers ...func(net.Conn)) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for _, handler := range handlers {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			handler(conn)
+		}
+	}()
+	return "ws://" + ln.Addr().String() + "/app"
+}
+
+func readHTTPRequestForTest(t *testing.T, conn net.Conn) string {
+	t.Helper()
+	reader := bufio.NewReader(conn)
+	var b strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString(line)
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	return b.String()
+}
+
+func handleFakeHTTPHealth(t *testing.T, conn net.Conn) {
+	defer conn.Close()
+	_ = readHTTPRequestForTest(t, conn)
+	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+}
+
+func handleFakeWebSocketOverload(t *testing.T, conn net.Conn) {
+	defer conn.Close()
+	_ = readHTTPRequestForTest(t, conn)
+	_, _ = io.WriteString(conn, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 25\r\n\r\n{\"code\":-32001,\"msg\":\"x\"}")
+}
+
+func handleFakeWebSocketPing(t *testing.T, conn net.Conn) {
+	defer conn.Close()
+	request := readHTTPRequestForTest(t, conn)
+	if !strings.Contains(strings.ToLower(request), "upgrade: websocket") {
+		t.Fatalf("fake websocket expected upgrade request, got %s", request)
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+	frame := make([]byte, 6)
+	if _, err := io.ReadFull(conn, frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame[0]&0x0f != 0x09 {
+		t.Fatalf("expected ping opcode, got %d", frame[0]&0x0f)
+	}
+	_, _ = conn.Write([]byte{0x8a, 0x00})
 }
 
 func isChromeSandboxEnvironmentFailure(err error) bool {

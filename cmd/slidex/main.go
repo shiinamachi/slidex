@@ -2546,7 +2546,10 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	deliverySummaryPath := filepath.Join(outDir, "delivery_summary.md")
 	visualImageSetPath := filepath.Join(outDir, "visual_reviews", "image_set.json")
 	visualReviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
-	structuredReviewPath := filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_delivery.json")
+	structuredReviewPaths := []string{}
+	for _, stage := range structuredReviewStages() {
+		structuredReviewPaths = append(structuredReviewPaths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+stage+".json"))
+	}
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		var manifest renderManifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -2617,7 +2620,9 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 				findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
 			}
 			findings = append(findings, verifyVisualReviewEvidence(visualReviewPath, manifest)...)
-			findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, manifest)...)
+			for _, structuredReviewPath := range structuredReviewPaths {
+				findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, manifest)...)
+			}
 		}
 	}
 	if includeLogs {

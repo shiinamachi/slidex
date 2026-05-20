@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.app_authoring_result.strict.schema.json",
+  "title": "slidex App Server Authoring Result Strict",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "stage",
+    "status",
+    "summary",
+    "strategyMarkdown",
+    "slideBlueprints",
+    "htmlNotes",
+    "claimPolicy",
+    "risks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"type": "string", "const": "slidex.appAuthoringResult.v1"},
+    "stage": {"type": "string", "enum": ["strategy", "spec", "build_html"]},
+    "status": {
+      "type": "string",
+      "enum": ["pass", "pass_with_risks", "blocked", "user_input_required"]
+    },
+    "summary": {"type": "string", "minLength": 1},
+    "strategyMarkdown": {"type": "string"},
+    "slideBlueprints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sectionRole", "headline", "keyMessage", "bodyContent"],
+        "additionalProperties": false,
+        "properties": {
+          "sectionRole": {"type": "string"},
+          "headline": {"type": "string", "minLength": 1},
+          "keyMessage": {"type": "string", "minLength": 1},
+          "bodyContent": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "claims": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "htmlNotes": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "claimPolicy": {"type": "string"},
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["reason", "owner", "expiration", "artifactLink"],
+        "additionalProperties": false,
+        "properties": {
+          "reason": {"type": "string"},
+          "owner": {"type": "string"},
+          "expiration": {"type": "string"},
+          "artifactLink": {"type": "string"}
+        }
+      }
+    }
+  }
+}

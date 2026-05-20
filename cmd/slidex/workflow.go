@@ -3,11 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -234,6 +239,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	findings := []qaFinding{}
 	goModVersion := readGoModVersion("go.mod")
 	miseGoVersion := readMiseGoVersion(".mise.toml")
+	findings = append(findings, dangerousAppServerPolicyFindings()...)
 	if goModVersion == "" {
 		findings = append(findings, fail("doctor.go_mod", "go.mod go directive missing", "go.mod"))
 	}
@@ -856,6 +862,9 @@ func runPipeline(args []string) error {
 		if shouldStopGoalContinuation(state.Goal) {
 			return goalStopError(state.Goal)
 		}
+		if err := runCodexAuthoringForRuntime(deckAbs, "strategy", state, appRun); err != nil {
+			return err
+		}
 		_, err := ensureStrategy(deckAbs, false)
 		return err
 	}); err != nil {
@@ -865,6 +874,9 @@ func runPipeline(args []string) error {
 		if shouldStopGoalContinuation(state.Goal) {
 			return goalStopError(state.Goal)
 		}
+		if err := runCodexAuthoringForRuntime(deckAbs, "spec", state, appRun); err != nil {
+			return err
+		}
 		_, err := ensureSpec(deckAbs, false)
 		return err
 	}); err != nil {
@@ -873,6 +885,9 @@ func runPipeline(args []string) error {
 	if err := recorder("build_html", func() error {
 		if shouldStopGoalContinuation(state.Goal) {
 			return goalStopError(state.Goal)
+		}
+		if err := runCodexAuthoringForRuntime(deckAbs, "build_html", state, appRun); err != nil {
+			return err
 		}
 		_, err := ensureHTML(deckAbs, false)
 		return err
@@ -932,8 +947,12 @@ func runPipeline(args []string) error {
 		if shouldStopGoalContinuation(state.Goal) {
 			return goalStopError(state.Goal)
 		}
-		_, err := writeStructuredReviewForRuntime(deckAbs, "delivery", 1, state.CodexRuntime.Mode, appRun)
-		return err
+		for _, reviewStage := range structuredReviewStages() {
+			if _, err := writeStructuredReviewForRuntime(deckAbs, reviewStage, 1, state.CodexRuntime.Mode, appRun); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -1608,6 +1627,9 @@ func readAppServerMetadata(path string) map[string]any {
 
 func probeManagedAppServer(metadata map[string]any) (map[string]any, error) {
 	listen, _ := metadata["listen"].(string)
+	if strings.HasPrefix(listen, "ws://") {
+		return probeWebSocketAppServer(listen, webSocketAuthConfigFromMetadata(metadata)), nil
+	}
 	if !strings.HasPrefix(listen, "unix://") {
 		return map[string]any{"status": "recorded", "listen": listen, "note": "direct health probe is only implemented for managed unix sockets"}, nil
 	}
@@ -1631,6 +1653,204 @@ func probeManagedAppServer(metadata map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"status": "pass", "initialize": resp["result"]}, nil
+}
+
+type webSocketProbePolicy struct {
+	InitialDelay time.Duration
+	MaxDelay     time.Duration
+	MaxAttempts  int
+	PingTimeout  time.Duration
+}
+
+func defaultWebSocketProbePolicy() webSocketProbePolicy {
+	return webSocketProbePolicy{InitialDelay: 250 * time.Millisecond, MaxDelay: 5 * time.Second, MaxAttempts: 5, PingTimeout: 3 * time.Second}
+}
+
+func webSocketAuthConfigFromMetadata(metadata map[string]any) webSocketAuthConfig {
+	raw, _ := metadata["websocketAuth"].(map[string]any)
+	maxSkew, _ := numberAsInt(raw["maxClockSkewSeconds"])
+	stringValue := func(key string) string {
+		value, _ := raw[key].(string)
+		return value
+	}
+	return webSocketAuthConfig{
+		Mode:                stringValue("mode"),
+		TokenFile:           stringValue("tokenFile"),
+		TokenSHA256:         stringValue("tokenSha256"),
+		SharedSecretFile:    stringValue("sharedSecretFile"),
+		Issuer:              stringValue("issuer"),
+		Audience:            stringValue("audience"),
+		MaxClockSkewSeconds: maxSkew,
+	}
+}
+
+func probeWebSocketAppServer(listen string, ws webSocketAuthConfig) map[string]any {
+	policy := defaultWebSocketProbePolicy()
+	readyz := probeWebSocketHTTPHealth(listen, "/readyz", ws, policy.PingTimeout)
+	healthz := probeWebSocketHTTPHealth(listen, "/healthz", ws, policy.PingTimeout)
+	ping := webSocketPingWithRetry(listen, ws, policy)
+	status := "pass"
+	if fmt.Sprint(ping["status"]) != "pass" {
+		status = "degraded"
+	}
+	return map[string]any{
+		"status":          status,
+		"listen":          listen,
+		"readyz":          readyz,
+		"healthz":         healthz,
+		"websocketPing":   ping,
+		"keepalivePolicy": map[string]any{"pingIntervalSeconds": 30, "timeoutSeconds": int(policy.PingTimeout.Seconds()), "pongRequired": true},
+		"retryPolicy":     map[string]any{"overloadCode": -32001, "initialDelayMs": policy.InitialDelay.Milliseconds(), "maxDelayMs": policy.MaxDelay.Milliseconds(), "maxAttempts": policy.MaxAttempts},
+	}
+}
+
+func probeWebSocketHTTPHealth(listen, endpoint string, ws webSocketAuthConfig, timeout time.Duration) map[string]any {
+	httpURL, err := webSocketHTTPURL(listen, endpoint)
+	if err != nil {
+		return map[string]any{"status": "fail", "error": err.Error()}
+	}
+	req, err := http.NewRequest(http.MethodGet, httpURL, nil)
+	if err != nil {
+		return map[string]any{"status": "fail", "error": err.Error()}
+	}
+	applyWebSocketProbeAuth(req.Header, ws)
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return map[string]any{"status": "unavailable", "url": httpURL, "error": err.Error()}
+	}
+	defer resp.Body.Close()
+	status := "pass"
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		status = "degraded"
+	}
+	return map[string]any{"status": status, "url": httpURL, "httpStatus": resp.StatusCode}
+}
+
+func webSocketHTTPURL(listen, endpoint string) (string, error) {
+	u, err := url.Parse(listen)
+	if err != nil {
+		return "", err
+	}
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	default:
+		return "", fmt.Errorf("not a WebSocket URL: %s", listen)
+	}
+	u.Path = endpoint
+	u.RawQuery = ""
+	return u.String(), nil
+}
+
+func applyWebSocketProbeAuth(header http.Header, ws webSocketAuthConfig) {
+	if ws.Mode == "capability-token" && ws.TokenFile != "" {
+		if raw, err := os.ReadFile(ws.TokenFile); err == nil {
+			header.Set("Authorization", "Bearer "+strings.TrimSpace(string(raw)))
+		}
+	}
+}
+
+func webSocketPingWithRetry(listen string, ws webSocketAuthConfig, policy webSocketProbePolicy) map[string]any {
+	delay := policy.InitialDelay
+	var lastErr error
+	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
+		err := webSocketPingOnce(listen, ws, policy.PingTimeout)
+		if err == nil {
+			return map[string]any{"status": "pass", "attempts": attempt}
+		}
+		lastErr = err
+		if !isWebSocketRetryable(err) || attempt == policy.MaxAttempts {
+			break
+		}
+		time.Sleep(delay)
+		delay *= 2
+		if delay > policy.MaxDelay {
+			delay = policy.MaxDelay
+		}
+	}
+	return map[string]any{"status": "fail", "attempts": policy.MaxAttempts, "error": errorString(lastErr)}
+}
+
+func isWebSocketRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "-32001") || strings.Contains(msg, "overload") || strings.Contains(msg, "503") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "timeout")
+}
+
+func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Duration) error {
+	u, err := url.Parse(listen)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "ws" {
+		return fmt.Errorf("websocket ping supports ws:// only")
+	}
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		host += ":80"
+	}
+	conn, err := net.DialTimeout("tcp", host, timeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	keyRaw := make([]byte, 16)
+	if _, err := rand.Read(keyRaw); err != nil {
+		return err
+	}
+	path := firstNonEmpty(u.RequestURI(), "/")
+	var req strings.Builder
+	req.WriteString("GET " + path + " HTTP/1.1\r\n")
+	req.WriteString("Host: " + u.Host + "\r\n")
+	req.WriteString("Upgrade: websocket\r\n")
+	req.WriteString("Connection: Upgrade\r\n")
+	req.WriteString("Sec-WebSocket-Version: 13\r\n")
+	req.WriteString("Sec-WebSocket-Key: " + base64.StdEncoding.EncodeToString(keyRaw) + "\r\n")
+	if ws.Mode == "capability-token" && ws.TokenFile != "" {
+		if raw, err := os.ReadFile(ws.TokenFile); err == nil {
+			req.WriteString("Authorization: Bearer " + strings.TrimSpace(string(raw)) + "\r\n")
+		}
+	}
+	req.WriteString("\r\n")
+	if _, err := io.WriteString(conn, req.String()); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(conn)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(statusLine, "101") {
+		body, _ := io.ReadAll(io.LimitReader(reader, 4096))
+		return fmt.Errorf("websocket handshake failed: %s %s", strings.TrimSpace(statusLine), strings.TrimSpace(string(body)))
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	pingFrame := []byte{0x89, 0x80, 0x00, 0x00, 0x00, 0x00}
+	if _, err := conn.Write(pingFrame); err != nil {
+		return err
+	}
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return err
+	}
+	if header[0]&0x0f != 0x0a {
+		return fmt.Errorf("websocket keepalive expected pong, got opcode %d", header[0]&0x0f)
+	}
+	return nil
 }
 
 func processAlive(pid int) bool {
@@ -1727,15 +1947,25 @@ func dangerousAppServerMethodAllowedAtPath(path, method, stage string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	for _, key := range []string{strings.TrimSpace(stage), "*"} {
-		if key == "" {
-			continue
-		}
-		if allowlist[key][method] {
-			return true, nil
-		}
+	key := strings.TrimSpace(stage)
+	if key == "" {
+		return false, nil
+	}
+	if allowlist[key][method] {
+		return true, nil
 	}
 	return false, nil
+}
+
+func dangerousAppServerPolicyFindings() []qaFinding {
+	allowlist, err := loadDangerousAppServerAllowlist(slidexConfigPath())
+	if err != nil {
+		return []qaFinding{fail("doctor.dangerous_appserver_policy", err.Error(), slidexConfigPath())}
+	}
+	if _, ok := allowlist["*"]; ok {
+		return []qaFinding{fail("doctor.dangerous_appserver_policy", "dangerous App Server methods must be stage-specific; wildcard allowlist is forbidden", slidexConfigPath())}
+	}
+	return nil
 }
 
 func dangerousAppServerPolicySnapshot() map[string]any {
@@ -1798,8 +2028,11 @@ func loadDangerousAppServerAllowlist(path string) (map[string]map[string]bool, e
 		}
 		switch {
 		case section == "codex.app_server" && (key == "allow_dangerous_methods" || key == "allow_dangerous_appserver_methods"):
-			addDangerousAllowlistMethods(allowlist, "*", methods)
+			return allowlist, fmt.Errorf("global dangerous App Server allowlist is forbidden; use [codex.app_server.dangerous_api_allowlist] stage keys")
 		case section == "codex.app_server.dangerous_api_allowlist":
+			if key == "*" {
+				return allowlist, fmt.Errorf("wildcard dangerous App Server allowlist is forbidden; use an exact stage key")
+			}
 			addDangerousAllowlistMethods(allowlist, key, methods)
 		default:
 			if stage, ok := dangerousAllowlistStageFromSection(section); ok && (key == "allow_dangerous_methods" || key == "allow_dangerous_appserver_methods") {
@@ -2594,6 +2827,97 @@ func callMCPTool(name string, args map[string]any) (any, error) {
 	}
 }
 
+func authoringArtifactCandidates(deckAbs, stage string) []string {
+	outDir := filepath.Join(deckAbs, "out", "agent_runs")
+	safeStage := strings.NewReplacer("/", "_", " ", "_").Replace("authoring_" + stage)
+	return []string{
+		filepath.Join(outDir, "authoring_"+stage+"_appserver_turn.json"),
+		filepath.Join(outDir, safeStage+"_codex_exec_fresh.json"),
+		filepath.Join(outDir, safeStage+"_codex_exec_resume.json"),
+	}
+}
+
+func authoringResultForStage(deckAbs, stage string) (map[string]any, string) {
+	for _, path := range authoringArtifactCandidates(deckAbs, stage) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			continue
+		}
+		if structured, ok := payload["structuredOutput"].(map[string]any); ok {
+			return structured, path
+		}
+		if payload["schemaVersion"] == "slidex.appAuthoringResult.v1" {
+			return payload, path
+		}
+	}
+	return nil, ""
+}
+
+func authoringStringArray(value any) []string {
+	var out []string
+	if arr, ok := value.([]any); ok {
+		for _, item := range arr {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+	}
+	return out
+}
+
+func specSlidesFromAuthoring(authoring map[string]any) []map[string]any {
+	raw, ok := authoring["slideBlueprints"].([]any)
+	if !ok {
+		return nil
+	}
+	var slides []map[string]any
+	for i, item := range raw {
+		blueprint, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		headline := strings.TrimSpace(fmt.Sprint(blueprint["headline"]))
+		key := strings.TrimSpace(fmt.Sprint(blueprint["keyMessage"]))
+		if headline == "" || key == "" {
+			continue
+		}
+		id := fmt.Sprintf("slide_%02d", len(slides)+1)
+		role := firstNonEmpty(strings.TrimSpace(fmt.Sprint(blueprint["sectionRole"])), fmt.Sprintf("codex_authored_%02d", i+1))
+		body := authoringStringArray(blueprint["bodyContent"])
+		if len(body) == 0 {
+			body = []string{key}
+		}
+		evidence := authoringStringArray(blueprint["evidenceRefs"])
+		if len(evidence) == 0 {
+			evidence = []string{"brief.md"}
+		}
+		claims := authoringStringArray(blueprint["claims"])
+		if len(claims) == 0 {
+			claims = []string{"claim_001"}
+		}
+		slides = append(slides, map[string]any{
+			"id":           id,
+			"htmlId":       id,
+			"sectionRole":  role,
+			"headline":     headline,
+			"keyMessage":   key,
+			"bodyContent":  body,
+			"layoutIntent": "Codex-authored single-purpose slide with clear hierarchy",
+			"visualIntent": "Evidence-aware HTML layout generated from Codex slide blueprint",
+			"evidenceRefs": evidence,
+			"claims":       claims,
+			"renderRisks":  []string{"Korean wrapping and text density must be checked after render."},
+			"qaChecks":     []string{"slide purpose clear", "no unsupported metric"},
+		})
+	}
+	return slides
+}
+
 func ensureStrategy(deck string, force bool) (string, error) {
 	deckAbs := mustAbs(deck)
 	outDir := filepath.Join(deckAbs, "out")
@@ -2606,6 +2930,20 @@ func ensureStrategy(deck string, force bool) (string, error) {
 	brief := readFileOrEmpty(filepath.Join(deckAbs, "brief.md"))
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", err
+	}
+	if authoring, authoringPath := authoringResultForStage(deckAbs, "strategy"); len(authoring) > 0 {
+		if markdown := strings.TrimSpace(fmt.Sprint(authoring["strategyMarkdown"])); markdown != "" {
+			var b strings.Builder
+			b.WriteString("# Strategy\n\n")
+			b.WriteString("<!-- codex-authoring-stage: strategy -->\n\n")
+			b.WriteString(markdown)
+			b.WriteString("\n\n## Runtime Provenance\n\n")
+			b.WriteString("- Authoring artifact: `" + filepath.ToSlash(authoringPath) + "`\n")
+			b.WriteString("- Authoring status: `" + escapeMarkdownInline(fmt.Sprint(authoring["status"])) + "`\n")
+			b.WriteString("- Authoring summary: `" + escapeMarkdownInline(fmt.Sprint(authoring["summary"])) + "`\n")
+			b.WriteString("- Claim policy: `" + escapeMarkdownInline(fmt.Sprint(authoring["claimPolicy"])) + "`\n")
+			return path, os.WriteFile(path, []byte(b.String()), 0o644)
+		}
 	}
 	var b strings.Builder
 	b.WriteString("# Strategy\n\n")
@@ -2643,10 +2981,14 @@ func ensureSpec(deck string, force bool) (string, error) {
 	for _, item := range inv.Inputs {
 		sourceRefs = append(sourceRefs, map[string]any{"path": item.Path, "kind": item.Kind, "priority": "supporting", "sha256": item.SHA256})
 	}
-	slides := []map[string]any{
-		makeSpecSlide("slide_01", "cover", title, "문서의 목적과 의사결정 맥락을 한 문장으로 정리합니다.", []string{"현재 확인된 입력을 기준으로 작성", "부족한 사실은 가정으로 분리"}),
-		makeSpecSlide("slide_02", "executive_summary", "핵심 판단은 근거와 가정을 분리해 제시합니다", "검증된 자료, 사용자 확인, 가정을 명확히 나눕니다.", []string{"주요 근거", "남은 확인사항", "리스크"}),
-		makeSpecSlide("slide_03", "next_steps", "다음 실행은 검증 가능한 산출물 기준으로 관리합니다", "HTML, 렌더 이미지, PDF, QA report의 freshness로 완료를 판단합니다.", []string{"렌더링", "QA", "패키지 gate"}),
+	authoring, authoringPath := authoringResultForStage(deckAbs, "spec")
+	slides := specSlidesFromAuthoring(authoring)
+	if len(slides) == 0 {
+		slides = []map[string]any{
+			makeSpecSlide("slide_01", "cover", title, "문서의 목적과 의사결정 맥락을 한 문장으로 정리합니다.", []string{"현재 확인된 입력을 기준으로 작성", "부족한 사실은 가정으로 분리"}),
+			makeSpecSlide("slide_02", "executive_summary", "핵심 판단은 근거와 가정을 분리해 제시합니다", "검증된 자료, 사용자 확인, 가정을 명확히 나눕니다.", []string{"주요 근거", "남은 확인사항", "리스크"}),
+			makeSpecSlide("slide_03", "next_steps", "다음 실행은 검증 가능한 산출물 기준으로 관리합니다", "HTML, 렌더 이미지, PDF, QA report의 freshness로 완료를 판단합니다.", []string{"렌더링", "QA", "패키지 gate"}),
+		}
 	}
 	spec := map[string]any{
 		"metadata":                map[string]any{"title": title, "version": "0.1.0", "deckId": deckID, "activeDeckDir": filepath.ToSlash(deckAbs), "outputDir": filepath.ToSlash(outDir), "schemaVersion": "slidex.deck_spec.v1", "toolName": toolName, "referenceFiles": sourceRefs},
@@ -2668,6 +3010,16 @@ func ensureSpec(deck string, force bool) (string, error) {
 		"accessibilityNotes":      []string{"Maintain contrast and readable font sizes."},
 		"htmlImplementationNotes": []string{"Static HTML/CSS only."},
 		"userEditPolicy":          map[string]any{"allowDirectHtmlEdits": true, "syncRequiredAfterHtmlEdits": true, "preserveUserEditsByDefault": true, "baselineHtml": "out/final_deck.generated_baseline.html", "syncReport": "out/html_edit_sync.md", "staleDerivativePolicy": "mark stale with concrete reasons"},
+	}
+	if authoringPath != "" {
+		spec["candidateOutputComparison"] = []map[string]any{{
+			"path":                    filepath.ToSlash(authoringPath),
+			"modelOrSource":           "codex_runtime",
+			"adopt":                   []string{"slideBlueprints", "claimPolicy"},
+			"adapt":                   []string{"HTML implementation remains deterministic and schema validated."},
+			"reject":                  []string{"Unsupported claims not present in source material."},
+			"sourceFaithfulnessNotes": fmt.Sprint(authoring["summary"]),
+		}}
 	}
 	if err := writeJSONFile(path, spec); err != nil {
 		return "", err
@@ -2705,16 +3057,30 @@ func ensureHTML(deck string, force bool) (string, error) {
 	}
 	slides, _ := spec["slides"].([]any)
 	title := fmt.Sprint(specValue(spec, "metadata", "title"))
+	htmlAuthoring, htmlAuthoringPath := authoringResultForStage(deckAbs, "build_html")
+	htmlNotes := authoringStringArray(htmlAuthoring["htmlNotes"])
 	var b strings.Builder
 	b.WriteString(`<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>`)
+`)
+	if htmlAuthoringPath != "" {
+		b.WriteString(`<meta name="slidex-codex-authoring" content="`)
+		b.WriteString(escapeHTML(filepath.ToSlash(htmlAuthoringPath)))
+		b.WriteString(`">
+`)
+	}
+	b.WriteString(`<title>`)
 	b.WriteString(escapeHTML(title))
 	b.WriteString(`</title>
 <style>
+`)
+	if len(htmlNotes) > 0 {
+		b.WriteString("/* Codex HTML authoring notes: " + escapeCSSComment(strings.Join(htmlNotes, " | ")) + " */\n")
+	}
+	b.WriteString(`
 :root {
   --slide-width: 1920px;
   --slide-height: 1080px;
@@ -2969,7 +3335,22 @@ func writeStructuredReviewForRuntime(deck, stage string, round int, codexMode st
 
 func structuredReviewFindings(deckAbs, stage string) []qaFinding {
 	findings := []qaFinding{}
-	if stage == "delivery" || stage == "qa" {
+	switch stage {
+	case "design":
+		for _, rel := range []string{"strategy.md", "deck_spec.json"} {
+			path := filepath.Join(deckAbs, "out", rel)
+			if _, err := os.Stat(path); err != nil {
+				findings = append(findings, fail("review.artifact", "required review artifact missing: "+err.Error(), path))
+			}
+		}
+	case "html":
+		for _, rel := range []string{"deck_spec.json", "final_deck.html", "final_deck.generated_baseline.html"} {
+			path := filepath.Join(deckAbs, "out", rel)
+			if _, err := os.Stat(path); err != nil {
+				findings = append(findings, fail("review.artifact", "required review artifact missing: "+err.Error(), path))
+			}
+		}
+	case "delivery", "qa":
 		for _, rel := range []string{"final_deck.html", "render_manifest.json", "qa_report.md", "visual_reviews/latest_review.json"} {
 			path := filepath.Join(deckAbs, "out", rel)
 			if _, err := os.Stat(path); err != nil {
@@ -2978,6 +3359,10 @@ func structuredReviewFindings(deckAbs, stage string) []qaFinding {
 		}
 	}
 	return findings
+}
+
+func structuredReviewStages() []string {
+	return []string{"design", "html", "qa", "delivery"}
 }
 
 func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[string]any) (string, error) {
@@ -3710,11 +4095,11 @@ func stageOutputs(deckAbs, stage string) []artifact {
 	case "intake":
 		paths = []string{filepath.Join(outDir, "intake_questions.md")}
 	case "strategy":
-		paths = []string{filepath.Join(outDir, "strategy.md")}
+		paths = append([]string{filepath.Join(outDir, "strategy.md")}, authoringArtifactCandidates(deckAbs, "strategy")...)
 	case "spec":
-		paths = []string{filepath.Join(outDir, "deck_spec.json")}
+		paths = append([]string{filepath.Join(outDir, "deck_spec.json")}, authoringArtifactCandidates(deckAbs, "spec")...)
 	case "build_html":
-		paths = []string{filepath.Join(outDir, "final_deck.html")}
+		paths = append([]string{filepath.Join(outDir, "final_deck.html")}, authoringArtifactCandidates(deckAbs, "build_html")...)
 	case "baseline_html":
 		paths = []string{filepath.Join(outDir, "final_deck.generated_baseline.html")}
 	case "render":
@@ -3726,7 +4111,10 @@ func stageOutputs(deckAbs, stage string) []artifact {
 	case "delivery_summary":
 		paths = []string{filepath.Join(outDir, "delivery_summary.md"), filepath.Join(outDir, "notes.md")}
 	case "review_loop":
-		paths = []string{filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_delivery.json"), filepath.Join(outDir, "agent_reviews", "round_01", "resolution.md")}
+		for _, reviewStage := range structuredReviewStages() {
+			paths = append(paths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+reviewStage+".json"))
+		}
+		paths = append(paths, filepath.Join(outDir, "agent_reviews", "round_01", "resolution.md"))
 	case "package":
 		paths = []string{filepath.Join(outDir, "slidex_state.json")}
 	}
@@ -3740,6 +4128,105 @@ func shouldRunAgentStageAudit(stage string) bool {
 	default:
 		return false
 	}
+}
+
+func runCodexAuthoringForRuntime(deckAbs, stage string, state slidexState, appRun *appServerWorkflowRun) error {
+	if !stageSupportsCodexAuthoring(stage) {
+		return nil
+	}
+	switch state.CodexRuntime.Mode {
+	case "app-server":
+		if appRun == nil || appRun.threadID == "" {
+			return exitCodeError(4, "App Server authoring requested for %s but no App Server thread is available", stage)
+		}
+		_, err := runAppServerAuthoring(appRun, deckAbs, state, stage)
+		return err
+	case "exec", "exec_fallback":
+		_, err := runCodexExecAuthoring(deckAbs, state, stage)
+		return err
+	default:
+		return exitCodeError(4, "unsupported Codex runtime mode for authoring: %s", state.CodexRuntime.Mode)
+	}
+}
+
+func stageSupportsCodexAuthoring(stage string) bool {
+	switch stage {
+	case "strategy", "spec", "build_html":
+		return true
+	default:
+		return false
+	}
+}
+
+func runAppServerAuthoring(appRun *appServerWorkflowRun, deckAbs string, state slidexState, stage string) (string, error) {
+	prompt := authoringPrompt(deckAbs, state, stage, "app-server")
+	result, err := appRun.runStructuredTurn("authoring_"+stage, prompt, filepath.Join("schemas", "app_authoring_result.strict.schema.json"), 3*time.Minute)
+	if err != nil {
+		return "", err
+	}
+	path, result, err := writeAppServerTurnResult(filepath.Join(deckAbs, "out"), result)
+	if err != nil {
+		return "", err
+	}
+	if err := recordAppServerTurn(filepath.Join(deckAbs, "out"), "authoring_"+stage, result); err != nil {
+		return "", err
+	}
+	if status, _ := result.StructuredOutput["status"].(string); status != "pass" && status != "pass_with_risks" {
+		return path, exitCodeError(3, "App Server authoring stage %s returned stop condition %s", stage, status)
+	}
+	_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "codex_authoring_app_server", "stage": stage, "turn": path, "status": result.StructuredOutput["status"]})
+	return path, nil
+}
+
+func runCodexExecAuthoring(deckAbs string, state slidexState, stage string) (string, error) {
+	path, payload, err := runCodexExecStructured(deckAbs, "authoring_"+stage, authoringPrompt(deckAbs, state, stage, "exec"), filepath.Join("schemas", "app_authoring_result.strict.schema.json"), false, "", nil)
+	if err != nil {
+		return path, err
+	}
+	if status, _ := payload["status"].(string); status != "pass" && status != "pass_with_risks" {
+		return path, exitCodeError(3, "codex exec authoring stage %s returned stop condition %s", stage, status)
+	}
+	_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "codex_authoring_exec", "stage": stage, "execRun": path, "status": payload["status"]})
+	return path, nil
+}
+
+func authoringPrompt(deckAbs string, state slidexState, stage, runtime string) string {
+	brief := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "brief.md")), 1800)
+	design := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "DESIGN.md")), 900)
+	strategy := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "out", "strategy.md")), 1200)
+	spec := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "out", "deck_spec.json")), 1600)
+	inputsRaw, _ := json.MarshalIndent(stageInputs(deckAbs, stage), "", "  ")
+	goalRaw, _ := json.MarshalIndent(state.Goal, "", "  ")
+	return strings.TrimSpace(fmt.Sprintf(`You are the slidex %s authoring runtime for stage %q.
+Return JSON only matching schemas/app_authoring_result.strict.schema.json.
+The Go engine will write files only after this JSON passes local schema validation.
+Do not invent metrics, customers, screenshots, certifications, compliance claims, or unsupported product facts.
+Use only the provided brief/source inventory excerpts and write unsupported business claims as assumptions.
+
+Deck directory: %s
+Goal context:
+%s
+Selected inputs:
+%s
+
+Brief excerpt:
+%s
+
+Design excerpt:
+%s
+
+Existing strategy excerpt, if any:
+%s
+
+Existing spec excerpt, if any:
+%s
+
+Stage-specific contract:
+- strategy: set stage "strategy", status "pass" when enough context exists, and provide strategyMarkdown as concise Korean/English business strategy markdown with source, audience, purpose, claim policy, story arc, and risks.
+- spec: set stage "spec", status "pass" when enough context exists, and provide 3 to 8 slideBlueprints with action headlines, concise key messages, bodyContent bullets, evidenceRefs, and claims.
+- build_html: set stage "build_html", status "pass" when enough context exists, and provide htmlNotes describing concrete layout, hierarchy, accessibility, and Korean wrapping directives for the generated HTML.
+- For fields not used by the current stage, return an empty string or empty array.
+- risks must use owner, reason, expiration, and artifactLink only for concrete non-blocking risks.`, runtime, stage, deckAbs, string(goalRaw), string(inputsRaw), brief, design, strategy, spec))
 }
 
 func runAppServerStageAudit(appRun *appServerWorkflowRun, deckAbs string, state slidexState, stage string) (string, error) {
@@ -3805,9 +4292,9 @@ func stageAuditPrompt(deckAbs string, state slidexState, stage, runtime string) 
 	goalRaw, _ := json.MarshalIndent(state.Goal, "", "  ")
 	baselineRaw, _ := json.MarshalIndent(stageResultBaseline(deckAbs, stage), "", "  ")
 	return strings.TrimSpace(fmt.Sprintf(`You are the slidex %s structured stage runner for stage %q.
-Return JSON only matching schemas/app_stage_result.strict.schema.json. Do not inspect or modify files.
-The deterministic slidex engine already inspected the files before this turn.
-Return the Baseline JSON exactly. Do not infer missing files, do not override status, and do not add risks.
+Return JSON only matching schemas/app_stage_result.strict.schema.json.
+Inspect the provided artifact hashes and stage contract. The Go engine has already materialized schema-validated artifacts from Codex authoring output where the stage requires authoring.
+Pass the stage only when the listed artifacts satisfy the contract. Do not invent missing files or unsupported risks.
 
 Deck directory: %s
 Output schema: schemas/app_stage_result.strict.schema.json
@@ -3816,7 +4303,7 @@ Goal context:
 %s
 Selected inputs:
 %s
-Baseline JSON:
+Current artifact evidence:
 %s
 
 Risk policy:
@@ -4488,18 +4975,18 @@ func verifyVisualReviewEvidence(path string, manifest renderManifest) []qaFindin
 func verifyStructuredReviewGate(path string, manifest renderManifest) []qaFinding {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return []qaFinding{fail("package.structured_review", "structured delivery review missing: "+err.Error(), path)}
+		return []qaFinding{fail("package.structured_review", "structured review missing: "+err.Error(), path)}
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return []qaFinding{fail("package.structured_review", err.Error(), path)}
 	}
 	if status, _ := payload["status"].(string); status != "pass" {
-		return []qaFinding{fail("package.structured_review", "structured delivery review did not pass", path)}
+		return []qaFinding{fail("package.structured_review", "structured review did not pass", path)}
 	}
 	if info, err := os.Stat(path); err == nil {
 		if manifestTime, parseErr := time.Parse(time.RFC3339, manifest.RenderTimestamp); parseErr == nil && info.ModTime().Before(manifestTime) {
-			return []qaFinding{fail("package.structured_review_freshness", "structured delivery review is older than render manifest", path)}
+			return []qaFinding{fail("package.structured_review_freshness", "structured review is older than render manifest", path)}
 		}
 	}
 	return nil
@@ -4964,6 +5451,10 @@ func specValue(spec map[string]any, path ...string) any {
 func escapeHTML(s string) string {
 	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 	return replacer.Replace(s)
+}
+
+func escapeCSSComment(s string) string {
+	return strings.NewReplacer("/*", "/ *", "*/", "* /", "\n", " ").Replace(s)
 }
 
 func copyStream(dst io.Writer, src io.Reader) error {
