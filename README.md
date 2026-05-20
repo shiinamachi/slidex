@@ -93,46 +93,35 @@ PDF는 일반 프레젠테이션 내보내기처럼 한 슬라이드가 한 PDF 
 최종 완료를 주장하려면 현재 HTML에서 렌더링된 이미지와 PDF가 존재하고, montage와
 렌더 이미지를 실제로 검사해야 합니다.
 
-## 프롬프트 실행
+## Primary CLI Workflow
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_start_business_doc.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/01_create_business_strategy.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/02_create_business_doc_spec.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/03_build_html_deck.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/04_render_html.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/05_business_visual_qa.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/06_revise_html_deck.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/07_sync_user_html_edits.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/08_finalize_business_delivery.md
+slidex run --deck decks/customer-retention
 ```
 
-원샷 흐름은 intake gate가 완료된 경우에만 자율 실행합니다.
+`slidex run`은 intake gate, strategy, spec, HTML build, baseline, render, QA,
+delivery summary, package gate를 한 흐름으로 실행합니다. 자료가 부족하면
+`${OUT_DIR}/intake_questions.md`에 한국어 질문을 쓰고 exit code `3`으로 멈춥니다.
+
+단계별 수리가 필요하면 같은 `--deck` resolver를 사용하는 stage 명령을 실행합니다.
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_shot_create_business_doc.md
-```
-
-## 로컬 CLI
-
-표준 렌더링과 검증에는 canonical CLI 이름 `slidex`을 사용합니다. 문서와
-acceptance 기준의 기준 이름은 항상 `slidex`입니다.
-
-```bash
-mise exec -- slidex render \
-  --html decks/customer-retention/out/final_deck.html \
-  --out decks/customer-retention/out/rendered_slides \
-  --pdf decks/customer-retention/out/final_deck.pdf \
-  --manifest decks/customer-retention/out/render_manifest.json \
-  --pdf-mode paginated \
-  --selector .slide \
-  --width 1920 \
-  --height 1080 \
-  --font-preset pretendard
+slidex inspect --deck decks/customer-retention --write
+slidex intake --deck decks/customer-retention
+slidex strategy --deck decks/customer-retention
+slidex spec --deck decks/customer-retention
+slidex build --deck decks/customer-retention
+slidex render --deck decks/customer-retention
+slidex qa --deck decks/customer-retention
+slidex finalize --deck decks/customer-retention
+slidex package --deck decks/customer-retention
 ```
 
 제공 명령:
 
+- `run`: 표준 workflow를 package gate까지 실행합니다.
+- `doctor`: Go, Chrome, Codex CLI, protocol schema, skill/plugin 경로를 점검합니다.
+- `intake`, `strategy`, `spec`, `build`, `finalize`: 표준 stage 산출물을 생성합니다.
 - `inspect`: 작업공간 입력과 산출물 inventory를 JSON으로 출력합니다.
 - `validate-spec`: `deck_spec.json`을 schema 기반 계약에 맞춰 검증합니다.
 - `render`: HTML `.slide`를 PNG로 렌더링하고 페이지형 PDF, manifest, montage를
@@ -142,6 +131,21 @@ mise exec -- slidex render \
 - `sync-html-edits`: 사용자가 직접 수정한 HTML을 baseline과 비교하고 spec/notes/QA
   stale 상태를 동기화합니다.
 - `package`: 최종 산출물 존재와 manifest freshness를 확인합니다.
+- `codex`: Codex CLI 0.132.0 protocol/schema/doctor/review 보조 명령입니다.
+- `goal`: App Server goal mirror 또는 local goal state를 관리합니다.
+- `migrate`, `clean`, `mcp-server`: migration, log retention, MCP stdio surface를 제공합니다.
+
+기존 `render --html ... --pdf ...` 형태는 advanced override로 유지합니다.
+
+## Advanced Prompt Fallback
+
+직접 prompt 파일을 실행하는 방식은 CLI가 없는 환경이나 디버깅용 fallback입니다.
+일반 사용자는 prompt 파일을 직접 조합하지 않습니다.
+
+```bash
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_start_business_doc.md
+DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_shot_create_business_doc.md
+```
 
 ## 런타임과 버전 고정
 
@@ -154,6 +158,20 @@ mise exec -- go version
 mise exec -- go install ./cmd/slidex
 mise exec -- go test ./...
 ```
+
+PATH에 설치하려면 Go bin directory를 shell PATH에 추가합니다.
+
+```bash
+mise exec -- go install ./cmd/slidex
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+Shell completion은 Codex CLI 자체 completion을 사용할 수 있으며, `slidex` completion은
+release packaging 단계에서 같은 명령 표면을 기준으로 생성합니다.
+
+Release packaging은 Go exact pin, `go.sum`, vendored Codex protocol schema, companion
+skill/plugin package, README/commands documentation, 그리고 `mise exec -- go test ./...`
+통과를 한 묶음으로 검증합니다.
 
 라이브러리와 런타임 버전은 항상 exact version으로 기록합니다. `latest`,
 `main`, `master`, `HEAD`, `>=`, `<=`, `>`, `<`, `^`, `~`, `x`, `*` 같은 range 또는

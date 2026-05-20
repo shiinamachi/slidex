@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "slidex.hooks.v1",
+  "hooks": [
+    {
+      "name": "html-edit-advisory",
+      "mode": "read-only-advisory",
+      "trigger": "out/final_deck.html changed",
+      "message": "Run slidex sync-html-edits --deck <deck> before final delivery."
+    },
+    {
+      "name": "stale-manifest-advisory",
+      "mode": "read-only-advisory",
+      "trigger": "render manifest older than final_deck.html",
+      "message": "Run slidex render --deck <deck> and slidex qa --deck <deck>."
+    }
+  ],
+  "forbiddenActions": [
+    "modify HTML automatically",
+    "start a Codex turn automatically",
+    "run shell commands without approval"
+  ]
+}
+
