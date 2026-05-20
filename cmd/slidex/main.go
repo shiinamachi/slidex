@@ -1660,6 +1660,20 @@ func qaDeck(deck string, writeReport bool) (qaResult, error) {
 }
 
 func qaDeckWithVisualReview(deck string, writeReport bool, visualReview string) (qaResult, error) {
+	return qaDeckWithVisualReviewRunner(deck, writeReport, visualReview, runVisualReview)
+}
+
+func qaDeckWithAppServerVisualReview(deck string, writeReport bool, visualReview string, appRun *appServerWorkflowRun) (qaResult, error) {
+	runner := func(deckAbs string, manifest renderManifest, mode string) (string, []qaFinding) {
+		if strings.EqualFold(strings.TrimSpace(mode), "codex") && appRun != nil {
+			return runAppServerVisualReview(deckAbs, manifest, appRun)
+		}
+		return runVisualReview(deckAbs, manifest, mode)
+	}
+	return qaDeckWithVisualReviewRunner(deck, writeReport, visualReview, runner)
+}
+
+func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview string, visualRunner func(string, renderManifest, string) (string, []qaFinding)) (qaResult, error) {
 	deckAbs := mustAbs(deck)
 	outDir := filepath.Join(deckAbs, "out")
 	specPath := filepath.Join(outDir, "deck_spec.json")
@@ -1793,7 +1807,7 @@ func qaDeckWithVisualReview(deck string, writeReport bool, visualReview string) 
 		result.Findings = append(result.Findings, fail("visual_review.image_set", err.Error(), filepath.Join(outDir, "visual_reviews", "image_set.json")))
 		result.Status = "fail"
 	}
-	visualStatus, visualFindings := runVisualReview(deckAbs, manifest, visualReview)
+	visualStatus, visualFindings := visualRunner(deckAbs, manifest, visualReview)
 	result.VisualStatus = visualStatus
 	result.Findings = append(result.Findings, visualFindings...)
 	if hasFailures(result.Findings) {

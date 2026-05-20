@@ -497,10 +497,10 @@ func runPipeline(args []string) error {
 		if *codexMode == "app-server" {
 			run, err := startAppServerWorkflowRun(deckAbs)
 			if err != nil {
-				if !*allowMismatch {
-					return exitCodeError(4, "App Server capability probe failed: %v", err)
-				}
-				state.UnresolvedRisks = append(state.UnresolvedRisks, acceptedRisk{Reason: "App Server probe failed with protocol mismatch allowed: " + err.Error(), Owner: "slidex", Expiration: time.Now().Add(24 * time.Hour).Format(time.RFC3339), ArtifactLink: "out/protocol_diagnostics.json"})
+				state.CodexRuntime.Mode = "exec_fallback"
+				state.CodexRuntime.Reason = "app_server_unavailable_or_failed: " + err.Error()
+				state.UnresolvedRisks = append(state.UnresolvedRisks, acceptedRisk{Reason: "App Server unavailable; using codex exec fallback with output schema: " + err.Error(), Owner: "slidex", Expiration: time.Now().Add(24 * time.Hour).Format(time.RFC3339), ArtifactLink: "out/protocol_diagnostics.json"})
+				_ = writeJSONFile(filepath.Join(outDir, "protocol_diagnostics.json"), map[string]any{"schemaVersion": "slidex.protocolDiagnostics.v1", "generatedAt": time.Now().UTC().Format(time.RFC3339), "codexVersion": installedCodexVersion(), "status": "exec_fallback", "error": err.Error()})
 			} else {
 				appRun = run
 				if err := writeJSONFile(filepath.Join(outDir, "protocol_diagnostics.json"), appRun.snapshot); err != nil {
@@ -585,7 +585,13 @@ func runPipeline(args []string) error {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
 	}
 	if err := recorder("qa", func() error {
-		qa, err := qaDeckWithVisualReview(deckAbs, true, *visualReview)
+		var qa qaResult
+		var err error
+		if state.CodexRuntime.Mode == "app-server" && appRun != nil {
+			qa, err = qaDeckWithAppServerVisualReview(deckAbs, true, *visualReview, appRun)
+		} else {
+			qa, err = qaDeckWithVisualReview(deckAbs, true, *visualReview)
+		}
 		if err != nil && qa.Status == "fail" {
 			return err
 		}
@@ -2610,6 +2616,64 @@ func runVisualReview(deckAbs string, manifest renderManifest, mode string) (stri
 	}
 	status, _ := payload["status"].(string)
 	return firstNonEmpty(status, "pass"), nil
+}
+
+func runAppServerVisualReview(deckAbs string, manifest renderManifest, appRun *appServerWorkflowRun) (string, []qaFinding) {
+	outDir := filepath.Join(deckAbs, "out")
+	reviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
+	if appRun == nil || appRun.threadID == "" {
+		return "blocked", []qaFinding{fail("visual_review.app_server", "App Server visual review requires an active thread", reviewPath)}
+	}
+	if len(manifest.PNGFiles) == 0 {
+		return "blocked", []qaFinding{fail("visual_review.app_server", "no rendered PNGs available for App Server localImage visual QA", filepath.Join(outDir, "rendered_slides"))}
+	}
+	imageEvidence := visualReviewEvidence(deckAbs, manifest)
+	expected := map[string]any{
+		"schemaVersion": "slidex.reviewFindings.v1",
+		"stage":         "visual_qa",
+		"round":         1,
+		"mode":          "codex_subagent",
+		"status":        "pass",
+		"imageEvidence": imageEvidence,
+		"findings":      []map[string]any{},
+	}
+	expectedRaw, _ := json.MarshalIndent(expected, "", "  ")
+	prompt := strings.TrimSpace(fmt.Sprintf(`Review the attached rendered slide images for visual QA using original local image fidelity.
+Return JSON only matching schemas/app_review_findings.strict.schema.json.
+Use this exact imageEvidence array. If no visible issue is present, return the baseline status pass with empty findings.
+Baseline JSON:
+%s`, string(expectedRaw)))
+	input := []map[string]any{{"type": "text", "text": prompt}}
+	for _, image := range manifest.PNGFiles {
+		input = append(input, map[string]any{"type": "localImage", "path": image.Path, "detail": "original"})
+	}
+	result, err := appRun.runStructuredTurnWithInput("visual_qa", input, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 5*time.Minute)
+	if err != nil {
+		return "blocked", []qaFinding{fail("visual_review.app_server", err.Error(), reviewPath)}
+	}
+	turnPath, result, err := writeAppServerTurnResult(outDir, result)
+	if err != nil {
+		return "blocked", []qaFinding{fail("visual_review.app_server_write", err.Error(), reviewPath)}
+	}
+	if err := recordAppServerTurn(outDir, "visual_qa", result); err != nil {
+		return "blocked", []qaFinding{fail("visual_review.app_server_thread", err.Error(), reviewPath)}
+	}
+	payload := result.StructuredOutput
+	if payload == nil {
+		return "blocked", []qaFinding{fail("visual_review.app_server", "App Server visual review returned no structured output", reviewPath)}
+	}
+	payload["mode"] = "codex_subagent"
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		return "blocked", []qaFinding{fail("visual_review.app_server_schema", err.Error(), reviewPath)}
+	}
+	if err := secureWriteJSON(reviewPath, payload); err != nil {
+		return "blocked", []qaFinding{fail("visual_review.app_server_write", err.Error(), reviewPath)}
+	}
+	_ = appendRunLog(outDir, map[string]any{"event": "visual_review_app_server", "turn": turnPath, "review": reviewPath, "imageFidelity": "original", "imageCount": len(manifest.PNGFiles)})
+	if status, _ := payload["status"].(string); status != "pass" {
+		return firstNonEmpty(status, "fail"), []qaFinding{fail("visual_review.app_server_status", "App Server visual review did not pass", reviewPath)}
+	}
+	return "pass", nil
 }
 
 func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]any {

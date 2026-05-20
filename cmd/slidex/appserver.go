@@ -103,6 +103,16 @@ func (c *appServerClient) close() {
 	_ = c.cmd.Wait()
 }
 
+func (c *appServerClient) notify(method string, params map[string]any) error {
+	req := map[string]any{"method": method}
+	if params != nil {
+		req["params"] = params
+	}
+	raw, _ := json.Marshal(req)
+	_, err := fmt.Fprintln(c.stdin, string(raw))
+	return err
+}
+
 func (c *appServerClient) request(method string, params map[string]any, timeout time.Duration) (map[string]any, []map[string]any, error) {
 	c.nextID++
 	id := c.nextID
@@ -137,6 +147,7 @@ func (c *appServerClient) request(method string, params map[string]any, timeout 
 func (c *appServerClient) waitForTurnCompletion(threadID, turnID string, timeout time.Duration) ([]map[string]any, map[string]any, error) {
 	deadline := time.After(timeout)
 	var notifications []map[string]any
+	activeTurnID := turnID
 	for {
 		select {
 		case msg, ok := <-c.lines:
@@ -146,13 +157,22 @@ func (c *appServerClient) waitForTurnCompletion(threadID, turnID string, timeout
 			if _, hasMethod := msg["method"]; hasMethod {
 				notifications = append(notifications, msg)
 			}
-			if method, _ := msg["method"].(string); method == "turn/completed" {
+			method, _ := msg["method"].(string)
+			params, _ := msg["params"].(map[string]any)
+			if method == "turn/started" || method == "item/started" || method == "item/completed" {
+				if paramsThreadID, _ := params["threadId"].(string); paramsThreadID == "" || paramsThreadID == threadID {
+					if got := turnIDFromNotification(method, params); got != "" {
+						activeTurnID = got
+					}
+				}
+			}
+			if method == "turn/completed" {
 				params, _ := msg["params"].(map[string]any)
 				if paramsThreadID, _ := params["threadId"].(string); paramsThreadID != "" && paramsThreadID != threadID {
 					continue
 				}
 				turn, _ := params["turn"].(map[string]any)
-				if id, _ := turn["id"].(string); id == turnID || id != "" {
+				if id, _ := turn["id"].(string); id != "" && id == activeTurnID {
 					return notifications, params, nil
 				}
 			}
@@ -197,6 +217,11 @@ func startAppServerWorkflowRun(deckAbs string) (*appServerWorkflowRun, error) {
 		return nil, err
 	}
 	run.snapshot["initialize"] = initResp["result"]
+	if err := client.notify("initialized", nil); err != nil {
+		client.close()
+		return nil, err
+	}
+	run.snapshot["initialized"] = true
 	for _, method := range []string{"model/list", "experimentalFeature/list", "mcpServerStatus/list"} {
 		resp, events, err := client.request(method, map[string]any{}, 20*time.Second)
 		addEvents(events)
@@ -241,6 +266,10 @@ func (r *appServerWorkflowRun) close() {
 }
 
 func (r *appServerWorkflowRun) runStructuredTurn(stage, prompt, schemaPath string, timeout time.Duration) (appServerTurnResult, error) {
+	return r.runStructuredTurnWithInput(stage, []map[string]any{{"type": "text", "text": prompt}}, prompt, schemaPath, timeout)
+}
+
+func (r *appServerWorkflowRun) runStructuredTurnWithInput(stage string, input []map[string]any, promptForHash, schemaPath string, timeout time.Duration) (appServerTurnResult, error) {
 	result := appServerTurnResult{
 		SchemaVersion:    "slidex.appServerTurn.v1",
 		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -248,7 +277,7 @@ func (r *appServerWorkflowRun) runStructuredTurn(stage, prompt, schemaPath strin
 		ThreadID:         r.threadID,
 		OutputSchemaPath: filepath.ToSlash(schemaPath),
 		OutputSchemaHash: mustSHA256(schemaPath),
-		PromptSha256:     sha256Bytes([]byte(prompt)),
+		PromptSha256:     sha256Bytes([]byte(promptForHash)),
 		Events:           []map[string]any{},
 	}
 	schema, err := readJSONSchemaObject(schemaPath)
@@ -262,7 +291,7 @@ func (r *appServerWorkflowRun) runStructuredTurn(stage, prompt, schemaPath strin
 		"sandboxPolicy":         map[string]any{"type": "readOnly"},
 		"model":                 firstNonEmpty(os.Getenv("SLIDEX_CODEX_MODEL"), "gpt-5.4-mini"),
 		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), r.deckAbs}),
-		"input":                 []map[string]any{{"type": "text", "text": prompt}},
+		"input":                 input,
 		"outputSchema":          schema,
 	}, 30*time.Second)
 	result.Events = append(result.Events, events...)
@@ -399,6 +428,10 @@ func appServerCapabilitySnapshot(deckAbs string, startThread bool) (map[string]a
 		return snapshot, err
 	}
 	snapshot["initialize"] = initResp["result"]
+	if err := client.notify("initialized", nil); err != nil {
+		return snapshot, err
+	}
+	snapshot["initialized"] = true
 	for _, method := range []string{"model/list", "experimentalFeature/list", "mcpServerStatus/list"} {
 		resp, events, err := client.request(method, map[string]any{}, 20*time.Second)
 		addEvents(events)
@@ -433,6 +466,10 @@ func appServerThreadFeatureProbe(threadID string) (map[string]any, error) {
 		return snapshot, err
 	}
 	snapshot["initialize"] = initResp["result"]
+	if err := client.notify("initialized", nil); err != nil {
+		return snapshot, err
+	}
+	snapshot["initialized"] = true
 	resumeResp, events, err := client.request("thread/resume", map[string]any{
 		"threadId":       threadID,
 		"cwd":            mustAbs("."),
@@ -465,6 +502,20 @@ func extractThreadID(v any) string {
 	thread, _ := obj["thread"].(map[string]any)
 	id, _ := thread["id"].(string)
 	return id
+}
+
+func turnIDFromNotification(method string, params map[string]any) string {
+	switch method {
+	case "turn/started":
+		turn, _ := params["turn"].(map[string]any)
+		id, _ := turn["id"].(string)
+		return id
+	case "item/started", "item/completed":
+		id, _ := params["turnId"].(string)
+		return id
+	default:
+		return ""
+	}
 }
 
 func extractTurnID(v any) string {
@@ -573,6 +624,9 @@ func appServerGoalRequest(deckAbs, threadID, method string, params map[string]an
 	if err != nil {
 		return nil, threadID, allEvents, err
 	}
+	if err := client.notify("initialized", nil); err != nil {
+		return nil, threadID, allEvents, err
+	}
 	if threadID == "" || threadID == "local-mirror" {
 		resp, events, err := client.request("thread/start", map[string]any{
 			"cwd":                   mustAbs("."),
@@ -624,6 +678,9 @@ func appServerReadThread(threadID string) (map[string]any, error) {
 		"clientInfo":   map[string]any{"name": "slidex", "title": "slidex CLI", "version": toolVersion},
 		"capabilities": map[string]any{"experimentalApi": true},
 	}, 10*time.Second); err != nil {
+		return nil, err
+	}
+	if err := client.notify("initialized", nil); err != nil {
 		return nil, err
 	}
 	if _, _, err := client.request("thread/resume", map[string]any{

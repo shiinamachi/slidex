@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractSlidesUsesHTMLParserForNestedSections(t *testing.T) {
@@ -197,6 +198,25 @@ func TestCodexExecResumeArgsKeepOutputSchema(t *testing.T) {
 	lastArgs := strings.Join(codexExecArgs("schema.json", "last.json", true, "last", nil), " ")
 	if !strings.Contains(lastArgs, "--last") {
 		t.Fatalf("resume --last args missing --last: %q", lastArgs)
+	}
+}
+
+func TestAppServerTurnCompletionUsesObservedTurnID(t *testing.T) {
+	client := &appServerClient{lines: make(chan map[string]any, 4)}
+	go func() {
+		client.lines <- map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "other-turn", "status": "completed"}}}
+		client.lines <- map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "actual-turn", "status": "inProgress"}}}
+		client.lines <- map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "actual-turn", "status": "completed"}}}
+	}()
+	events, completion, err := client.waitForTurnCompletion("thread-1", "response-turn", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want 3", len(events))
+	}
+	if got := turnIDFromCompletion(completion); got != "actual-turn" {
+		t.Fatalf("completion turn id = %q", got)
 	}
 }
 
