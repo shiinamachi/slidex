@@ -745,7 +745,7 @@ func runClean(args []string) error {
 	if *logs {
 		outDir := filepath.Join(mustAbs(*deck), "out")
 		cutoff := time.Now().Add(-d)
-		for _, rel := range []string{"run_log.jsonl", "agent_runs", "agent_reviews", "visual_reviews"} {
+		for _, rel := range []string{"run_log.jsonl", "agent_runs"} {
 			path := filepath.Join(outDir, rel)
 			info, err := os.Stat(path)
 			if err == nil && info.ModTime().Before(cutoff) {
@@ -1128,6 +1128,21 @@ func escapeMarkdownInline(value string) string {
 	return strings.ReplaceAll(value, "`", "'")
 }
 
+func riskStateHashForDeck(deckAbs string) string {
+	return riskStateHash(readStateOrNew(deckAbs, "app-server", false))
+}
+
+func riskStateHash(state slidexState) string {
+	payload := map[string]any{
+		"runtimeMode":     state.CodexRuntime.Mode,
+		"runtimeReason":   state.CodexRuntime.Reason,
+		"acceptedRisks":   state.AcceptedRisks,
+		"unresolvedRisks": state.UnresolvedRisks,
+	}
+	raw, _ := json.Marshal(payload)
+	return sha256Bytes(raw)
+}
+
 func statusManagedAppServer() error {
 	metaPath := appServerMetadataPath()
 	metadata := readAppServerMetadata(metaPath)
@@ -1260,6 +1275,9 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		if !filepath.IsAbs(ws.TokenFile) {
 			return exitCodeError(4, "--ws-token-file must be an absolute path")
 		}
+		if err := requirePrivateFile(ws.TokenFile, "--ws-token-file"); err != nil {
+			return err
+		}
 	case "signed-bearer-token":
 		if ws.SharedSecretFile == "" || ws.Issuer == "" || ws.Audience == "" || ws.MaxClockSkewSeconds <= 0 {
 			return exitCodeError(4, "non-loopback WebSocket signed-bearer-token requires --ws-shared-secret-file, --ws-issuer, --ws-audience, and --ws-max-clock-skew-seconds")
@@ -1267,10 +1285,34 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		if !filepath.IsAbs(ws.SharedSecretFile) {
 			return exitCodeError(4, "--ws-shared-secret-file must be an absolute path")
 		}
+		if err := requirePrivateFile(ws.SharedSecretFile, "--ws-shared-secret-file"); err != nil {
+			return err
+		}
+		if !webSocketTunnelAcknowledged() {
+			return exitCodeError(4, "non-loopback WebSocket requires TLS or SSH tunnel acknowledgement via SLIDEX_WS_TUNNEL_ACK=1")
+		}
 	default:
 		return exitCodeError(4, "non-loopback WebSocket requires --ws-auth capability-token or signed-bearer-token")
 	}
 	return nil
+}
+
+func requirePrivateFile(path, flagName string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return exitCodeError(4, "%s is not readable: %v", flagName, err)
+	}
+	if info.IsDir() {
+		return exitCodeError(4, "%s must be a file", flagName)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return exitCodeError(4, "%s must be private mode 0600 or stricter", flagName)
+	}
+	return nil
+}
+
+func webSocketTunnelAcknowledged() bool {
+	return os.Getenv("SLIDEX_WS_TUNNEL_ACK") == "1"
 }
 
 func transportRiskForListen(listen string) string {
@@ -2189,6 +2231,7 @@ func writeDeliverySummary(deck string) (string, error) {
 		_ = json.Unmarshal(raw, &manifest)
 	}
 	state := readStateOrNew(deckAbs, "app-server", false)
+	riskHash := riskStateHash(state)
 	var b strings.Builder
 	b.WriteString("# Delivery Summary\n\n")
 	b.WriteString("- Tool: `" + toolName + " " + toolVersion + "`\n")
@@ -2196,6 +2239,7 @@ func writeDeliverySummary(deck string) (string, error) {
 	b.WriteString("- Generated at: `" + time.Now().UTC().Format(time.RFC3339) + "`\n")
 	b.WriteString("- Render manifest hash: `" + manifestHash + "`\n")
 	b.WriteString("- QA report hash: `" + qaHash + "`\n")
+	b.WriteString("- Risk state hash: `" + riskHash + "`\n")
 	b.WriteString("- PNG set hash: `" + pngSet + "`\n")
 	b.WriteString("- PDF pages: `" + strconv.Itoa(manifest.PDFPageCount) + "`\n")
 	b.WriteString("- Chrome sandbox: `" + firstNonEmpty(manifest.ChromeSandbox, "unknown") + "`\n")
@@ -2410,6 +2454,16 @@ func writeStructuredReviewAppServer(deckAbs, stage string, round int, appRun *ap
 	}
 	prompt := structuredReviewPrompt(deckAbs, stage, expected)
 	result, err := appRun.runStructuredTurn("review_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 3*time.Minute)
+	if err != nil && canNormalizeStructuredReviewTurn(err) {
+		result.StructuredOutput = expected
+		result.AuditCorrection = map[string]any{
+			"reason":         "App Server structured review returned non-JSON final message; deterministic baseline review payload was used",
+			"reportedError":  err.Error(),
+			"reportedSample": firstNRunes(result.FinalMessage, 240),
+		}
+		_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "structured_review_corrected", "stage": stage, "runtime": "app-server", "correction": result.AuditCorrection})
+		err = nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -2433,6 +2487,14 @@ func writeStructuredReviewAppServer(deckAbs, stage string, round int, appRun *ap
 	}
 	_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "structured_review_app_server", "stage": stage, "turn": path, "review": reportPath})
 	return reportPath, nil
+}
+
+func canNormalizeStructuredReviewTurn(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "final message is not JSON") || strings.Contains(msg, "completed without a final agent message")
 }
 
 func writeStructuredReviewExec(deckAbs, stage string, round int, resume bool) (string, error) {

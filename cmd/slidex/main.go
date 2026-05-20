@@ -2609,7 +2609,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			if reportFindings := verifyTextArtifactFreshness("qa_report", qaReportPath, manifestPath, []string{manifest.SourceHTML.SHA256, mustSHA256(manifestPath), hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))}); len(reportFindings) > 0 {
 				findings = append(findings, reportFindings...)
 			}
-			if summaryFindings := verifyTextArtifactFreshness("delivery_summary", deliverySummaryPath, manifestPath, []string{mustSHA256(manifestPath)}); len(summaryFindings) > 0 {
+			if summaryFindings := verifyTextArtifactFreshness("delivery_summary", deliverySummaryPath, manifestPath, []string{mustSHA256(manifestPath), mustSHA256(qaReportPath), riskStateHashForDeck(filepath.Dir(outDir))}); len(summaryFindings) > 0 {
 				findings = append(findings, summaryFindings...)
 			}
 			findings = append(findings, verifyVisualReviewImageSet(visualImageSetPath, manifest)...)
@@ -2762,10 +2762,7 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	raw = append(raw, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, raw, 0o644)
+	return secureWriteFile(path, raw, 0o600)
 }
 
 func copyFile(src, dst string) error {

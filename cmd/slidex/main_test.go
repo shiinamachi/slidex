@@ -428,6 +428,15 @@ func TestExecAuditCorrectionIsWrittenBackToArtifact(t *testing.T) {
 	}
 }
 
+func TestStructuredReviewTurnCanNormalizeSchemaDrift(t *testing.T) {
+	if !canNormalizeStructuredReviewTurn(errors.New("app-server final message is not JSON: invalid character")) {
+		t.Fatal("expected non-JSON final message to be normalizable")
+	}
+	if canNormalizeStructuredReviewTurn(errors.New("app-server turn failed")) {
+		t.Fatal("failed turns must not be silently normalized")
+	}
+}
+
 func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	outDir := filepath.Join(deck, "out")
@@ -455,6 +464,107 @@ func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
 	summary := readFileOrEmpty(path)
 	if !strings.Contains(summary, risk) {
 		t.Fatalf("delivery summary did not include risk: %s", summary)
+	}
+	if !strings.Contains(summary, "Risk state hash:") {
+		t.Fatalf("delivery summary did not include risk state hash: %s", summary)
+	}
+	findings := verifyTextArtifactFreshness("delivery_summary", path, filepath.Join(outDir, "render_manifest.json"), []string{mustSHA256(filepath.Join(outDir, "render_manifest.json")), mustSHA256(filepath.Join(outDir, "qa_report.md")), riskStateHashForDeck(deck)})
+	if hasFailures(findings) {
+		t.Fatalf("delivery summary should be fresh for manifest, QA, and state hashes: %#v", findings)
+	}
+	if err := recordWebSocketTransportRisk(deck, "new risk", filepath.Join(outDir, "codex-app-server.json")); err != nil {
+		t.Fatal(err)
+	}
+	findings = verifyTextArtifactFreshness("delivery_summary", path, filepath.Join(outDir, "render_manifest.json"), []string{riskStateHashForDeck(deck)})
+	if !hasFailures(findings) {
+		t.Fatalf("delivery summary should be stale after state risk change")
+	}
+}
+
+func TestWriteJSONFileUsesSecurePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "payload.json")
+	if err := writeJSONFile(path, map[string]any{"ok": true}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("json file mode = %o, want 0600", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("json dir mode = %o, want 0700", dirInfo.Mode().Perm())
+	}
+}
+
+func TestCleanLogsKeepsReviewArtifacts(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	for _, rel := range []string{"run_log.jsonl", filepath.Join("agent_runs", "turn.json"), filepath.Join("agent_reviews", "round_01", "reviewer_delivery.json"), filepath.Join("visual_reviews", "latest_review.json")} {
+		path := filepath.Join(outDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Dir(path), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(filepath.Join(outDir, "agent_runs"), time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := runClean([]string{"--deck", deck, "--logs", "--older-than", "1h"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "agent_runs")); !os.IsNotExist(err) {
+		t.Fatalf("agent_runs should be removed, stat err=%v", err)
+	}
+	for _, rel := range []string{filepath.Join("agent_reviews", "round_01", "reviewer_delivery.json"), filepath.Join("visual_reviews", "latest_review.json")} {
+		if _, err := os.Stat(filepath.Join(outDir, rel)); err != nil {
+			t.Fatalf("delivery artifact should remain %s: %v", rel, err)
+		}
+	}
+}
+
+func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte("token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)})
+	if err == nil {
+		t.Fatal("expected public token file to fail")
+	}
+	if err := os.Chmod(token, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)}); err != nil {
+		t.Fatalf("private capability token should pass: %v", err)
+	}
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "")
+	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30})
+	if err == nil {
+		t.Fatal("expected signed bearer without tunnel acknowledgement to fail")
+	}
+	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "1")
+	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30}); err != nil {
+		t.Fatalf("signed bearer with tunnel acknowledgement should pass: %v", err)
 	}
 }
 
