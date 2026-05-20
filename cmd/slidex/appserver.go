@@ -206,6 +206,33 @@ func (c *appServerClient) waitForTurnCompletion(threadID, turnID string, timeout
 	}
 }
 
+func (c *appServerClient) waitForThreadCompacted(threadID string, timeout time.Duration) ([]map[string]any, map[string]any, error) {
+	deadline := time.After(timeout)
+	var notifications []map[string]any
+	for {
+		select {
+		case msg, ok := <-c.lines:
+			if !ok {
+				return notifications, nil, fmt.Errorf("app-server closed stdout while waiting for thread compact: %s", c.stderr.String())
+			}
+			if _, hasMethod := msg["method"]; hasMethod {
+				notifications = append(notifications, msg)
+			}
+			method, _ := msg["method"].(string)
+			if method != "thread/compacted" {
+				continue
+			}
+			params, _ := msg["params"].(map[string]any)
+			if paramsThreadID, _ := params["threadId"].(string); paramsThreadID != "" && paramsThreadID != threadID {
+				continue
+			}
+			return notifications, params, nil
+		case <-deadline:
+			return notifications, nil, fmt.Errorf("app-server thread/compact/start timed out waiting for thread %s", threadID)
+		}
+	}
+}
+
 func startAppServerWorkflowRun(deckAbs string) (*appServerWorkflowRun, error) {
 	client, err := newAppServerClient()
 	if err != nil {

@@ -497,6 +497,24 @@ func TestAppServerFinalMessageExtractionAcceptsActualCompletedTurnID(t *testing.
 	}
 }
 
+func TestAppServerThreadCompactWaitsForMatchingThread(t *testing.T) {
+	client := &appServerClient{lines: make(chan map[string]any, 3)}
+	go func() {
+		client.lines <- map[string]any{"method": "thread/compacted", "params": map[string]any{"threadId": "other", "turnId": "turn-other"}}
+		client.lines <- map[string]any{"method": "thread/compacted", "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1"}}
+	}()
+	events, compacted, err := client.waitForThreadCompacted("thread-1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	if got, _ := compacted["turnId"].(string); got != "turn-1" {
+		t.Fatalf("compact turn id = %q", got)
+	}
+}
+
 func isChromeSandboxEnvironmentFailure(err error) bool {
 	if err == nil {
 		return false

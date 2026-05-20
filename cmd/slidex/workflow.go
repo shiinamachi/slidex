@@ -1532,8 +1532,20 @@ func compactAppServerThread(deckAbs, threadID string) (compactSummaryRecord, err
 		record["completion"] = completion
 		if waitErr != nil {
 			record["error"] = waitErr.Error()
+			return compactSummaryRecord{}, waitErr
 		}
 		if actual := turnIDFromCompletion(completion); actual != "" {
+			turnID = actual
+		}
+	} else {
+		compactEvents, compacted, waitErr := client.waitForThreadCompacted(threadID, 5*time.Minute)
+		addEvents(compactEvents)
+		record["compacted"] = compacted
+		if waitErr != nil {
+			record["error"] = waitErr.Error()
+			return compactSummaryRecord{}, waitErr
+		}
+		if actual, _ := compacted["turnId"].(string); actual != "" {
 			turnID = actual
 		}
 	}
