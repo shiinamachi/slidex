@@ -1,0 +1,16 @@
+# Local/generated deck workspaces. Keep repository-owned deck docs and template.
+/decks/*
+!/decks/README.md
+!/decks/_template/
+!/decks/_template/**
+
+# Legacy single-document local inputs and outputs.
+/brief.md
+/assets/*
+!/assets/.gitkeep
+/brand/*
+!/brand/*.template.*
+/data/*
+!/data/.gitkeep
+/out/*
+!/out/.gitkeep
