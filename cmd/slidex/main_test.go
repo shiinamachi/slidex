@@ -1131,6 +1131,16 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	if err := os.Chmod(token, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{}); err != nil {
+		t.Fatalf("loopback websocket without auth should pass: %v", err)
+	}
+	err = validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("0", 64)})
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("expected loopback capability token hash mismatch to fail, got %v", err)
+	}
+	if err := validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash}); err != nil {
+		t.Fatalf("loopback capability token with matching hash should pass without tunnel acknowledgement: %v", err)
+	}
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "")
 	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash})
 	if err == nil {
@@ -1501,6 +1511,8 @@ func TestReviewStartRiskSummaryIgnoresNegatedPhrases(t *testing.T) {
 		want bool
 	}{
 		{text: "No blocker or major findings remain.", want: false},
+		{text: "No blocker/major findings remain.", want: false},
+		{text: "No blockers and no majors remain.", want: false},
 		{text: "No major issues found.", want: false},
 		{text: "No blocker, but one major issue remains.", want: true},
 		{text: "Blocker: rendered PNG set is stale.", want: true},

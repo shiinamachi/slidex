@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	reviewStartNegatedRiskPattern = regexp.MustCompile(`\b(?:no|none|without)\s+(?:known\s+|remaining\s+)?(?:blockers?|majors?)(?:\s+(?:or|and|/)\s+(?:blockers?|majors?))?(?:\s+(?:issues?|findings?|risks?|remain|remaining|detected|found))?\b`)
+	reviewStartNegatedRiskPattern = regexp.MustCompile(`\b(?:no|none|without)\s+(?:known\s+|remaining\s+)?(?:blockers?|majors?)(?:(?:\s*/\s*|\s+(?:or|and)\s+(?:no\s+)?)(?:blockers?|majors?))?(?:\s+(?:issues?|findings?|risks?|remain|remaining|detected|found))?\b`)
 	reviewStartRiskTermPattern    = regexp.MustCompile(`\b(?:blockers?|majors?)\b`)
 )
 
@@ -2008,13 +2008,15 @@ func processAlive(pid int) bool {
 
 func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 	loopback := strings.HasPrefix(listen, "ws://127.0.0.1:") || strings.HasPrefix(listen, "ws://localhost:")
-	if loopback {
-		return nil
-	}
 	switch ws.Mode {
+	case "", "none":
+		if loopback {
+			return nil
+		}
+		return exitCodeError(4, "non-loopback WebSocket requires --ws-auth capability-token or signed-bearer-token")
 	case "capability-token":
 		if ws.TokenFile == "" || ws.TokenSHA256 == "" {
-			return exitCodeError(4, "non-loopback WebSocket capability-token requires --ws-token-file and --ws-token-sha256")
+			return exitCodeError(4, "WebSocket capability-token requires --ws-token-file and --ws-token-sha256")
 		}
 		if !filepath.IsAbs(ws.TokenFile) {
 			return exitCodeError(4, "--ws-token-file must be an absolute path")
@@ -2030,12 +2032,12 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		if !strings.EqualFold(actual, ws.TokenSHA256) {
 			return exitCodeError(4, "--ws-token-sha256 does not match --ws-token-file")
 		}
-		if !webSocketTunnelAcknowledged() {
+		if !loopback && !webSocketTunnelAcknowledged() {
 			return exitCodeError(4, "non-loopback WebSocket requires TLS or SSH tunnel acknowledgement via SLIDEX_WS_TUNNEL_ACK=1")
 		}
 	case "signed-bearer-token":
 		if ws.SharedSecretFile == "" || ws.Issuer == "" || ws.Audience == "" || ws.MaxClockSkewSeconds <= 0 {
-			return exitCodeError(4, "non-loopback WebSocket signed-bearer-token requires --ws-shared-secret-file, --ws-issuer, --ws-audience, and --ws-max-clock-skew-seconds")
+			return exitCodeError(4, "WebSocket signed-bearer-token requires --ws-shared-secret-file, --ws-issuer, --ws-audience, and --ws-max-clock-skew-seconds")
 		}
 		if !filepath.IsAbs(ws.SharedSecretFile) {
 			return exitCodeError(4, "--ws-shared-secret-file must be an absolute path")
@@ -2043,11 +2045,11 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		if err := requirePrivateFile(ws.SharedSecretFile, "--ws-shared-secret-file"); err != nil {
 			return err
 		}
-		if !webSocketTunnelAcknowledged() {
+		if !loopback && !webSocketTunnelAcknowledged() {
 			return exitCodeError(4, "non-loopback WebSocket requires TLS or SSH tunnel acknowledgement via SLIDEX_WS_TUNNEL_ACK=1")
 		}
 	default:
-		return exitCodeError(4, "non-loopback WebSocket requires --ws-auth capability-token or signed-bearer-token")
+		return exitCodeError(4, "WebSocket requires --ws-auth capability-token or signed-bearer-token")
 	}
 	return nil
 }
