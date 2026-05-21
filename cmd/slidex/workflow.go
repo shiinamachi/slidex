@@ -1816,6 +1816,12 @@ func webSocketAuthorizationHeader(ws webSocketAuthConfig) (string, error) {
 		if token == "" {
 			return "", fmt.Errorf("capability token file is empty")
 		}
+		if ws.TokenSHA256 != "" {
+			actual := sha256Bytes([]byte(token))
+			if !strings.EqualFold(actual, ws.TokenSHA256) {
+				return "", fmt.Errorf("capability token sha256 does not match token file")
+			}
+		}
 		return "Bearer " + token, nil
 	case "signed-bearer-token":
 		token, err := signedWebSocketBearerToken(ws)
@@ -1924,6 +1930,10 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 	if u.Scheme != "ws" {
 		return fmt.Errorf("websocket ping supports ws:// only")
 	}
+	auth, err := webSocketAuthorizationHeader(ws)
+	if err != nil {
+		return err
+	}
 	host := u.Host
 	if !strings.Contains(host, ":") {
 		host += ":80"
@@ -1939,10 +1949,6 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 		return err
 	}
 	path := firstNonEmpty(u.RequestURI(), "/")
-	auth, err := webSocketAuthorizationHeader(ws)
-	if err != nil {
-		return err
-	}
 	var req strings.Builder
 	req.WriteString("GET " + path + " HTTP/1.1\r\n")
 	req.WriteString("Host: " + u.Host + "\r\n")

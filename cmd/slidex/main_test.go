@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -1192,6 +1193,25 @@ func TestWebSocketSignedBearerAuthIsSentToHealthAndPing(t *testing.T) {
 	health := probeWebSocketAppServer(listen, auth)
 	if health["status"] != "pass" {
 		t.Fatalf("signed bearer websocket health should pass: %#v", health)
+	}
+}
+
+func TestWebSocketCapabilityProbeRejectsTokenHashDrift(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: sha256Bytes([]byte("original"))}
+	if err := os.WriteFile(token, []byte("rotated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	health := probeWebSocketHTTPHealth("ws://127.0.0.1:1/app", "/readyz", auth, time.Millisecond)
+	if health["status"] != "fail" || !strings.Contains(fmt.Sprint(health["error"]), "sha256") {
+		t.Fatalf("websocket HTTP probe should reject capability token hash drift, got %#v", health)
+	}
+	if err := webSocketPingOnce("ws://127.0.0.1:1/app", auth, time.Millisecond); err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("websocket ping should reject capability token hash drift before dialing, got %v", err)
 	}
 }
 
