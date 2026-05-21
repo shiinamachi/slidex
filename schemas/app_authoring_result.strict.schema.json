@@ -11,6 +11,7 @@
     "strategyMarkdown",
     "slideBlueprints",
     "htmlNotes",
+    "layoutContract",
     "claimPolicy",
     "risks"
   ],
@@ -52,6 +53,18 @@
     "htmlNotes": {
       "type": "array",
       "items": {"type": "string"}
+    },
+    "layoutContract": {
+      "type": "object",
+      "required": ["layoutMode", "panelLabel", "panelText", "primaryColor", "accentColor"],
+      "additionalProperties": false,
+      "properties": {
+        "layoutMode": {"type": "string"},
+        "panelLabel": {"type": "string"},
+        "panelText": {"type": "string"},
+        "primaryColor": {"type": "string"},
+        "accentColor": {"type": "string"}
+      }
     },
     "claimPolicy": {"type": "string"},
     "risks": {

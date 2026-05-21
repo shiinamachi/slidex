@@ -3,7 +3,7 @@
   "$id": "https://example.com/schemas/slidex.app_review_findings.strict.schema.json",
   "title": "slidex App Server Review Findings Strict",
   "type": "object",
-  "required": ["schemaVersion", "stage", "round", "mode", "status", "imageEvidence", "findings"],
+  "required": ["schemaVersion", "stage", "round", "mode", "status", "imageEvidence", "artifactHashes", "findings"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {"type": "string"},
@@ -40,6 +40,18 @@
             }
           }
         }
+      }
+    },
+    "artifactHashes": {
+      "type": "object",
+      "required": ["htmlSha256", "manifestSha256", "qaReportSha256", "deliverySummarySha256", "riskStateSha256"],
+      "additionalProperties": false,
+      "properties": {
+        "htmlSha256": {"type": "string"},
+        "manifestSha256": {"type": "string"},
+        "qaReportSha256": {"type": "string"},
+        "deliverySummarySha256": {"type": "string"},
+        "riskStateSha256": {"type": "string"}
       }
     },
     "findings": {

@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -553,13 +554,15 @@ func runIntake(args []string) error {
 	fs := flag.NewFlagSet("intake", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
 	answers := fs.String("answers", "", "answers file for batch intake")
-	interactive := fs.Bool("interactive", false, "reserved for interactive intake")
+	interactive := fs.Bool("interactive", false, "prompt for intake answers on stdin")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_ = interactive
 	if *deck == "" {
 		return exitCodeError(2, "--deck is required")
+	}
+	if *answers != "" && *interactive {
+		return exitCodeError(2, "--interactive and --answers are mutually exclusive")
 	}
 	deckAbs := mustAbs(*deck)
 	inv, err := inspectDeck(deckAbs)
@@ -587,6 +590,18 @@ func runIntake(args []string) error {
 		return err
 	}
 	if len(questions) > 0 {
+		if *interactive {
+			applied, err := applyInteractiveIntakeAnswers(deckAbs, questions, os.Stdin, os.Stdout)
+			if err != nil {
+				return err
+			}
+			if applied {
+				if err := writeIntakeQuestions(deckAbs, nil, "complete"); err != nil {
+					return err
+				}
+				return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "interactive": true})
+			}
+		}
 		_ = printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": status, "questions": questions})
 		return exitCodeError(3, "intake requires user input; questions written to %s", filepath.Join(deckAbs, "out", "intake_questions.md"))
 	}
@@ -865,7 +880,7 @@ func runPipeline(args []string) error {
 		if err := runCodexAuthoringForRuntime(deckAbs, "strategy", state, appRun); err != nil {
 			return err
 		}
-		_, err := ensureStrategy(deckAbs, false)
+		_, err := ensureStrategy(deckAbs, true)
 		return err
 	}); err != nil {
 		return err
@@ -877,7 +892,7 @@ func runPipeline(args []string) error {
 		if err := runCodexAuthoringForRuntime(deckAbs, "spec", state, appRun); err != nil {
 			return err
 		}
-		_, err := ensureSpec(deckAbs, false)
+		_, err := ensureSpec(deckAbs, true)
 		return err
 	}); err != nil {
 		return err
@@ -889,7 +904,7 @@ func runPipeline(args []string) error {
 		if err := runCodexAuthoringForRuntime(deckAbs, "build_html", state, appRun); err != nil {
 			return err
 		}
-		_, err := ensureHTML(deckAbs, false)
+		_, err := ensureHTML(deckAbs, true)
 		return err
 	}); err != nil {
 		return err
@@ -943,6 +958,15 @@ func runPipeline(args []string) error {
 	if *until == "qa" {
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until})
 	}
+	if err := recorder("delivery_summary", func() error {
+		if shouldStopGoalContinuation(state.Goal) {
+			return goalStopError(state.Goal)
+		}
+		_, err := writeDeliverySummary(deckAbs)
+		return err
+	}); err != nil {
+		return err
+	}
 	if err := recorder("review_loop", func() error {
 		if shouldStopGoalContinuation(state.Goal) {
 			return goalStopError(state.Goal)
@@ -953,15 +977,6 @@ func runPipeline(args []string) error {
 			}
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-	if err := recorder("delivery_summary", func() error {
-		if shouldStopGoalContinuation(state.Goal) {
-			return goalStopError(state.Goal)
-		}
-		_, err := writeDeliverySummary(deckAbs)
-		return err
 	}); err != nil {
 		return err
 	}
@@ -1556,8 +1571,12 @@ func statusManagedAppServer() error {
 	if alive, _ := metadata["alive"].(bool); alive {
 		if health, err := probeManagedAppServer(metadata); err == nil {
 			metadata["health"] = health
+			if status, _ := health["status"].(string); status != "" && status != "pass" {
+				return printJSON(map[string]any{"toolName": toolName, "status": status, "metadata": metadata})
+			}
 		} else {
 			metadata["health"] = map[string]any{"status": "fail", "error": err.Error()}
+			return printJSON(map[string]any{"toolName": toolName, "status": "fail", "metadata": metadata})
 		}
 	}
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
@@ -1690,7 +1709,12 @@ func probeWebSocketAppServer(listen string, ws webSocketAuthConfig) map[string]a
 	healthz := probeWebSocketHTTPHealth(listen, "/healthz", ws, policy.PingTimeout)
 	ping := webSocketPingWithRetry(listen, ws, policy)
 	status := "pass"
-	if fmt.Sprint(ping["status"]) != "pass" {
+	for _, item := range []map[string]any{readyz, healthz, ping} {
+		if itemStatus, _ := item["status"].(string); itemStatus != "" && itemStatus != "pass" {
+			status = "degraded"
+		}
+	}
+	if fmt.Sprint(ping["status"]) == "fail" || fmt.Sprint(readyz["status"]) == "fail" || fmt.Sprint(healthz["status"]) == "fail" {
 		status = "degraded"
 	}
 	return map[string]any{
@@ -1765,13 +1789,28 @@ func webSocketPingWithRetry(listen string, ws webSocketAuthConfig, policy webSoc
 		if !isWebSocketRetryable(err) || attempt == policy.MaxAttempts {
 			break
 		}
-		time.Sleep(delay)
+		time.Sleep(delay + webSocketRetryJitter(delay))
 		delay *= 2
 		if delay > policy.MaxDelay {
 			delay = policy.MaxDelay
 		}
 	}
 	return map[string]any{"status": "fail", "attempts": policy.MaxAttempts, "error": errorString(lastErr)}
+}
+
+func webSocketRetryJitter(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	max := base / 4
+	if max <= 0 {
+		return 0
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(n.Int64())
 }
 
 func isWebSocketRetryable(err error) bool {
@@ -2870,6 +2909,37 @@ func authoringStringArray(value any) []string {
 	return out
 }
 
+func defaultLayoutContract() map[string]string {
+	return map[string]string{
+		"layoutMode":   "evidence_panel",
+		"panelLabel":   "Evidence-aware",
+		"panelText":    "Facts, assumptions, risks, and next actions remain visibly separated.",
+		"primaryColor": "#1f6feb",
+		"accentColor":  "#f59e0b",
+	}
+}
+
+func authoringLayoutContract(authoring map[string]any) map[string]string {
+	out := defaultLayoutContract()
+	raw, _ := authoring["layoutContract"].(map[string]any)
+	for key := range out {
+		if value := strings.TrimSpace(fmt.Sprint(raw[key])); value != "" && value != "<nil>" {
+			out[key] = value
+		}
+	}
+	out["primaryColor"] = safeCSSColor(out["primaryColor"], "#1f6feb")
+	out["accentColor"] = safeCSSColor(out["accentColor"], "#f59e0b")
+	return out
+}
+
+func safeCSSColor(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`).MatchString(value) {
+		return strings.ToLower(value)
+	}
+	return fallback
+}
+
 func specSlidesFromAuthoring(authoring map[string]any) []map[string]any {
 	raw, ok := authoring["slideBlueprints"].([]any)
 	if !ok {
@@ -3059,6 +3129,7 @@ func ensureHTML(deck string, force bool) (string, error) {
 	title := fmt.Sprint(specValue(spec, "metadata", "title"))
 	htmlAuthoring, htmlAuthoringPath := authoringResultForStage(deckAbs, "build_html")
 	htmlNotes := authoringStringArray(htmlAuthoring["htmlNotes"])
+	layoutContract := authoringLayoutContract(htmlAuthoring)
 	var b strings.Builder
 	b.WriteString(`<!doctype html>
 <html lang="ko">
@@ -3069,6 +3140,9 @@ func ensureHTML(deck string, force bool) (string, error) {
 	if htmlAuthoringPath != "" {
 		b.WriteString(`<meta name="slidex-codex-authoring" content="`)
 		b.WriteString(escapeHTML(filepath.ToSlash(htmlAuthoringPath)))
+		b.WriteString(`">
+<meta name="slidex-layout-mode" content="`)
+		b.WriteString(escapeHTML(layoutContract["layoutMode"]))
 		b.WriteString(`">
 `)
 	}
@@ -3088,8 +3162,12 @@ func ensureHTML(deck string, force bool) (string, error) {
   --color-bg: #ffffff;
   --color-text: #111827;
   --color-muted: #475569;
-  --color-primary: #1f6feb;
-  --color-accent: #f59e0b;
+  --color-primary: `)
+	b.WriteString(layoutContract["primaryColor"])
+	b.WriteString(`;
+  --color-accent: `)
+	b.WriteString(layoutContract["accentColor"])
+	b.WriteString(`;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: #e5e7eb; font-family: var(--font-body); word-break: keep-all; overflow-wrap: normal; hyphens: none; line-break: strict; color: var(--color-text); }
@@ -3134,9 +3212,13 @@ h2 { font-size: 58px; }
   </header>
   <div class="body">
     <p class="message">%s</p>
-    <div class="panel"><strong>Evidence-aware</strong><span>Facts, assumptions, risks, and next actions remain visibly separated.</span></div>
+    <div class="panel"><strong>`, escapeHTML(id), escapeHTML(id), i+1, escapeHTML(headline), escapeHTML(key)))
+		b.WriteString(escapeHTML(layoutContract["panelLabel"]))
+		b.WriteString(`</strong><span>`)
+		b.WriteString(escapeHTML(layoutContract["panelText"]))
+		b.WriteString(`</span></div>
   </div>
-  <ul class="points">`, escapeHTML(id), escapeHTML(id), i+1, escapeHTML(headline), escapeHTML(key)))
+  <ul class="points">`)
 		for _, item := range bodyItems {
 			b.WriteString("<li>" + escapeHTML(item) + "</li>")
 		}
@@ -3224,7 +3306,11 @@ func writeDeliverySummary(deck string) (string, error) {
 func writeStructuredReview(deck, stage string, round int) (string, error) {
 	deckAbs := mustAbs(deck)
 	findings := structuredReviewFindings(deckAbs, stage)
-	payload := map[string]any{"schemaVersion": "slidex.structuredReview.v1", "stage": stage, "round": round, "mode": "parallel_reviewer_threads", "status": statusFromFindings(findings), "findings": findings}
+	imageEvidence := []map[string]any{}
+	if manifest, ok := readRenderManifest(filepath.Join(deckAbs, "out", "render_manifest.json")); ok {
+		imageEvidence = visualReviewEvidence(deckAbs, manifest)
+	}
+	payload := map[string]any{"schemaVersion": "slidex.reviewFindings.v1", "stage": stage, "round": round, "mode": "parallel_reviewer_threads", "status": statusFromFindings(findings), "imageEvidence": imageEvidence, "artifactHashes": structuredReviewArtifactHashes(deckAbs), "findings": findingsForStrictSchema(findings)}
 	return writeStructuredReviewPayload(deckAbs, stage, round, payload)
 }
 
@@ -3242,6 +3328,10 @@ func writeParallelReviewerThreadsAppServer(deckAbs, stage string, round int) (st
 		{Name: "artifact_freshness", Focus: "freshness of final HTML, render manifest, PNG/PDF, QA report, visual review, and delivery summary"},
 		{Name: "business_delivery", Focus: "delivery readiness, blocker/major risk separation, and accepted-risk policy"},
 	}
+	imageEvidence := []map[string]any{}
+	if manifest, ok := readRenderManifest(filepath.Join(deckAbs, "out", "render_manifest.json")); ok {
+		imageEvidence = visualReviewEvidence(deckAbs, manifest)
+	}
 	ch := make(chan reviewerResult, len(reviewers))
 	for _, spec := range reviewers {
 		spec := spec
@@ -3254,13 +3344,14 @@ func writeParallelReviewerThreadsAppServer(deckAbs, stage string, round int) (st
 			defer appRun.close()
 			findings := structuredReviewFindings(deckAbs, stage)
 			expected := map[string]any{
-				"schemaVersion": "slidex.reviewFindings.v1",
-				"stage":         stage,
-				"round":         round,
-				"mode":          "parallel_reviewer_threads",
-				"status":        statusFromFindings(findings),
-				"imageEvidence": []map[string]any{},
-				"findings":      findingsForStrictSchema(findings),
+				"schemaVersion":  "slidex.reviewFindings.v1",
+				"stage":          stage,
+				"round":          round,
+				"mode":           "parallel_reviewer_threads",
+				"status":         statusFromFindings(findings),
+				"imageEvidence":  imageEvidence,
+				"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+				"findings":       findingsForStrictSchema(findings),
 			}
 			prompt := structuredReviewPrompt(deckAbs, stage, expected) + "\nReviewer focus: " + spec.Focus + "\nReturn the deterministic baseline unless this focus reveals a concrete blocker in listed artifacts."
 			result, err := appRun.runStructuredTurn("parallel_"+spec.Name+"_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 3*time.Minute)
@@ -3300,13 +3391,14 @@ func writeParallelReviewerThreadsAppServer(deckAbs, stage string, round int) (st
 		})
 	}
 	payload := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         stage,
-		"round":         round,
-		"mode":          "parallel_reviewer_threads",
-		"status":        statusFromFindings(aggregate),
-		"imageEvidence": []map[string]any{},
-		"findings":      findingsForStrictSchema(aggregate),
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          stage,
+		"round":          round,
+		"mode":           "parallel_reviewer_threads",
+		"status":         statusFromFindings(aggregate),
+		"imageEvidence":  imageEvidence,
+		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+		"findings":       findingsForStrictSchema(aggregate),
 	}
 	reportPath, err := writeStructuredReviewPayload(deckAbs, stage, round, payload)
 	if err != nil {
@@ -3365,6 +3457,17 @@ func structuredReviewStages() []string {
 	return []string{"design", "html", "qa", "delivery"}
 }
 
+func structuredReviewArtifactHashes(deckAbs string) map[string]any {
+	outDir := filepath.Join(deckAbs, "out")
+	return map[string]any{
+		"htmlSha256":            mustSHA256(filepath.Join(outDir, "final_deck.html")),
+		"manifestSha256":        mustSHA256(filepath.Join(outDir, "render_manifest.json")),
+		"qaReportSha256":        mustSHA256(filepath.Join(outDir, "qa_report.md")),
+		"deliverySummarySha256": mustSHA256(filepath.Join(outDir, "delivery_summary.md")),
+		"riskStateSha256":       riskStateHashForDeck(deckAbs),
+	}
+}
+
 func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[string]any) (string, error) {
 	outDir := filepath.Join(deckAbs, "out", "agent_reviews", fmt.Sprintf("round_%02d", round))
 	if err := os.MkdirAll(outDir, 0o700); err != nil {
@@ -3404,26 +3507,17 @@ func writeStructuredReviewAppServer(deckAbs, stage string, round int, appRun *ap
 		imageEvidence = visualReviewEvidence(deckAbs, manifest)
 	}
 	expected := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         stage,
-		"round":         round,
-		"mode":          "structured_turn",
-		"status":        statusFromFindings(findings),
-		"imageEvidence": imageEvidence,
-		"findings":      findingsForStrictSchema(findings),
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          stage,
+		"round":          round,
+		"mode":           "structured_turn",
+		"status":         statusFromFindings(findings),
+		"imageEvidence":  imageEvidence,
+		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+		"findings":       findingsForStrictSchema(findings),
 	}
 	prompt := structuredReviewPrompt(deckAbs, stage, expected)
 	result, err := appRun.runStructuredTurn("review_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 3*time.Minute)
-	if err != nil && canNormalizeStructuredReviewTurn(err) {
-		result.StructuredOutput = expected
-		result.AuditCorrection = map[string]any{
-			"reason":         "App Server structured review returned non-JSON final message; deterministic baseline review payload was used",
-			"reportedError":  err.Error(),
-			"reportedSample": firstNRunes(result.FinalMessage, 240),
-		}
-		_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "structured_review_corrected", "stage": stage, "runtime": "app-server", "correction": result.AuditCorrection})
-		err = nil
-	}
 	if err != nil {
 		return "", err
 	}
@@ -3464,13 +3558,14 @@ func writeStructuredReviewExec(deckAbs, stage string, round int, resume bool) (s
 		imageEvidence = visualReviewEvidence(deckAbs, manifest)
 	}
 	expected := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         stage,
-		"round":         round,
-		"mode":          "structured_turn",
-		"status":        statusFromFindings(findings),
-		"imageEvidence": imageEvidence,
-		"findings":      findingsForStrictSchema(findings),
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          stage,
+		"round":          round,
+		"mode":           "structured_turn",
+		"status":         statusFromFindings(findings),
+		"imageEvidence":  imageEvidence,
+		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+		"findings":       findingsForStrictSchema(findings),
 	}
 	runPath, payload, err := runCodexExecStructured(deckAbs, "review_"+stage, structuredReviewPrompt(deckAbs, stage, expected), filepath.Join("schemas", "app_review_findings.strict.schema.json"), resume, "last", nil)
 	if err != nil {
@@ -3550,13 +3645,14 @@ func writeReviewStartNormalized(deckAbs, stage string, round int, appRun *appSer
 		return "", err
 	}
 	payload := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         stage,
-		"round":         round,
-		"mode":          "review_start_normalized",
-		"status":        "pass",
-		"imageEvidence": []map[string]any{},
-		"findings":      []map[string]any{},
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          stage,
+		"round":          round,
+		"mode":           "review_start_normalized",
+		"status":         "pass",
+		"imageEvidence":  []map[string]any{},
+		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+		"findings":       []map[string]any{},
 	}
 	if strings.Contains(strings.ToLower(finalText), "blocker") || strings.Contains(strings.ToLower(finalText), "major") {
 		payload["status"] = "pass_with_risks"
@@ -3618,6 +3714,35 @@ func applyIntakeAnswers(deckAbs, answersPath string) error {
 	if err != nil {
 		return err
 	}
+	return appendIntakeAnswers(deckAbs, raw)
+}
+
+func applyInteractiveIntakeAnswers(deckAbs string, questions []string, in io.Reader, out io.Writer) (bool, error) {
+	reader := bufio.NewReader(in)
+	var b strings.Builder
+	for i, question := range questions {
+		if out != nil {
+			_, _ = fmt.Fprintf(out, "%d. %s\n> ", i+1, question)
+		}
+		answer, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		answer = strings.TrimSpace(answer)
+		if answer != "" {
+			b.WriteString(fmt.Sprintf("### Q%d. %s\n\n%s\n\n", i+1, question, answer))
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		return false, nil
+	}
+	return true, appendIntakeAnswers(deckAbs, []byte(b.String()))
+}
+
+func appendIntakeAnswers(deckAbs string, raw []byte) error {
 	briefPath := filepath.Join(deckAbs, "brief.md")
 	var b strings.Builder
 	if existing, err := os.ReadFile(briefPath); err == nil {
@@ -3655,6 +3780,9 @@ func intakeQuestionsForDeck(deckAbs string) []string {
 }
 
 func writeIntakeQuestions(deckAbs string, questions []string, status string) error {
+	if questions == nil {
+		questions = []string{}
+	}
 	outDir := filepath.Join(deckAbs, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
@@ -4077,7 +4205,7 @@ func stageInputs(deckAbs, stage string) []artifact {
 	case "delivery_summary":
 		paths = []string{filepath.Join(outDir, "render_manifest.json"), filepath.Join(outDir, "qa_report.md")}
 	case "review_loop":
-		paths = []string{filepath.Join(outDir, "qa_report.md"), filepath.Join(outDir, "visual_reviews", "latest_review.json")}
+		paths = []string{filepath.Join(outDir, "qa_report.md"), filepath.Join(outDir, "visual_reviews", "latest_review.json"), filepath.Join(outDir, "delivery_summary.md")}
 	case "package":
 		paths = []string{filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "render_manifest.json"), filepath.Join(outDir, "qa_report.md"), filepath.Join(outDir, "delivery_summary.md")}
 	}
@@ -4123,7 +4251,7 @@ func stageOutputs(deckAbs, stage string) []artifact {
 
 func shouldRunAgentStageAudit(stage string) bool {
 	switch stage {
-	case "resolve_workspace", "strategy", "spec", "build_html", "qa", "review_loop", "delivery_summary":
+	case "resolve_workspace", "strategy", "spec", "build_html", "delivery_summary":
 		return true
 	default:
 		return false
@@ -4224,8 +4352,9 @@ Existing spec excerpt, if any:
 Stage-specific contract:
 - strategy: set stage "strategy", status "pass" when enough context exists, and provide strategyMarkdown as concise Korean/English business strategy markdown with source, audience, purpose, claim policy, story arc, and risks.
 - spec: set stage "spec", status "pass" when enough context exists, and provide 3 to 8 slideBlueprints with action headlines, concise key messages, bodyContent bullets, evidenceRefs, and claims.
-- build_html: set stage "build_html", status "pass" when enough context exists, and provide htmlNotes describing concrete layout, hierarchy, accessibility, and Korean wrapping directives for the generated HTML.
+- build_html: set stage "build_html", status "pass" when enough context exists, provide htmlNotes, and fill layoutContract. The Go HTML writer will consume layoutContract.panelLabel, panelText, primaryColor, accentColor, and layoutMode directly in final_deck.html.
 - For fields not used by the current stage, return an empty string or empty array.
+- layoutContract is always required; for non-build stages use empty strings or the default safe values.
 - risks must use owner, reason, expiration, and artifactLink only for concrete non-blocking risks.`, runtime, stage, deckAbs, string(goalRaw), string(inputsRaw), brief, design, strategy, spec))
 }
 
@@ -4778,13 +4907,14 @@ func runAppServerVisualReview(deckAbs string, manifest renderManifest, appRun *a
 	}
 	imageEvidence := visualReviewEvidence(deckAbs, manifest)
 	expected := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         "visual_qa",
-		"round":         1,
-		"mode":          "codex_subagent",
-		"status":        "pass",
-		"imageEvidence": imageEvidence,
-		"findings":      []map[string]any{},
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          "visual_qa",
+		"round":          1,
+		"mode":           "codex_subagent",
+		"status":         "pass",
+		"imageEvidence":  imageEvidence,
+		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+		"findings":       []map[string]any{},
 	}
 	expectedRaw, _ := json.MarshalIndent(expected, "", "  ")
 	prompt := strings.TrimSpace(fmt.Sprintf(`Review the attached rendered slide images for visual QA using original local image fidelity.
@@ -4848,8 +4978,9 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	if err := ensureSecureDir(filepath.Dir(lastMessage)); err != nil {
 		return nil, err
 	}
-	evidenceRaw, _ := json.MarshalIndent(visualReviewEvidence(deckAbs, manifest), "", "  ")
-	prompt := "Review the attached rendered slide images for visual QA. Return JSON only matching schemas/app_review_findings.strict.schema.json. schemaVersion must be slidex.reviewFindings.v1, stage visual_qa, round 1, mode codex_subagent. Include this exact imageEvidence array and set fidelity=original. If no issue is visible, status must be pass and findings empty.\nImage evidence:\n" + string(evidenceRaw)
+	expected := map[string]any{"schemaVersion": "slidex.reviewFindings.v1", "stage": "visual_qa", "round": 1, "mode": "codex_subagent", "status": "pass", "imageEvidence": visualReviewEvidence(deckAbs, manifest), "artifactHashes": structuredReviewArtifactHashes(deckAbs), "findings": []map[string]any{}}
+	expectedRaw, _ := json.MarshalIndent(expected, "", "  ")
+	prompt := "Review the attached rendered slide images for visual QA. Return JSON only matching schemas/app_review_findings.strict.schema.json. Return the Baseline JSON exactly if no visible issue is present.\nBaseline JSON:\n" + string(expectedRaw)
 	args := []string{
 		"exec",
 		"--sandbox", "read-only",
@@ -4972,7 +5103,7 @@ func verifyVisualReviewEvidence(path string, manifest renderManifest) []qaFindin
 	return findings
 }
 
-func verifyStructuredReviewGate(path string, manifest renderManifest) []qaFinding {
+func verifyStructuredReviewGate(path, expectedStage string, manifest renderManifest, deckAbs, htmlPath, qaReportPath, deliverySummaryPath string) []qaFinding {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return []qaFinding{fail("package.structured_review", "structured review missing: "+err.Error(), path)}
@@ -4981,15 +5112,54 @@ func verifyStructuredReviewGate(path string, manifest renderManifest) []qaFindin
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return []qaFinding{fail("package.structured_review", err.Error(), path)}
 	}
+	var findings []qaFinding
+	for _, schema := range []string{filepath.Join("schemas", "review_findings.schema.json"), filepath.Join("schemas", "app_review_findings.strict.schema.json")} {
+		if err := validatePayloadAgainstSchema(payload, schema); err != nil {
+			findings = append(findings, fail("package.structured_review_schema", err.Error(), path))
+		}
+	}
+	if stage, _ := payload["stage"].(string); stage != expectedStage {
+		findings = append(findings, fail("package.structured_review_stage", fmt.Sprintf("structured review stage=%q, want %q", stage, expectedStage), path))
+	}
+	if mode, _ := payload["mode"].(string); mode != "structured_turn" && mode != "parallel_reviewer_threads" && mode != "review_start_normalized" {
+		findings = append(findings, fail("package.structured_review_mode", "structured review mode must come from a runtime reviewer gate", path))
+	}
 	if status, _ := payload["status"].(string); status != "pass" {
-		return []qaFinding{fail("package.structured_review", "structured review did not pass", path)}
+		findings = append(findings, fail("package.structured_review", "structured review did not pass", path))
+	}
+	for _, f := range reviewFindingsFromPayload(payload) {
+		if f.Severity == "fail" {
+			findings = append(findings, fail("package.structured_review_finding", "structured review contains fail finding: "+f.Message, path))
+		}
+	}
+	if manifest.SourceHTML.SHA256 != "" && !strings.Contains(string(raw), manifest.SourceHTML.SHA256) {
+		findings = append(findings, fail("package.structured_review_freshness", "structured review does not reference current source HTML hash", path))
+	}
+	expectedHashes := map[string]string{
+		"htmlSha256":            mustSHA256(htmlPath),
+		"manifestSha256":        mustSHA256(filepath.Join(filepath.Dir(htmlPath), "render_manifest.json")),
+		"qaReportSha256":        mustSHA256(qaReportPath),
+		"deliverySummarySha256": mustSHA256(deliverySummaryPath),
+		"riskStateSha256":       riskStateHashForDeck(deckAbs),
+	}
+	rawHashes, _ := payload["artifactHashes"].(map[string]any)
+	for key, hash := range expectedHashes {
+		if got := fmt.Sprint(rawHashes[key]); hash != "" && got != hash {
+			findings = append(findings, fail("package.structured_review_freshness", fmt.Sprintf("structured review %s=%q, want current hash %q", key, got, hash), path))
+		}
+	}
+	if len(manifest.PNGFiles) > 0 {
+		rawEvidence, _ := payload["imageEvidence"].([]any)
+		if len(rawEvidence) != len(manifest.PNGFiles) {
+			findings = append(findings, fail("package.structured_review_evidence", fmt.Sprintf("image evidence count=%d, want %d", len(rawEvidence), len(manifest.PNGFiles)), path))
+		}
 	}
 	if info, err := os.Stat(path); err == nil {
 		if manifestTime, parseErr := time.Parse(time.RFC3339, manifest.RenderTimestamp); parseErr == nil && info.ModTime().Before(manifestTime) {
-			return []qaFinding{fail("package.structured_review_freshness", "structured review is older than render manifest", path)}
+			findings = append(findings, fail("package.structured_review_freshness", "structured review is older than render manifest", path))
 		}
 	}
-	return nil
+	return findings
 }
 
 func verifyTextArtifactFreshness(check, path, referencePath string, requiredHashes []string) []qaFinding {

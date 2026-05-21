@@ -42,6 +42,17 @@
         }
       }
     },
+    "artifactHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "htmlSha256": {"type": "string"},
+        "manifestSha256": {"type": "string"},
+        "qaReportSha256": {"type": "string"},
+        "deliverySummarySha256": {"type": "string"},
+        "riskStateSha256": {"type": "string"}
+      }
+    },
     "findings": {
       "type": "array",
       "items": {

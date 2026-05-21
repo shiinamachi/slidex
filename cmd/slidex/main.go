@@ -2620,8 +2620,9 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 				findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
 			}
 			findings = append(findings, verifyVisualReviewEvidence(visualReviewPath, manifest)...)
-			for _, structuredReviewPath := range structuredReviewPaths {
-				findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, manifest)...)
+			reviewStages := structuredReviewStages()
+			for i, structuredReviewPath := range structuredReviewPaths {
+				findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, reviewStages[i], manifest, deckAbs, htmlPath, qaReportPath, deliverySummaryPath)...)
 			}
 		}
 	}

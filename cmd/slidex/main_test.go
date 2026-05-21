@@ -152,6 +152,47 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	}
 }
 
+func TestRunIntakeInteractiveAppliesAnswers(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("TODO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = writer.WriteString("회사소개서\n임원진의 투자 검토 결정\n검증된 매출 수치는 제외하고 제품 범위만 사용\n")
+	_ = writer.Close()
+	os.Stdin = reader
+	defer func() {
+		os.Stdin = oldStdin
+		_ = reader.Close()
+	}()
+
+	if err := runIntake([]string{"--deck", deck, "--interactive"}); err != nil {
+		t.Fatal(err)
+	}
+	brief := readFileOrEmpty(filepath.Join(deck, "brief.md"))
+	if !strings.Contains(brief, "회사소개서") || !strings.Contains(brief, "임원진의 투자 검토 결정") {
+		t.Fatalf("interactive answers were not appended to brief.md:\n%s", brief)
+	}
+	intake := readFileOrEmpty(filepath.Join(deck, "out", "intake_questions.md"))
+	if !strings.Contains(intake, "Status: `complete`") {
+		t.Fatalf("interactive intake should mark questions complete:\n%s", intake)
+	}
+}
+
 func TestMigrateDryRunNeverWritesWithoutWrite(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	if err := copyDir(filepath.Join(repoRootForTest(t), "fixtures", "minimal_deck"), deck); err != nil {
@@ -213,13 +254,14 @@ func TestStrictAppServerSchemasAcceptLocalPayloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviewPayload := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         "delivery",
-		"round":         1,
-		"mode":          "structured_turn",
-		"status":        "pass",
-		"imageEvidence": []map[string]any{},
-		"findings":      []map[string]any{},
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          "delivery",
+		"round":          1,
+		"mode":           "structured_turn",
+		"status":         "pass",
+		"imageEvidence":  []map[string]any{},
+		"artifactHashes": structuredReviewArtifactHashes(filepath.Join(root, "fixtures", "minimal_deck")),
+		"findings":       []map[string]any{},
 	}
 	if err := validatePayloadAgainstSchema(reviewPayload, filepath.Join("schemas", "app_review_findings.strict.schema.json")); err != nil {
 		t.Fatal(err)
@@ -232,6 +274,7 @@ func TestStrictAppServerSchemasAcceptLocalPayloads(t *testing.T) {
 		"strategyMarkdown": "## Purpose\n\n검증 가능한 목적.",
 		"slideBlueprints":  []map[string]any{},
 		"htmlNotes":        []string{},
+		"layoutContract":   defaultLayoutContract(),
 		"claimPolicy":      "unsupported claims are assumptions",
 		"risks":            []map[string]any{},
 	}
@@ -263,6 +306,7 @@ func TestEnsureStrategyAndSpecConsumeCodexAuthoring(t *testing.T) {
 		"strategyMarkdown": "## Codex Authored Purpose\n\n현재 입력만 근거로 의사결정 목적을 정리합니다.",
 		"slideBlueprints":  []map[string]any{},
 		"htmlNotes":        []string{},
+		"layoutContract":   defaultLayoutContract(),
 		"claimPolicy":      "unsupported claims are assumptions",
 		"risks":            []map[string]any{},
 	}
@@ -280,14 +324,30 @@ func TestEnsureStrategyAndSpecConsumeCodexAuthoring(t *testing.T) {
 			"evidenceRefs": []string{"brief.md"},
 			"claims":       []string{"claim_001"},
 		}},
-		"htmlNotes":   []string{},
-		"claimPolicy": "unsupported claims are assumptions",
-		"risks":       []map[string]any{},
+		"htmlNotes":      []string{},
+		"layoutContract": defaultLayoutContract(),
+		"claimPolicy":    "unsupported claims are assumptions",
+		"risks":          []map[string]any{},
+	}
+	htmlPayload := map[string]any{
+		"schemaVersion":    "slidex.appAuthoringResult.v1",
+		"stage":            "build_html",
+		"status":           "pass",
+		"summary":          "Codex HTML summary",
+		"strategyMarkdown": "",
+		"slideBlueprints":  []map[string]any{},
+		"htmlNotes":        []string{"Use a decision panel."},
+		"layoutContract":   map[string]string{"layoutMode": "decision_panel", "panelLabel": "Codex Panel", "panelText": "Codex layout contract text.", "primaryColor": "#123456", "accentColor": "#abcdef"},
+		"claimPolicy":      "unsupported claims are assumptions",
+		"risks":            []map[string]any{},
 	}
 	if err := writeAuthoringTurnForTest(deck, "strategy", strategyPayload); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeAuthoringTurnForTest(deck, "spec", specPayload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAuthoringTurnForTest(deck, "build_html", htmlPayload); err != nil {
 		t.Fatal(err)
 	}
 	strategyPath, err := ensureStrategy(deck, true)
@@ -303,6 +363,16 @@ func TestEnsureStrategyAndSpecConsumeCodexAuthoring(t *testing.T) {
 	}
 	if !strings.Contains(readFileOrEmpty(specPath), "Codex가 검증된 입력") {
 		t.Fatalf("spec did not consume Codex slide blueprint: %s", readFileOrEmpty(specPath))
+	}
+	htmlPath, err := ensureHTML(deck, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := readFileOrEmpty(htmlPath)
+	for _, want := range []string{"Codex Panel", "Codex layout contract text.", "#123456", "#abcdef", "decision_panel"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("HTML did not consume Codex layout contract %q: %s", want, html)
+		}
 	}
 }
 
@@ -855,6 +925,18 @@ func TestWebSocketHealthProbeUsesHTTPAndPing(t *testing.T) {
 	}
 }
 
+func TestWebSocketHealthProbeDegradesOnHTTPFailure(t *testing.T) {
+	listen := startFakeWebSocketServer(t,
+		func(conn net.Conn) { handleFakeHTTPFailure(t, conn) },
+		func(conn net.Conn) { handleFakeHTTPHealth(t, conn) },
+		func(conn net.Conn) { handleFakeWebSocketPing(t, conn) },
+	)
+	health := probeWebSocketAppServer(listen, webSocketAuthConfig{})
+	if health["status"] != "degraded" {
+		t.Fatalf("websocket health should degrade on readyz failure: %#v", health)
+	}
+}
+
 func TestWebSocketPingRetriesOverload(t *testing.T) {
 	listen := startFakeWebSocketServer(t,
 		func(conn net.Conn) { handleFakeWebSocketOverload(t, conn) },
@@ -941,13 +1023,14 @@ func TestStrictStageAndReviewSchemasValidateRuntimePayloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviewPayload := map[string]any{
-		"schemaVersion": "slidex.reviewFindings.v1",
-		"stage":         "delivery",
-		"round":         1,
-		"mode":          "structured_turn",
-		"status":        "pass",
-		"imageEvidence": []map[string]any{},
-		"findings":      []map[string]any{},
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          "delivery",
+		"round":          1,
+		"mode":           "structured_turn",
+		"status":         "pass",
+		"imageEvidence":  []map[string]any{},
+		"artifactHashes": structuredReviewArtifactHashes(deck),
+		"findings":       []map[string]any{},
 	}
 	if err := validatePayloadAgainstSchema(reviewPayload, filepath.Join("schemas", "app_review_findings.strict.schema.json")); err != nil {
 		t.Fatal(err)
@@ -1089,6 +1172,12 @@ func handleFakeHTTPHealth(t *testing.T, conn net.Conn) {
 	defer conn.Close()
 	_ = readHTTPRequestForTest(t, conn)
 	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+}
+
+func handleFakeHTTPFailure(t *testing.T, conn net.Conn) {
+	defer conn.Close()
+	_ = readHTTPRequestForTest(t, conn)
+	_, _ = io.WriteString(conn, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror")
 }
 
 func handleFakeWebSocketOverload(t *testing.T, conn net.Conn) {
