@@ -23,7 +23,7 @@ Before every run, resolve the active deck directory using
 
 - Preferred active path: `decks/<deck_id>/`
 - Per-deck output path: `${ACTIVE_DECK_DIR}/out/`
-- Legacy root-level `brief.md`, `assets/`, `brand/`, `data/`, and `out/` are
+- Root-level `brief.md`, `assets/`, `brand/`, `data/`, and `out/` are
   supported only for single-document compatibility.
 - Do not mix materials from multiple workspaces unless the user explicitly asks
   for a combined or comparative document.
@@ -75,12 +75,13 @@ before making design or content decisions:
 - `${ACTIVE_DECK_DIR}/data/*.csv`
 - `${ACTIVE_DECK_DIR}/data/*.xlsx`
 - `${ACTIVE_DECK_DIR}/source/`
-- screenshots, PDFs, DOCX files, notes, user-supplied PPTX files, or other
+- screenshots, PDFs, DOCX files, notes, exported slide images, or other
   supplied source documents
 
-User-supplied PPTX files may be inspected only as passive source/reference
-documents. The system must not generate PPTX or list PPTX as a future required
-or optional delivery artifact.
+User-supplied presentation files may be inspected only as passive
+source/reference documents after their contents are accessible as ordinary
+source evidence. The system must not generate non-HTML/PDF delivery artifacts
+or list them as future required or optional deliverables.
 
 If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific style
 prompt. Apply it after the brief, source evidence, approved brand constraints,
@@ -203,7 +204,8 @@ Expected final outputs are:
 - Do not create an actual final business document during prompt-system setup.
 - Do not skip intake, strategy, spec, rendering, visual QA, revision, or final
   delivery notes in future workflows.
-- Do not generate PPTX as a required, optional, or legacy export path.
+- Do not generate non-HTML/PDF files as required, optional, or compatibility
+  export paths.
 - Do not flatten entire slides into images when editable HTML structure is
   practical.
 - Do not claim visual QA passed unless rendered slides and the PDF were

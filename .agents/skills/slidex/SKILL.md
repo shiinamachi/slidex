@@ -1,6 +1,6 @@
 ---
 name: slidex
-description: Use slidex for deterministic HTML/PDF presentation deck workflows, including intake, build, render, QA, revision, packaging, Codex protocol checks, and delivery gates. Trigger when the user asks to create, render, review, sync, package, migrate, or run a slidex deck.
+description: Use slidex for deterministic HTML/PDF business document workflows, including intake, build, render, QA, revision, packaging, Codex protocol checks, and delivery gates. Trigger when the user asks to create, render, review, sync, package, migrate, or run a slidex deck.
 ---
 
 # slidex
@@ -17,7 +17,8 @@ Use the repository CLI as the canonical interface. Do not run prompt files direc
 
 ## Rules
 
-- PPTX files are passive source or archived artifacts only.
+- User-supplied presentation files are passive source material only after their
+  contents are available as ordinary source evidence.
 - Chrome sandbox stays enabled by default; use `--chrome-no-sandbox` only as an explicit fallback and record the risk.
 - Material claims must be sourced, user-confirmed, or labeled as assumptions.
 - Keep deck materials scoped under the active `decks/<deck_id>/` workspace.
@@ -27,4 +28,3 @@ Use the repository CLI as the canonical interface. Do not run prompt files direc
 
 - Command reference: `references/commands.md`
 - Local doctor helper: `scripts/slidex-doctor.sh`
-

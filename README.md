@@ -2,7 +2,7 @@
 
 `slidex`은 Codex CLI가 비즈니스급 문서를 만들 때 사용하는
 파일 기반 프롬프트 시스템과 로컬 자동화 키트입니다. 대상 산출물은
-PowerPoint가 아니라 HTML을 시각 원본으로 삼아 렌더링한 페이지형 PDF입니다.
+HTML을 시각 원본으로 삼아 렌더링한 페이지형 PDF입니다.
 
 이 저장소는 앱이나 SaaS가 아닙니다. 비즈니스 계획서, IR/회사소개서, 정부지원
 사업계획서, 제안서, 임원 리뷰 문서를 만들기 위한 durable prompt, JSON
@@ -28,7 +28,6 @@ decks/<deck_id>/
     *.xlsx
   source/
     *.pdf
-    *.pptx
     *.docx
     notes.md
     screenshots/
@@ -52,9 +51,8 @@ decks/<deck_id>/
 ```
 
 `final_deck.html`이 최종 시각 원본이며, `final_deck.pdf`가 기본 납품 파일입니다.
-PDF는 일반 프레젠테이션 내보내기처럼 한 슬라이드가 한 PDF 페이지가 되도록
-만듭니다. 긴 세로형 PDF는 사용자가 별도 실험 산출물로 요청한 경우에만
-만듭니다.
+PDF는 한 슬라이드가 한 PDF 페이지가 되도록 만듭니다. 긴 세로형 PDF는 사용자가
+별도 실험 산출물로 요청한 경우에만 만듭니다.
 
 ## 입력 파일
 
@@ -67,10 +65,9 @@ PDF는 일반 프레젠테이션 내보내기처럼 한 슬라이드가 한 PDF 
 - `${ACTIVE_DECK_DIR}/assets/logo.png`, `${ACTIVE_DECK_DIR}/assets/images/`
 - `${ACTIVE_DECK_DIR}/brand/guidelines.md`, `${ACTIVE_DECK_DIR}/brand/colors.json`
 - `${ACTIVE_DECK_DIR}/data/*.csv`, `${ACTIVE_DECK_DIR}/data/*.xlsx`
-- `${ACTIVE_DECK_DIR}/source/`: PDF, DOCX, PPTX, 스크린샷, 회의 노트, 원문 자료
+- `${ACTIVE_DECK_DIR}/source/`: PDF, DOCX, 스크린샷, 회의 노트, 원문 자료
 
-사용자가 제공한 PPTX는 생성 대상이 아니라 수동 참고/source 문서로만 취급합니다.
-이 시스템은 PPTX를 생성하거나 선택 납품물로 제안하지 않습니다.
+이 시스템은 HTML/PDF 외의 파일 형식을 생성하거나 선택 납품물로 제안하지 않습니다.
 
 ## 표준 워크플로
 

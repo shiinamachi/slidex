@@ -4,7 +4,7 @@
 !/decks/_template/
 !/decks/_template/**
 
-# Legacy single-document local inputs and outputs.
+# Root compatibility local inputs and outputs.
 /brief.md
 /assets/*
 !/assets/.gitkeep

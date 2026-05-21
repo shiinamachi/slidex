@@ -44,4 +44,4 @@ Resolve `ACTIVE_DECK_DIR` and `OUT_DIR`.
 - Keep runtime, renderer, library, CDN, and font dependencies exact-pinned.
   Do not use `latest`, `main`, range operators, `^`, `~`, `x`, or `*`.
 - Render current HTML to PNG and PDF before QA.
-- Do not generate or deliver legacy presentation-file output.
+- Do not generate or deliver non-HTML/PDF output.

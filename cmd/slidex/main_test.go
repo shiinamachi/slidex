@@ -425,6 +425,63 @@ func TestMigrateDryRunNeverWritesWithoutWrite(t *testing.T) {
 	}
 }
 
+func TestValidateSpecRejectsNonPDFPrimaryArtifact(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := copyDir(filepath.Join(root, "fixtures", "minimal_deck"), deck); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureSpec(deck, true); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(deck, "out", "deck_spec.json")
+	var spec map[string]any
+	if err := json.Unmarshal([]byte(readFileOrEmpty(specPath)), &spec); err != nil {
+		t.Fatal(err)
+	}
+	contract, ok := spec["outputContract"].(map[string]any)
+	if !ok {
+		t.Fatal("expected outputContract object")
+	}
+	contract["primaryPdf"] = "out/final_deck.html"
+	if err := writeJSONFile(specPath, spec); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := validateSpecFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFindingCheck(findings, "schema.outputContract.primaryPdf") {
+		t.Fatalf("expected primaryPdf contract finding, got %#v", findings)
+	}
+}
+
+func TestMigrationFindingsUseCompatibilityLanguage(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "final_deck.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings := strings.Join(migrationFindings(deck, "html-pdf"), "\n")
+	for _, forbidden := range []string{"leg" + "acy", "depre" + "cated"} {
+		if strings.Contains(strings.ToLower(findings), forbidden) {
+			t.Fatalf("migration findings should use compatibility language, got %q", findings)
+		}
+	}
+}
+
 func TestFinalizeCreatesRuntimeArtifactsForStageByStagePackage(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

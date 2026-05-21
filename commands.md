@@ -71,7 +71,7 @@ mise exec -- slidex codex app-server probe
 mise exec -- slidex codex review --deck decks/customer-retention --stage delivery
 mise exec -- slidex goal set --deck decks/customer-retention --objective "현재 HTML/PDF 산출물의 package gate 통과"
 mise exec -- slidex goal status --deck decks/customer-retention
-mise exec -- slidex migrate --deck decks/customer-retention --from legacy-html-pdf
+mise exec -- slidex migrate --deck decks/customer-retention --from html-pdf
 ```
 
 `/goal`은 Codex TUI slash command이고, `slidex goal`은 deck state와 App Server

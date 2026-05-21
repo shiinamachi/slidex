@@ -9,9 +9,9 @@ After resolving `ACTIVE_DECK_DIR`, check for:
 
 - `${ACTIVE_DECK_DIR}/DESIGN.md`
 
-For legacy root-mode documents, this resolves to `DESIGN.md` at the repository
-root. If the file is absent, continue without blocking and do not invent a
-style prompt.
+For root compatibility mode, this resolves to `DESIGN.md` at the repository
+root. If the file is absent, continue without blocking and do not invent a style
+prompt.
 
 ## How To Apply DESIGN.md
 

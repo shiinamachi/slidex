@@ -9,5 +9,6 @@ Use `slidex run --deck decks/<deck_id>` as the primary workflow. Use direct stag
 
 Required final gates are current rendered PNGs, `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`, `qa_report.md`, `delivery_summary.md`, and `slidex package --deck decks/<deck_id>`.
 
-Do not create PPTX deliverables. Treat PPTX only as passive source or archived output.
-
+Do not create non-HTML/PDF deliverables. Treat user-supplied presentation files
+only as passive source material after their contents are available as ordinary
+source evidence.

@@ -13,7 +13,7 @@ cp -R decks/_template decks/<deck_id>
 - `assets/`: reference docs, 로고, 이미지
 - `brand/`: 승인된 브랜드 가이드와 컬러 파일
 - `data/`: 차트와 표에 사용할 CSV/XLSX
-- `source/`: PDF, DOCX, 사용자 제공 PPTX, 스크린샷, 회의 노트, 원문 자료
+- `source/`: PDF, DOCX, 스크린샷, 회의 노트, 원문 자료
 - `out/`: 프롬프트와 CLI가 생성하는 전략, spec, HTML, PDF, QA 결과
 
 템플릿 폴더에는 실제 산출물을 만들지 않습니다.

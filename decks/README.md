@@ -49,8 +49,7 @@ cp -R decks/_template decks/<deck_id>
 ```
 
 `brief.md`를 작성하고 필요한 reference docs, 로고, 이미지, 데이터, 원문 자료를
-작업 폴더 안에 넣습니다. 사용자가 제공한 PPTX는 `source/` 아래의 참고 문서로만
-취급합니다.
+작업 폴더 안에 넣습니다. 원문 자료는 `source/` 아래의 참고 문서로만 취급합니다.
 
 예:
 

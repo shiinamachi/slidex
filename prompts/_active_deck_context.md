@@ -29,7 +29,7 @@ Set `ACTIVE_DECK_DIR` before doing document work.
 4. If exactly one non-template directory under `decks/` contains `brief.md`, use
    it.
 5. If no deck directory is selected and a root-level `brief.md` exists, use the
-   repository root for legacy single-document compatibility.
+   repository root for single-document compatibility.
 6. If multiple candidate decks exist and no target is specified, ask the user in
    Korean to choose before writing files.
 
@@ -37,7 +37,8 @@ Ignore `decks/_template/` when selecting an active deck.
 
 ## Output Rules
 
-- Set `OUT_DIR` to `${ACTIVE_DECK_DIR}/out`, or `out` for legacy root mode.
+- Set `OUT_DIR` to `${ACTIVE_DECK_DIR}/out`, or `out` for root compatibility
+  mode.
 - Write strategy, spec, HTML, baseline HTML, rendered images, PDF, manifest,
   montage, notes, QA report, sync report, and delivery summary only under
   `OUT_DIR`.
@@ -49,7 +50,8 @@ Ignore `decks/_template/` when selecting an active deck.
 ## Isolation Rules
 
 - Read deck-specific inputs from `ACTIVE_DECK_DIR` first.
-- Treat user-supplied PPTX files only as passive source/reference documents.
+- Treat user-supplied presentation files only as passive source/reference
+  documents after their contents are available as ordinary source evidence.
 - If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific style
   prompt and apply it according to `prompts/_design_prompt_context.md`.
 - Use `shared/brand/`, `shared/assets/`, or `shared/data/` only when the user

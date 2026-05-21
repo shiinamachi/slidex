@@ -1185,7 +1185,7 @@ func markLatestRunLogSegments(segments []runLogSegment, status string, limit int
 func runMigrate(args []string) error {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
-	from := fs.String("from", "legacy-html-pdf", "legacy-html-pdf or pptx-first")
+	from := fs.String("from", "html-pdf", "migration source profile")
 	write := fs.Bool("write", false, "apply safe migration changes")
 	dryRun := fs.Bool("dry-run", true, "report migration findings without changes")
 	if err := fs.Parse(args); err != nil {
@@ -5153,28 +5153,21 @@ func copyDir(src, dst string) error {
 func migrationFindings(deckAbs, from string) []string {
 	outDir := filepath.Join(deckAbs, "out")
 	var findings []string
-	if _, err := os.Stat(filepath.Join(outDir, "final_deck.pptx")); err == nil {
-		findings = append(findings, "Historical PPTX artifact found; classify as archived artifact, not generated deliverable.")
-	}
 	if _, err := os.Stat(filepath.Join(outDir, "final_deck.html")); err == nil {
 		if _, err := os.Stat(filepath.Join(outDir, "final_deck.generated_baseline.html")); os.IsNotExist(err) {
 			findings = append(findings, "final_deck.html exists without generated baseline.")
 		}
 	}
-	specRaw := readFileOrEmpty(filepath.Join(outDir, "deck_spec.json"))
-	if strings.Contains(strings.ToLower(specRaw), "pptx") || strings.Contains(strings.ToLower(specRaw), "powerpoint") {
-		findings = append(findings, "deck_spec.json contains PPTX or PowerPoint fields that must be removed or reported.")
-	}
 	if deckAbs == mustAbs(".") {
-		for _, legacy := range []string{"brief.md", "assets", "brand", "data", "out"} {
-			if _, err := os.Stat(filepath.Join(deckAbs, legacy)); err == nil {
-				findings = append(findings, "Legacy root-level workspace material detected: "+legacy)
+		for _, compat := range []string{"brief.md", "assets", "brand", "data", "out"} {
+			if _, err := os.Stat(filepath.Join(deckAbs, compat)); err == nil {
+				findings = append(findings, "Root-level compatibility material detected: "+compat)
 			}
 		}
 	} else if !strings.HasPrefix(deckAbs, mustAbs("decks")+string(os.PathSeparator)) {
-		for _, legacy := range []string{"brief.md", "assets", "brand", "data", "out"} {
-			if _, err := os.Stat(filepath.Join(deckAbs, legacy)); err == nil && legacy == "out" {
-				findings = append(findings, "Non-standard deck path uses out/ compatibility mode: "+legacy)
+		for _, compat := range []string{"brief.md", "assets", "brand", "data", "out"} {
+			if _, err := os.Stat(filepath.Join(deckAbs, compat)); err == nil && compat == "out" {
+				findings = append(findings, "Non-standard deck path uses out/ compatibility mode: "+compat)
 			}
 		}
 	}

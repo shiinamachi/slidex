@@ -28,7 +28,8 @@ Inspect available materials:
 - `${ACTIVE_DECK_DIR}/data/`
 - prior `${OUT_DIR}` candidate outputs when relevant
 
-User-supplied PPTX files are passive source documents only.
+User-supplied presentation files are passive source documents only after their
+contents are available as ordinary source evidence.
 
 ## Intake Gate
 

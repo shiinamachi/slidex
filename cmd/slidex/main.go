@@ -241,7 +241,7 @@ Commands:
   codex doctor|app-server|schema|exec|models|features|mcp|plugins|threads|turn|review|remote-control
   goal set|status|pause|resume|complete|clear --deck decks/<deck_id>
   mcp-server --stdio
-  migrate --deck decks/<deck_id> [--from legacy-html-pdf|pptx-first] [--write]
+  migrate --deck decks/<deck_id> [--from html-pdf] [--write]
 `, toolName, toolVersion)
 }
 
@@ -495,6 +495,17 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 			findings = append(findings, fail("schema.pdfConfig.source", "pdfConfig.source must be rendered_images", path))
 		}
 	}
+	if contract, ok := obj["outputContract"].(map[string]any); ok {
+		if source, _ := contract["sourceHtml"].(string); source != "" && !strings.HasSuffix(source, ".html") {
+			findings = append(findings, fail("schema.outputContract.sourceHtml", "sourceHtml must point to an HTML artifact", path))
+		}
+		if primary, _ := contract["primaryPdf"].(string); primary != "" && !strings.HasSuffix(primary, ".pdf") {
+			findings = append(findings, fail("schema.outputContract.primaryPdf", "primaryPdf must point to a PDF artifact", path))
+		}
+		if manifest, _ := contract["renderManifest"].(string); manifest != "" && !strings.HasSuffix(manifest, ".json") {
+			findings = append(findings, fail("schema.outputContract.renderManifest", "renderManifest must point to a JSON artifact", path))
+		}
+	}
 	if cp, ok := obj["claimProvenance"].(map[string]any); ok {
 		if required, ok := cp["required"].(bool); !ok || !required {
 			findings = append(findings, fail("claimProvenance.required", "claim provenance must be required", path))
@@ -507,10 +518,6 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 				}
 			}
 		}
-	}
-	forbiddenKeys := findForbiddenKeys(obj, "")
-	for _, key := range forbiddenKeys {
-		findings = append(findings, fail("schema.no_pptx_native_fields", "legacy PowerPoint-native field is not allowed: "+key, path))
 	}
 	return findings, nil
 }
@@ -729,30 +736,6 @@ func numberAsFloat(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func findForbiddenKeys(v any, prefix string) []string {
-	var out []string
-	switch x := v.(type) {
-	case map[string]any:
-		for k, val := range x {
-			path := k
-			if prefix != "" {
-				path = prefix + "." + k
-			}
-			lower := strings.ToLower(k)
-			if strings.Contains(lower, "nativepowerpoint") || strings.Contains(lower, "powerpoint") || lower == "pptx" || strings.Contains(lower, "final_deck.pptx") {
-				out = append(out, path)
-			}
-			out = append(out, findForbiddenKeys(val, path)...)
-		}
-	case []any:
-		for i, val := range x {
-			path := fmt.Sprintf("%s[%d]", prefix, i)
-			out = append(out, findForbiddenKeys(val, path)...)
-		}
-	}
-	return out
 }
 
 func runRender(args []string) error {
