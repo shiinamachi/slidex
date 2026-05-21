@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1121,7 +1122,8 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	if err := os.WriteFile(token, []byte("token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)})
+	tokenHash := sha256Bytes([]byte("token"))
+	err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash})
 	if err == nil {
 		t.Fatal("expected public token file to fail")
 	}
@@ -1129,12 +1131,16 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "")
-	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)})
+	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash})
 	if err == nil {
 		t.Fatal("expected capability token without tunnel acknowledgement to fail")
 	}
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "1")
-	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("a", 64)}); err != nil {
+	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("0", 64)})
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("expected mismatched capability token hash to fail, got %v", err)
+	}
+	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash}); err != nil {
 		t.Fatalf("private capability token with tunnel acknowledgement should pass: %v", err)
 	}
 	secret := filepath.Join(dir, "secret")
@@ -1168,6 +1174,24 @@ func TestWebSocketHealthProbeUsesHTTPAndPing(t *testing.T) {
 	ping, _ := health["websocketPing"].(map[string]any)
 	if ping["status"] != "pass" {
 		t.Fatalf("websocket ping did not pass: %#v", health)
+	}
+}
+
+func TestWebSocketSignedBearerAuthIsSentToHealthAndPing(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30}
+	listen := startFakeWebSocketServer(t,
+		func(conn net.Conn) { handleFakeHTTPHealthWithSignedAuth(t, conn) },
+		func(conn net.Conn) { handleFakeHTTPHealthWithSignedAuth(t, conn) },
+		func(conn net.Conn) { handleFakeWebSocketPingWithSignedAuth(t, conn) },
+	)
+	health := probeWebSocketAppServer(listen, auth)
+	if health["status"] != "pass" {
+		t.Fatalf("signed bearer websocket health should pass: %#v", health)
 	}
 }
 
@@ -1408,6 +1432,66 @@ func TestAppServerFinalMessageExtractionAcceptsActualCompletedTurnID(t *testing.
 	}
 }
 
+func TestReviewStartNormalizedRejectsFailedOrEmptyNativeReview(t *testing.T) {
+	cases := []struct {
+		name       string
+		completion map[string]any
+		threadRead map[string]any
+		want       string
+	}{
+		{
+			name:       "failed completion",
+			completion: map[string]any{"threadId": "review-thread", "turn": map[string]any{"id": "review-turn", "status": "failed", "error": "boom"}},
+			threadRead: map[string]any{"thread": map[string]any{"turns": []any{map[string]any{"id": "review-turn", "items": []any{map[string]any{"type": "agentMessage", "phase": "final_answer", "text": "No blocker or major findings remain."}}}}}},
+			want:       "did not complete successfully",
+		},
+		{
+			name:       "empty final",
+			completion: map[string]any{"threadId": "review-thread", "turn": map[string]any{"id": "review-turn", "status": "completed"}},
+			threadRead: map[string]any{"thread": map[string]any{"turns": []any{}}},
+			want:       "without a final agent message",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deck := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			client := &appServerClient{stdin: &testWriteCloser{}, lines: make(chan map[string]any, 4)}
+			client.lines <- map[string]any{"id": 1, "result": map[string]any{"reviewThreadId": "review-thread", "turn": map[string]any{"id": "review-turn"}}}
+			client.lines <- map[string]any{"method": "turn/completed", "params": tc.completion}
+			client.lines <- map[string]any{"id": 2, "result": tc.threadRead}
+			appRun := &appServerWorkflowRun{client: client, deckAbs: deck, threadID: "main-thread"}
+			_, err := writeReviewStartNormalized(deck, "delivery", 1, appRun)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+			rawPath := filepath.Join(deck, "out", "agent_runs", "review_start_delivery_appserver_turn.json")
+			if _, statErr := os.Stat(rawPath); statErr != nil {
+				t.Fatalf("raw review/start artifact should be written before failure: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestReviewStartRiskSummaryIgnoresNegatedPhrases(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{text: "No blocker or major findings remain.", want: false},
+		{text: "No major issues found.", want: false},
+		{text: "No blocker, but one major issue remains.", want: true},
+		{text: "Blocker: rendered PNG set is stale.", want: true},
+	}
+	for _, tc := range cases {
+		if got := reviewStartMentionsBlockingRisk(tc.text); got != tc.want {
+			t.Fatalf("reviewStartMentionsBlockingRisk(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+}
+
 func TestAppServerThreadCompactWaitsForMatchingThread(t *testing.T) {
 	client := &appServerClient{lines: make(chan map[string]any, 3)}
 	go func() {
@@ -1497,6 +1581,13 @@ func handleFakeHTTPHealth(t *testing.T, conn net.Conn) {
 	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
 }
 
+func handleFakeHTTPHealthWithSignedAuth(t *testing.T, conn net.Conn) {
+	defer conn.Close()
+	request := readHTTPRequestForTest(t, conn)
+	requireSignedBearerAuth(t, request)
+	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+}
+
 func handleFakeHTTPFailure(t *testing.T, conn net.Conn) {
 	defer conn.Close()
 	_ = readHTTPRequestForTest(t, conn)
@@ -1524,6 +1615,63 @@ func handleFakeWebSocketPing(t *testing.T, conn net.Conn) {
 		t.Fatalf("expected ping opcode, got %d", frame[0]&0x0f)
 	}
 	_, _ = conn.Write([]byte{0x8a, 0x00})
+}
+
+func handleFakeWebSocketPingWithSignedAuth(t *testing.T, conn net.Conn) {
+	defer conn.Close()
+	request := readHTTPRequestForTest(t, conn)
+	requireSignedBearerAuth(t, request)
+	if !strings.Contains(strings.ToLower(request), "upgrade: websocket") {
+		t.Fatalf("fake websocket expected upgrade request, got %s", request)
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+	frame := make([]byte, 6)
+	if _, err := io.ReadFull(conn, frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame[0]&0x0f != 0x09 {
+		t.Fatalf("expected ping opcode, got %d", frame[0]&0x0f)
+	}
+	_, _ = conn.Write([]byte{0x8a, 0x00})
+}
+
+func requireSignedBearerAuth(t *testing.T, request string) {
+	t.Helper()
+	auth := requestHeaderValue(request, "authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		t.Fatalf("expected bearer authorization header, got %q in %s", auth, request)
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		t.Fatalf("expected signed bearer token with three segments, got %q", token)
+	}
+	payloadRaw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("signed bearer payload is not base64url: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payloadRaw, &claims); err != nil {
+		t.Fatalf("signed bearer payload is not JSON: %v", err)
+	}
+	if claims["iss"] != "slidex" || claims["aud"] != "codex" {
+		t.Fatalf("unexpected signed bearer claims: %#v", claims)
+	}
+}
+
+func requestHeaderValue(request, name string) string {
+	name = strings.ToLower(name)
+	for _, line := range strings.Split(request, "\n") {
+		line = strings.TrimRight(line, "\r")
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func isChromeSandboxEnvironmentFailure(err error) bool {

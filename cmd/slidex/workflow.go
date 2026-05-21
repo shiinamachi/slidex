@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,6 +31,11 @@ const (
 	requiredCodexVersion = "0.132.0"
 	stateSchemaVersion   = "slidex.state.v1"
 	threadsSchemaVersion = "slidex.codexThreads.v1"
+)
+
+var (
+	reviewStartNegatedRiskPattern = regexp.MustCompile(`\b(?:no|none|without)\s+(?:known\s+|remaining\s+)?(?:blockers?|majors?)(?:\s+(?:or|and|/)\s+(?:blockers?|majors?))?(?:\s+(?:issues?|findings?|risks?|remain|remaining|detected|found))?\b`)
+	reviewStartRiskTermPattern    = regexp.MustCompile(`\b(?:blockers?|majors?)\b`)
 )
 
 type codedError struct {
@@ -1748,7 +1755,9 @@ func probeWebSocketHTTPHealth(listen, endpoint string, ws webSocketAuthConfig, t
 	if err != nil {
 		return map[string]any{"status": "fail", "error": err.Error()}
 	}
-	applyWebSocketProbeAuth(req.Header, ws)
+	if err := applyWebSocketProbeAuth(req.Header, ws); err != nil {
+		return map[string]any{"status": "fail", "url": httpURL, "error": err.Error()}
+	}
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1780,12 +1789,87 @@ func webSocketHTTPURL(listen, endpoint string) (string, error) {
 	return u.String(), nil
 }
 
-func applyWebSocketProbeAuth(header http.Header, ws webSocketAuthConfig) {
-	if ws.Mode == "capability-token" && ws.TokenFile != "" {
-		if raw, err := os.ReadFile(ws.TokenFile); err == nil {
-			header.Set("Authorization", "Bearer "+strings.TrimSpace(string(raw)))
-		}
+func applyWebSocketProbeAuth(header http.Header, ws webSocketAuthConfig) error {
+	auth, err := webSocketAuthorizationHeader(ws)
+	if err != nil {
+		return err
 	}
+	if auth != "" {
+		header.Set("Authorization", auth)
+	}
+	return nil
+}
+
+func webSocketAuthorizationHeader(ws webSocketAuthConfig) (string, error) {
+	switch ws.Mode {
+	case "", "none":
+		return "", nil
+	case "capability-token":
+		if ws.TokenFile == "" {
+			return "", fmt.Errorf("capability-token auth requires a token file")
+		}
+		raw, err := os.ReadFile(ws.TokenFile)
+		if err != nil {
+			return "", fmt.Errorf("read capability token: %w", err)
+		}
+		token := strings.TrimSpace(string(raw))
+		if token == "" {
+			return "", fmt.Errorf("capability token file is empty")
+		}
+		return "Bearer " + token, nil
+	case "signed-bearer-token":
+		token, err := signedWebSocketBearerToken(ws)
+		if err != nil {
+			return "", err
+		}
+		return "Bearer " + token, nil
+	default:
+		return "", fmt.Errorf("unsupported WebSocket auth mode %q", ws.Mode)
+	}
+}
+
+func signedWebSocketBearerToken(ws webSocketAuthConfig) (string, error) {
+	if ws.SharedSecretFile == "" || ws.Issuer == "" || ws.Audience == "" || ws.MaxClockSkewSeconds <= 0 {
+		return "", fmt.Errorf("signed-bearer-token auth requires shared secret, issuer, audience, and max clock skew")
+	}
+	rawSecret, err := os.ReadFile(ws.SharedSecretFile)
+	if err != nil {
+		return "", fmt.Errorf("read signed bearer shared secret: %w", err)
+	}
+	secret := []byte(strings.TrimSpace(string(rawSecret)))
+	if len(secret) == 0 {
+		return "", fmt.Errorf("signed bearer shared secret file is empty")
+	}
+	now := time.Now().UTC()
+	payload := map[string]any{
+		"iss": ws.Issuer,
+		"aud": ws.Audience,
+		"iat": now.Unix(),
+		"nbf": now.Add(-time.Duration(ws.MaxClockSkewSeconds) * time.Second).Unix(),
+		"exp": now.Add(time.Duration(ws.MaxClockSkewSeconds) * time.Second).Unix(),
+	}
+	header, err := base64URLJSON(map[string]string{"alg": "HS256", "typ": "JWT"})
+	if err != nil {
+		return "", err
+	}
+	body, err := base64URLJSON(payload)
+	if err != nil {
+		return "", err
+	}
+	signed := header + "." + body
+	mac := hmac.New(sha256.New, secret)
+	if _, err := mac.Write([]byte(signed)); err != nil {
+		return "", err
+	}
+	return signed + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func base64URLJSON(v any) (string, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func webSocketPingWithRetry(listen string, ws webSocketAuthConfig, policy webSocketProbePolicy) map[string]any {
@@ -1855,6 +1939,10 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 		return err
 	}
 	path := firstNonEmpty(u.RequestURI(), "/")
+	auth, err := webSocketAuthorizationHeader(ws)
+	if err != nil {
+		return err
+	}
 	var req strings.Builder
 	req.WriteString("GET " + path + " HTTP/1.1\r\n")
 	req.WriteString("Host: " + u.Host + "\r\n")
@@ -1862,10 +1950,8 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 	req.WriteString("Connection: Upgrade\r\n")
 	req.WriteString("Sec-WebSocket-Version: 13\r\n")
 	req.WriteString("Sec-WebSocket-Key: " + base64.StdEncoding.EncodeToString(keyRaw) + "\r\n")
-	if ws.Mode == "capability-token" && ws.TokenFile != "" {
-		if raw, err := os.ReadFile(ws.TokenFile); err == nil {
-			req.WriteString("Authorization: Bearer " + strings.TrimSpace(string(raw)) + "\r\n")
-		}
+	if auth != "" {
+		req.WriteString("Authorization: " + auth + "\r\n")
 	}
 	req.WriteString("\r\n")
 	if _, err := io.WriteString(conn, req.String()); err != nil {
@@ -1929,6 +2015,14 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		}
 		if err := requirePrivateFile(ws.TokenFile, "--ws-token-file"); err != nil {
 			return err
+		}
+		raw, err := os.ReadFile(ws.TokenFile)
+		if err != nil {
+			return exitCodeError(4, "--ws-token-file is not readable: %v", err)
+		}
+		actual := sha256Bytes([]byte(strings.TrimSpace(string(raw))))
+		if !strings.EqualFold(actual, ws.TokenSHA256) {
+			return exitCodeError(4, "--ws-token-sha256 does not match --ws-token-file")
 		}
 		if !webSocketTunnelAcknowledged() {
 			return exitCodeError(4, "non-loopback WebSocket requires TLS or SSH tunnel acknowledgement via SLIDEX_WS_TUNNEL_ACK=1")
@@ -3750,6 +3844,12 @@ func writeReviewStartNormalized(deckAbs, stage string, round int, appRun *appSer
 	if err := recordAppServerTurn(outDir, "review_start_"+stage, raw); err != nil {
 		return "", err
 	}
+	if status := turnStatus(completion); status != "completed" {
+		return "", fmt.Errorf("review/start turn %s did not complete successfully: status=%s error=%v raw=%s", turnID, status, turnError(completion), filepath.ToSlash(rawPath))
+	}
+	if strings.TrimSpace(finalText) == "" {
+		return "", fmt.Errorf("review/start turn %s completed without a final agent message: raw=%s", turnID, filepath.ToSlash(rawPath))
+	}
 	payload := map[string]any{
 		"schemaVersion":  "slidex.reviewFindings.v1",
 		"stage":          stage,
@@ -3760,7 +3860,7 @@ func writeReviewStartNormalized(deckAbs, stage string, round int, appRun *appSer
 		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
 		"findings":       []map[string]any{},
 	}
-	if strings.Contains(strings.ToLower(finalText), "blocker") || strings.Contains(strings.ToLower(finalText), "major") {
+	if reviewStartMentionsBlockingRisk(finalText) {
 		payload["status"] = "pass_with_risks"
 		payload["findings"] = []map[string]any{{"severity": "warn", "check": "review_start.summary", "message": "Native review/start returned text mentioning blocker or major; inspect raw review artifact.", "path": filepath.ToSlash(rawPath)}}
 	}
@@ -3770,6 +3870,12 @@ func writeReviewStartNormalized(deckAbs, stage string, round int, appRun *appSer
 	}
 	_ = appendRunLog(outDir, map[string]any{"event": "review_start_normalized", "turn": rawPath, "review": reportPath, "reviewThreadId": reviewThreadID})
 	return reportPath, nil
+}
+
+func reviewStartMentionsBlockingRisk(text string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	normalized = reviewStartNegatedRiskPattern.ReplaceAllString(normalized, "")
+	return reviewStartRiskTermPattern.FindString(normalized) != ""
 }
 
 func structuredReviewPrompt(deckAbs, stage string, expected map[string]any) string {
