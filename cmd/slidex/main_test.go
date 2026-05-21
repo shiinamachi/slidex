@@ -154,6 +154,28 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := json.Unmarshal([]byte(readFileOrEmpty(reviewerPath)), &reviewerPayload); err != nil {
+		t.Fatal(err)
+	}
+	rawEvidence, _ = reviewerPayload["imageEvidence"].([]any)
+	firstEvidence, _ = rawEvidence[0].(map[string]any)
+	firstEvidence["absolutePath"] = ""
+	if err := secureWriteJSON(reviewerPath, reviewerPayload); err != nil {
+		t.Fatal(err)
+	}
+	emptyAbsPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyAbsFindings, _ := emptyAbsPkg["findings"].([]qaFinding)
+	if emptyAbsPkg["status"] != "fail" || !hasFindingCheck(emptyAbsFindings, "absolutePath") {
+		t.Fatalf("package should reject empty structured review absolutePath, got %#v", emptyAbsPkg)
+	}
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if err := os.WriteFile(specPath, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -325,6 +347,13 @@ func TestRunIntakeRejectsEmptyAndPartialAnswers(t *testing.T) {
 	var coded interface{ ExitCode() int }
 	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
 		t.Fatalf("empty answers should fail with exit 3, got %v", err)
+	}
+	if err := os.WriteFile(answers, []byte(`{"metadata":{"a":"b","c":"d"},"answers":["회사소개서"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runIntake([]string{"--deck", deck, "--answers", answers})
+	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
+		t.Fatalf("metadata plus partial JSON answers should fail with exit 3, got %v", err)
 	}
 
 	oldStdin := os.Stdin

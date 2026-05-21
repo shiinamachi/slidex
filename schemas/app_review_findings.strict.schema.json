@@ -24,12 +24,12 @@
         "required": ["slideId", "repoRelativePath", "absolutePath", "sha256", "blank", "fidelity", "dimensions"],
         "additionalProperties": false,
         "properties": {
-          "slideId": {"type": "string"},
-          "repoRelativePath": {"type": "string"},
-          "absolutePath": {"type": "string"},
-          "sha256": {"type": "string"},
+          "slideId": {"type": "string", "minLength": 1},
+          "repoRelativePath": {"type": "string", "minLength": 1},
+          "absolutePath": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "minLength": 1},
           "blank": {"type": "boolean"},
-          "fidelity": {"type": "string"},
+          "fidelity": {"type": "string", "minLength": 1},
           "dimensions": {
             "type": "object",
             "required": ["width", "height"],

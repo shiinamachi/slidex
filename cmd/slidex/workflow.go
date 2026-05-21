@@ -3870,7 +3870,7 @@ func validateIntakeAnswers(raw []byte, requiredCount int) error {
 func countIntakeAnswerEntries(raw []byte) int {
 	var value any
 	if json.Unmarshal(raw, &value) == nil {
-		return countStructuredIntakeAnswers(value)
+		return countJSONIntakeAnswerEntries(value)
 	}
 	count := 0
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -3881,6 +3881,54 @@ func countIntakeAnswerEntries(raw []byte) int {
 		count++
 	}
 	return count
+}
+
+func countJSONIntakeAnswerEntries(value any) int {
+	if obj, ok := value.(map[string]any); ok {
+		for _, key := range []string{"answers", "responses"} {
+			if item, exists := obj[key]; exists {
+				return countStructuredIntakeAnswers(item)
+			}
+		}
+		count := 0
+		for key, item := range obj {
+			if ignoredIntakeAnswerKey(key) {
+				continue
+			}
+			count += countDirectIntakeAnswerValue(item)
+		}
+		return count
+	}
+	return countStructuredIntakeAnswers(value)
+}
+
+func ignoredIntakeAnswerKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "schema", "schemaversion", "version", "metadata", "meta", "notes", "note", "source", "sources", "generatedat", "createdat", "updatedat", "deckid":
+		return true
+	default:
+		return false
+	}
+}
+
+func countDirectIntakeAnswerValue(value any) int {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"answer", "response", "value", "text"} {
+			if item, exists := typed[key]; exists {
+				return countStructuredIntakeAnswers(item)
+			}
+		}
+		return 0
+	case []any:
+		count := 0
+		for _, item := range typed {
+			count += countDirectIntakeAnswerValue(item)
+		}
+		return count
+	default:
+		return countStructuredIntakeAnswers(value)
+	}
 }
 
 func countStructuredIntakeAnswers(value any) int {
@@ -5131,10 +5179,9 @@ Baseline JSON:
 func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]any {
 	evidence := make([]map[string]any, 0, len(manifest.PNGFiles))
 	for _, img := range manifest.PNGFiles {
-		rel, _ := filepath.Rel(deckAbs, img.Path)
 		evidence = append(evidence, map[string]any{
 			"slideId":          img.SlideID,
-			"repoRelativePath": filepath.ToSlash(rel),
+			"repoRelativePath": evidenceRepoRelativePath(img.Path),
 			"absolutePath":     img.Path,
 			"sha256":           img.SHA256,
 			"blank":            img.Blank,
@@ -5143,6 +5190,14 @@ func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]
 		})
 	}
 	return evidence
+}
+
+func evidenceRepoRelativePath(path string) string {
+	rel, err := filepath.Rel(mustAbs("."), path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[string]any, error) {
@@ -5345,11 +5400,10 @@ func verifyStructuredReviewImageEvidence(path, deckAbs string, rawEvidence []any
 		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
 			findings = append(findings, fail("package.structured_review_evidence", "structured review slideId does not match manifest", path))
 		}
-		rel, _ := filepath.Rel(deckAbs, img.Path)
-		if repoPath, _ := item["repoRelativePath"].(string); repoPath != filepath.ToSlash(rel) {
+		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(img.Path) {
 			findings = append(findings, fail("package.structured_review_evidence", "structured review repoRelativePath does not match manifest", path))
 		}
-		if absPath, _ := item["absolutePath"].(string); absPath != "" && absPath != img.Path {
+		if absPath, _ := item["absolutePath"].(string); absPath != img.Path {
 			findings = append(findings, fail("package.structured_review_evidence", "structured review absolutePath does not match manifest", path))
 		}
 		if sha, _ := item["sha256"].(string); sha != img.SHA256 {
