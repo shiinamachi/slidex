@@ -127,6 +127,34 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	originalSpec := readFileOrEmpty(specPath)
 	originalQAReport := readFileOrEmpty(qaReportPath)
 
+	reviewerPath := filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_delivery.json")
+	var reviewerPayload map[string]any
+	if err := json.Unmarshal([]byte(readFileOrEmpty(reviewerPath)), &reviewerPayload); err != nil {
+		t.Fatal(err)
+	}
+	rawEvidence, _ := reviewerPayload["imageEvidence"].([]any)
+	if len(rawEvidence) == 0 {
+		t.Fatal("expected structured review image evidence")
+	}
+	firstEvidence, _ := rawEvidence[0].(map[string]any)
+	firstEvidence["sha256"] = strings.Repeat("0", 64)
+	if err := secureWriteJSON(reviewerPath, reviewerPayload); err != nil {
+		t.Fatal(err)
+	}
+	badEvidencePkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badEvidenceFindings, _ := badEvidencePkg["findings"].([]qaFinding)
+	if badEvidencePkg["status"] != "fail" || !hasFindingCheck(badEvidenceFindings, "package.structured_review_evidence") {
+		t.Fatalf("package should reject mismatched structured review image evidence, got %#v", badEvidencePkg)
+	}
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if err := os.WriteFile(specPath, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1231,6 +1259,13 @@ func TestNormalizedReviewImageEvidenceUsesRenderManifest(t *testing.T) {
 	deck := t.TempDir()
 	outDir := filepath.Join(deck, "out")
 	imagePath := filepath.Join(outDir, "rendered_slides", "slide_01.png")
+	specPath := filepath.Join(outDir, "deck_spec.json")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(specPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	manifest := renderManifest{
 		PNGFiles: []renderedImage{{
 			SlideID:    "slide_01",
@@ -1249,6 +1284,19 @@ func TestNormalizedReviewImageEvidenceUsesRenderManifest(t *testing.T) {
 	}
 	if evidence[0]["slideId"] != "slide_01" || evidence[0]["sha256"] != strings.Repeat("a", 64) || evidence[0]["fidelity"] != "original" {
 		t.Fatalf("unexpected image evidence: %#v", evidence[0])
+	}
+	payload := map[string]any{
+		"artifactHashes": map[string]any{"deckSpecSha256": "wrong"},
+		"imageEvidence":  []map[string]any{{"slideId": "wrong"}},
+	}
+	attachStructuredReviewRuntimeEvidence(deck, payload)
+	hashes, _ := payload["artifactHashes"].(map[string]any)
+	if hashes["deckSpecSha256"] != mustSHA256(specPath) {
+		t.Fatalf("runtime evidence did not refresh deckSpecSha256: %#v", hashes)
+	}
+	refreshed, _ := payload["imageEvidence"].([]map[string]any)
+	if len(refreshed) != 1 || refreshed[0]["slideId"] != "slide_01" {
+		t.Fatalf("runtime evidence did not refresh imageEvidence: %#v", payload["imageEvidence"])
 	}
 }
 

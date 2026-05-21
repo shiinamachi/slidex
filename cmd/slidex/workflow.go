@@ -3567,6 +3567,11 @@ func normalizedReviewImageEvidence(deckAbs string) []map[string]any {
 	return []map[string]any{}
 }
 
+func attachStructuredReviewRuntimeEvidence(deckAbs string, payload map[string]any) {
+	payload["artifactHashes"] = structuredReviewArtifactHashes(deckAbs)
+	payload["imageEvidence"] = normalizedReviewImageEvidence(deckAbs)
+}
+
 func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[string]any) (string, error) {
 	outDir := filepath.Join(deckAbs, "out", "agent_reviews", fmt.Sprintf("round_%02d", round))
 	if err := os.MkdirAll(outDir, 0o700); err != nil {
@@ -3631,6 +3636,7 @@ func writeStructuredReviewAppServer(deckAbs, stage string, round int, appRun *ap
 	if payload == nil {
 		return "", fmt.Errorf("App Server structured review did not return payload")
 	}
+	attachStructuredReviewRuntimeEvidence(deckAbs, payload)
 	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
 		return "", err
 	}
@@ -3670,6 +3676,7 @@ func writeStructuredReviewExec(deckAbs, stage string, round int, resume bool) (s
 	if err != nil {
 		return "", err
 	}
+	attachStructuredReviewRuntimeEvidence(deckAbs, payload)
 	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
 		return "", err
 	}
@@ -5317,13 +5324,48 @@ func verifyStructuredReviewGate(path, expectedStage string, manifest renderManif
 	}
 	if len(manifest.PNGFiles) > 0 {
 		rawEvidence, _ := payload["imageEvidence"].([]any)
-		if len(rawEvidence) != len(manifest.PNGFiles) {
-			findings = append(findings, fail("package.structured_review_evidence", fmt.Sprintf("image evidence count=%d, want %d", len(rawEvidence), len(manifest.PNGFiles)), path))
-		}
+		findings = append(findings, verifyStructuredReviewImageEvidence(path, deckAbs, rawEvidence, manifest)...)
 	}
 	if info, err := os.Stat(path); err == nil {
 		if manifestTime, parseErr := time.Parse(time.RFC3339, manifest.RenderTimestamp); parseErr == nil && info.ModTime().Before(manifestTime) {
 			findings = append(findings, fail("package.structured_review_freshness", "structured review is older than render manifest", path))
+		}
+	}
+	return findings
+}
+
+func verifyStructuredReviewImageEvidence(path, deckAbs string, rawEvidence []any, manifest renderManifest) []qaFinding {
+	if len(rawEvidence) != len(manifest.PNGFiles) {
+		return []qaFinding{fail("package.structured_review_evidence", fmt.Sprintf("image evidence count=%d, want %d", len(rawEvidence), len(manifest.PNGFiles)), path)}
+	}
+	var findings []qaFinding
+	for i, rawItem := range rawEvidence {
+		item, _ := rawItem.(map[string]any)
+		img := manifest.PNGFiles[i]
+		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review slideId does not match manifest", path))
+		}
+		rel, _ := filepath.Rel(deckAbs, img.Path)
+		if repoPath, _ := item["repoRelativePath"].(string); repoPath != filepath.ToSlash(rel) {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review repoRelativePath does not match manifest", path))
+		}
+		if absPath, _ := item["absolutePath"].(string); absPath != "" && absPath != img.Path {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review absolutePath does not match manifest", path))
+		}
+		if sha, _ := item["sha256"].(string); sha != img.SHA256 {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review image hash does not match manifest", path))
+		}
+		if fidelity, _ := item["fidelity"].(string); fidelity != "original" {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review fidelity must be original", path))
+		}
+		if blank, _ := item["blank"].(bool); blank != img.Blank {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review blank flag does not match manifest", path))
+		}
+		dims, _ := item["dimensions"].(map[string]any)
+		width, _ := numberAsInt(dims["width"])
+		height, _ := numberAsInt(dims["height"])
+		if width != img.Dimensions.Width || height != img.Dimensions.Height {
+			findings = append(findings, fail("package.structured_review_evidence", "structured review dimensions do not match manifest", path))
 		}
 	}
 	return findings
