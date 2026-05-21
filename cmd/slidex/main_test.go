@@ -124,8 +124,32 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	}
 	specPath := filepath.Join(outDir, "deck_spec.json")
 	qaReportPath := filepath.Join(outDir, "qa_report.md")
+	visualReviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
 	originalSpec := readFileOrEmpty(specPath)
 	originalQAReport := readFileOrEmpty(qaReportPath)
+
+	var visualPayload map[string]any
+	if err := json.Unmarshal([]byte(readFileOrEmpty(visualReviewPath)), &visualPayload); err != nil {
+		t.Fatal(err)
+	}
+	visualEvidence, _ := visualPayload["imageEvidence"].([]any)
+	if len(visualEvidence) == 0 {
+		t.Fatal("expected visual review image evidence")
+	}
+	firstVisualEvidence, _ := visualEvidence[0].(map[string]any)
+	firstVisualEvidence["absolutePath"] = ""
+	if err := secureWriteJSON(visualReviewPath, visualPayload); err != nil {
+		t.Fatal(err)
+	}
+	badVisualEvidencePkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badVisualEvidenceFindings, _ := badVisualEvidencePkg["findings"].([]qaFinding)
+	if badVisualEvidencePkg["status"] != "fail" || !hasFindingCheck(badVisualEvidenceFindings, "visual review absolutePath") {
+		t.Fatalf("package should reject mismatched visual review absolutePath, got %#v", badVisualEvidencePkg)
+	}
+	writeTestVisualReviewPass(t, deck, manifest)
 
 	reviewerPath := filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_delivery.json")
 	var reviewerPayload map[string]any
@@ -354,6 +378,13 @@ func TestRunIntakeRejectsEmptyAndPartialAnswers(t *testing.T) {
 	err = runIntake([]string{"--deck", deck, "--answers", answers})
 	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
 		t.Fatalf("metadata plus partial JSON answers should fail with exit 3, got %v", err)
+	}
+	if err := os.WriteFile(answers, []byte(`{"answers":{"metadata":{"a":"b","c":"d"},"notes":"not an answer"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runIntake([]string{"--deck", deck, "--answers", answers})
+	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
+		t.Fatalf("nested metadata-only JSON answers should fail with exit 3, got %v", err)
 	}
 
 	oldStdin := os.Stdin

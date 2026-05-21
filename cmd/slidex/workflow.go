@@ -3887,7 +3887,7 @@ func countJSONIntakeAnswerEntries(value any) int {
 	if obj, ok := value.(map[string]any); ok {
 		for _, key := range []string{"answers", "responses"} {
 			if item, exists := obj[key]; exists {
-				return countStructuredIntakeAnswers(item)
+				return countIntakeAnswerCollection(item)
 			}
 		}
 		count := 0
@@ -3900,6 +3900,28 @@ func countJSONIntakeAnswerEntries(value any) int {
 		return count
 	}
 	return countStructuredIntakeAnswers(value)
+}
+
+func countIntakeAnswerCollection(value any) int {
+	switch typed := value.(type) {
+	case map[string]any:
+		count := 0
+		for key, item := range typed {
+			if ignoredIntakeAnswerKey(key) {
+				continue
+			}
+			count += countDirectIntakeAnswerValue(item)
+		}
+		return count
+	case []any:
+		count := 0
+		for _, item := range typed {
+			count += countDirectIntakeAnswerValue(item)
+		}
+		return count
+	default:
+		return countStructuredIntakeAnswers(value)
+	}
 }
 
 func ignoredIntakeAnswerKey(key string) bool {
@@ -3953,7 +3975,7 @@ func countStructuredIntakeAnswers(value any) int {
 	case nil:
 		return 0
 	default:
-		return 1
+		return 0
 	}
 }
 
@@ -5311,6 +5333,12 @@ func verifyVisualReviewEvidence(path string, manifest renderManifest) []qaFindin
 		img := manifest.PNGFiles[i]
 		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
 			findings = append(findings, fail("package.visual_review_evidence", "visual review slideId does not match manifest", path))
+		}
+		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(img.Path) {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review repoRelativePath does not match manifest", path))
+		}
+		if absPath, _ := item["absolutePath"].(string); absPath != img.Path {
+			findings = append(findings, fail("package.visual_review_evidence", "visual review absolutePath does not match manifest", path))
 		}
 		if sha, _ := item["sha256"].(string); sha != img.SHA256 {
 			findings = append(findings, fail("package.visual_review_evidence", "visual review image hash does not match manifest", path))
