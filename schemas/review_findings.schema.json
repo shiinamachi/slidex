@@ -47,6 +47,7 @@
       "additionalProperties": false,
       "properties": {
         "htmlSha256": {"type": "string"},
+        "deckSpecSha256": {"type": "string"},
         "manifestSha256": {"type": "string"},
         "qaReportSha256": {"type": "string"},
         "deliverySummarySha256": {"type": "string"},

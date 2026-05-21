@@ -32,11 +32,12 @@
         "required": ["sectionRole", "headline", "keyMessage", "bodyContent"],
         "additionalProperties": false,
         "properties": {
-          "sectionRole": {"type": "string"},
+          "sectionRole": {"type": "string", "minLength": 1},
           "headline": {"type": "string", "minLength": 1},
           "keyMessage": {"type": "string", "minLength": 1},
           "bodyContent": {
             "type": "array",
+            "minItems": 1,
             "items": {"type": "string"}
           },
           "evidenceRefs": {
@@ -59,14 +60,14 @@
       "required": ["layoutMode", "panelLabel", "panelText", "primaryColor", "accentColor"],
       "additionalProperties": false,
       "properties": {
-        "layoutMode": {"type": "string"},
-        "panelLabel": {"type": "string"},
-        "panelText": {"type": "string"},
-        "primaryColor": {"type": "string"},
-        "accentColor": {"type": "string"}
+        "layoutMode": {"type": "string", "minLength": 1},
+        "panelLabel": {"type": "string", "minLength": 1},
+        "panelText": {"type": "string", "minLength": 1},
+        "primaryColor": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "accentColor": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
       }
     },
-    "claimPolicy": {"type": "string"},
+    "claimPolicy": {"type": "string", "minLength": 1},
     "risks": {
       "type": "array",
       "items": {
@@ -81,5 +82,19 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"stage": {"const": "strategy"}}},
+      "then": {"properties": {"strategyMarkdown": {"type": "string", "minLength": 20}}}
+    },
+    {
+      "if": {"properties": {"stage": {"const": "spec"}}},
+      "then": {"properties": {"slideBlueprints": {"type": "array", "minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"stage": {"const": "build_html"}}},
+      "then": {"properties": {"htmlNotes": {"type": "array", "minItems": 1}}}
+    }
+  ]
 }

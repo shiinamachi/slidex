@@ -44,10 +44,11 @@
     },
     "artifactHashes": {
       "type": "object",
-      "required": ["htmlSha256", "manifestSha256", "qaReportSha256", "deliverySummarySha256", "riskStateSha256"],
+      "required": ["htmlSha256", "deckSpecSha256", "manifestSha256", "qaReportSha256", "deliverySummarySha256", "riskStateSha256"],
       "additionalProperties": false,
       "properties": {
         "htmlSha256": {"type": "string"},
+        "deckSpecSha256": {"type": "string"},
         "manifestSha256": {"type": "string"},
         "qaReportSha256": {"type": "string"},
         "deliverySummarySha256": {"type": "string"},

@@ -572,8 +572,9 @@ func runIntake(args []string) error {
 	if err := writeSourceInventory(inv); err != nil {
 		return err
 	}
+	questions := intakeQuestionsForDeck(deckAbs)
 	if *answers != "" {
-		if err := applyIntakeAnswers(deckAbs, *answers); err != nil {
+		if err := applyIntakeAnswers(deckAbs, *answers, questions); err != nil {
 			return err
 		}
 		if err := writeIntakeQuestions(deckAbs, nil, "complete"); err != nil {
@@ -581,7 +582,6 @@ func runIntake(args []string) error {
 		}
 		return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "answersApplied": *answers})
 	}
-	questions := intakeQuestionsForDeck(deckAbs)
 	status := "complete"
 	if len(questions) > 0 {
 		status = "user_input_required"
@@ -1578,6 +1578,9 @@ func statusManagedAppServer() error {
 			metadata["health"] = map[string]any{"status": "fail", "error": err.Error()}
 			return printJSON(map[string]any{"toolName": toolName, "status": "fail", "metadata": metadata})
 		}
+	} else {
+		metadata["health"] = map[string]any{"status": "fail", "error": "managed App Server process is not alive"}
+		return printJSON(map[string]any{"toolName": toolName, "status": "fail", "metadata": metadata})
 	}
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
 }
@@ -1708,15 +1711,7 @@ func probeWebSocketAppServer(listen string, ws webSocketAuthConfig) map[string]a
 	readyz := probeWebSocketHTTPHealth(listen, "/readyz", ws, policy.PingTimeout)
 	healthz := probeWebSocketHTTPHealth(listen, "/healthz", ws, policy.PingTimeout)
 	ping := webSocketPingWithRetry(listen, ws, policy)
-	status := "pass"
-	for _, item := range []map[string]any{readyz, healthz, ping} {
-		if itemStatus, _ := item["status"].(string); itemStatus != "" && itemStatus != "pass" {
-			status = "degraded"
-		}
-	}
-	if fmt.Sprint(ping["status"]) == "fail" || fmt.Sprint(readyz["status"]) == "fail" || fmt.Sprint(healthz["status"]) == "fail" {
-		status = "degraded"
-	}
+	status := aggregateWebSocketProbeStatus(readyz, healthz, ping)
 	return map[string]any{
 		"status":          status,
 		"listen":          listen,
@@ -1726,6 +1721,22 @@ func probeWebSocketAppServer(listen string, ws webSocketAuthConfig) map[string]a
 		"keepalivePolicy": map[string]any{"pingIntervalSeconds": 30, "timeoutSeconds": int(policy.PingTimeout.Seconds()), "pongRequired": true},
 		"retryPolicy":     map[string]any{"overloadCode": -32001, "initialDelayMs": policy.InitialDelay.Milliseconds(), "maxDelayMs": policy.MaxDelay.Milliseconds(), "maxAttempts": policy.MaxAttempts},
 	}
+}
+
+func aggregateWebSocketProbeStatus(checks ...map[string]any) string {
+	status := "pass"
+	for _, check := range checks {
+		checkStatus, _ := check["status"].(string)
+		switch checkStatus {
+		case "", "pass":
+			continue
+		case "fail", "unavailable":
+			return "fail"
+		default:
+			status = "degraded"
+		}
+	}
+	return status
 }
 
 func probeWebSocketHTTPHealth(listen, endpoint string, ws webSocketAuthConfig, timeout time.Duration) map[string]any {
@@ -1746,7 +1757,7 @@ func probeWebSocketHTTPHealth(listen, endpoint string, ws webSocketAuthConfig, t
 	defer resp.Body.Close()
 	status := "pass"
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		status = "degraded"
+		status = "fail"
 	}
 	return map[string]any{"status": status, "url": httpURL, "httpStatus": resp.StatusCode}
 }
@@ -2876,7 +2887,7 @@ func authoringArtifactCandidates(deckAbs, stage string) []string {
 	}
 }
 
-func authoringResultForStage(deckAbs, stage string) (map[string]any, string) {
+func authoringResultForStage(deckAbs, stage string) (map[string]any, string, error) {
 	for _, path := range authoringArtifactCandidates(deckAbs, stage) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -2887,13 +2898,19 @@ func authoringResultForStage(deckAbs, stage string) (map[string]any, string) {
 			continue
 		}
 		if structured, ok := payload["structuredOutput"].(map[string]any); ok {
-			return structured, path
+			if err := validateAuthoringMateriality(stage, structured); err != nil {
+				return nil, path, fmt.Errorf("%s is not material Codex authoring for %s: %w", path, stage, err)
+			}
+			return structured, path, nil
 		}
 		if payload["schemaVersion"] == "slidex.appAuthoringResult.v1" {
-			return payload, path
+			if err := validateAuthoringMateriality(stage, payload); err != nil {
+				return nil, path, fmt.Errorf("%s is not material Codex authoring for %s: %w", path, stage, err)
+			}
+			return payload, path, nil
 		}
 	}
-	return nil, ""
+	return nil, "", nil
 }
 
 func authoringStringArray(value any) []string {
@@ -2921,9 +2938,9 @@ func defaultLayoutContract() map[string]string {
 
 func authoringLayoutContract(authoring map[string]any) map[string]string {
 	out := defaultLayoutContract()
-	raw, _ := authoring["layoutContract"].(map[string]any)
+	raw, _ := layoutContractStrings(authoring)
 	for key := range out {
-		if value := strings.TrimSpace(fmt.Sprint(raw[key])); value != "" && value != "<nil>" {
+		if value := strings.TrimSpace(raw[key]); value != "" && value != "<nil>" {
 			out[key] = value
 		}
 	}
@@ -2932,12 +2949,78 @@ func authoringLayoutContract(authoring map[string]any) map[string]string {
 	return out
 }
 
+func layoutContractStrings(authoring map[string]any) (map[string]string, bool) {
+	raw := authoring["layoutContract"]
+	out := map[string]string{}
+	switch typed := raw.(type) {
+	case map[string]any:
+		for key, value := range typed {
+			out[key] = strings.TrimSpace(fmt.Sprint(value))
+		}
+	case map[string]string:
+		for key, value := range typed {
+			out[key] = strings.TrimSpace(value)
+		}
+	default:
+		return out, false
+	}
+	return out, true
+}
+
 func safeCSSColor(value, fallback string) string {
 	value = strings.TrimSpace(value)
 	if regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`).MatchString(value) {
 		return strings.ToLower(value)
 	}
 	return fallback
+}
+
+func validateAuthoringMateriality(stage string, authoring map[string]any) error {
+	if authoring == nil {
+		return fmt.Errorf("missing authoring payload")
+	}
+	if actualStage, _ := authoring["stage"].(string); actualStage != "" && actualStage != stage {
+		return fmt.Errorf("stage=%q, want %q", actualStage, stage)
+	}
+	status, _ := authoring["status"].(string)
+	if status != "pass" && status != "pass_with_risks" {
+		return fmt.Errorf("status %q is not usable for materialization", status)
+	}
+	if strings.TrimSpace(fmt.Sprint(authoring["summary"])) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	if strings.TrimSpace(fmt.Sprint(authoring["claimPolicy"])) == "" {
+		return fmt.Errorf("claimPolicy is required")
+	}
+	switch stage {
+	case "strategy":
+		if len([]rune(strings.TrimSpace(fmt.Sprint(authoring["strategyMarkdown"])))) < 20 {
+			return fmt.Errorf("strategyMarkdown must contain material strategy content")
+		}
+	case "spec":
+		if len(specSlidesFromAuthoring(authoring)) == 0 {
+			return fmt.Errorf("slideBlueprints must contain at least one usable slide blueprint")
+		}
+	case "build_html":
+		if len(authoringStringArray(authoring["htmlNotes"])) == 0 {
+			return fmt.Errorf("htmlNotes must contain at least one build directive")
+		}
+		layout, ok := layoutContractStrings(authoring)
+		if !ok {
+			return fmt.Errorf("layoutContract is required")
+		}
+		for _, key := range []string{"layoutMode", "panelLabel", "panelText", "primaryColor", "accentColor"} {
+			if strings.TrimSpace(layout[key]) == "" {
+				return fmt.Errorf("layoutContract.%s is required", key)
+			}
+		}
+		if safeCSSColor(layout["primaryColor"], "") == "" || safeCSSColor(layout["accentColor"], "") == "" {
+			return fmt.Errorf("layoutContract colors must be #RRGGBB values")
+		}
+	default:
+		return fmt.Errorf("unsupported authoring stage %q", stage)
+	}
+	return nil
 }
 
 func specSlidesFromAuthoring(authoring map[string]any) []map[string]any {
@@ -3001,7 +3084,9 @@ func ensureStrategy(deck string, force bool) (string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", err
 	}
-	if authoring, authoringPath := authoringResultForStage(deckAbs, "strategy"); len(authoring) > 0 {
+	if authoring, authoringPath, err := authoringResultForStage(deckAbs, "strategy"); err != nil {
+		return "", err
+	} else if len(authoring) > 0 {
 		if markdown := strings.TrimSpace(fmt.Sprint(authoring["strategyMarkdown"])); markdown != "" {
 			var b strings.Builder
 			b.WriteString("# Strategy\n\n")
@@ -3051,7 +3136,10 @@ func ensureSpec(deck string, force bool) (string, error) {
 	for _, item := range inv.Inputs {
 		sourceRefs = append(sourceRefs, map[string]any{"path": item.Path, "kind": item.Kind, "priority": "supporting", "sha256": item.SHA256})
 	}
-	authoring, authoringPath := authoringResultForStage(deckAbs, "spec")
+	authoring, authoringPath, err := authoringResultForStage(deckAbs, "spec")
+	if err != nil {
+		return "", err
+	}
 	slides := specSlidesFromAuthoring(authoring)
 	if len(slides) == 0 {
 		slides = []map[string]any{
@@ -3127,7 +3215,10 @@ func ensureHTML(deck string, force bool) (string, error) {
 	}
 	slides, _ := spec["slides"].([]any)
 	title := fmt.Sprint(specValue(spec, "metadata", "title"))
-	htmlAuthoring, htmlAuthoringPath := authoringResultForStage(deckAbs, "build_html")
+	htmlAuthoring, htmlAuthoringPath, err := authoringResultForStage(deckAbs, "build_html")
+	if err != nil {
+		return "", err
+	}
 	htmlNotes := authoringStringArray(htmlAuthoring["htmlNotes"])
 	layoutContract := authoringLayoutContract(htmlAuthoring)
 	var b strings.Builder
@@ -3354,7 +3445,7 @@ func writeParallelReviewerThreadsAppServer(deckAbs, stage string, round int) (st
 				"findings":       findingsForStrictSchema(findings),
 			}
 			prompt := structuredReviewPrompt(deckAbs, stage, expected) + "\nReviewer focus: " + spec.Focus + "\nReturn the deterministic baseline unless this focus reveals a concrete blocker in listed artifacts."
-			result, err := appRun.runStructuredTurn("parallel_"+spec.Name+"_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 3*time.Minute)
+			result, err := appRun.runStructuredTurn("parallel_"+spec.Name+"_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 5*time.Minute)
 			ch <- reviewerResult{Spec: spec, Result: result, Err: err}
 		}()
 	}
@@ -3461,11 +3552,19 @@ func structuredReviewArtifactHashes(deckAbs string) map[string]any {
 	outDir := filepath.Join(deckAbs, "out")
 	return map[string]any{
 		"htmlSha256":            mustSHA256(filepath.Join(outDir, "final_deck.html")),
+		"deckSpecSha256":        mustSHA256(filepath.Join(outDir, "deck_spec.json")),
 		"manifestSha256":        mustSHA256(filepath.Join(outDir, "render_manifest.json")),
 		"qaReportSha256":        mustSHA256(filepath.Join(outDir, "qa_report.md")),
 		"deliverySummarySha256": mustSHA256(filepath.Join(outDir, "delivery_summary.md")),
 		"riskStateSha256":       riskStateHashForDeck(deckAbs),
 	}
+}
+
+func normalizedReviewImageEvidence(deckAbs string) []map[string]any {
+	if manifest, ok := readRenderManifest(filepath.Join(deckAbs, "out", "render_manifest.json")); ok {
+		return visualReviewEvidence(deckAbs, manifest)
+	}
+	return []map[string]any{}
 }
 
 func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[string]any) (string, error) {
@@ -3517,7 +3616,7 @@ func writeStructuredReviewAppServer(deckAbs, stage string, round int, appRun *ap
 		"findings":       findingsForStrictSchema(findings),
 	}
 	prompt := structuredReviewPrompt(deckAbs, stage, expected)
-	result, err := appRun.runStructuredTurn("review_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 3*time.Minute)
+	result, err := appRun.runStructuredTurn("review_"+stage, prompt, filepath.Join("schemas", "app_review_findings.strict.schema.json"), 5*time.Minute)
 	if err != nil {
 		return "", err
 	}
@@ -3650,7 +3749,7 @@ func writeReviewStartNormalized(deckAbs, stage string, round int, appRun *appSer
 		"round":          round,
 		"mode":           "review_start_normalized",
 		"status":         "pass",
-		"imageEvidence":  []map[string]any{},
+		"imageEvidence":  normalizedReviewImageEvidence(deckAbs),
 		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
 		"findings":       []map[string]any{},
 	}
@@ -3709,9 +3808,12 @@ func makeSpecSlide(id, role, headline, key string, body []string) map[string]any
 	return map[string]any{"id": id, "htmlId": id, "sectionRole": role, "headline": headline, "keyMessage": key, "bodyContent": body, "layoutIntent": "single-purpose slide with clear hierarchy", "visualIntent": "simple evidence-aware layout", "evidenceRefs": []string{"brief.md"}, "claims": []string{"claim_001"}, "renderRisks": []string{"Korean wrapping and text density must be checked after render."}, "qaChecks": []string{"slide purpose clear", "no unsupported metric"}}
 }
 
-func applyIntakeAnswers(deckAbs, answersPath string) error {
+func applyIntakeAnswers(deckAbs, answersPath string, questions []string) error {
 	raw, err := os.ReadFile(answersPath)
 	if err != nil {
+		return err
+	}
+	if err := validateIntakeAnswers(raw, len(questions)); err != nil {
 		return err
 	}
 	return appendIntakeAnswers(deckAbs, raw)
@@ -3729,6 +3831,12 @@ func applyInteractiveIntakeAnswers(deckAbs string, questions []string, in io.Rea
 			return false, err
 		}
 		answer = strings.TrimSpace(answer)
+		if answer == "" {
+			return false, nil
+		}
+		if errors.Is(err, io.EOF) && i < len(questions)-1 {
+			return false, nil
+		}
 		if answer != "" {
 			b.WriteString(fmt.Sprintf("### Q%d. %s\n\n%s\n\n", i+1, question, answer))
 		}
@@ -3740,6 +3848,58 @@ func applyInteractiveIntakeAnswers(deckAbs string, questions []string, in io.Rea
 		return false, nil
 	}
 	return true, appendIntakeAnswers(deckAbs, []byte(b.String()))
+}
+
+func validateIntakeAnswers(raw []byte, requiredCount int) error {
+	if strings.TrimSpace(string(raw)) == "" {
+		return exitCodeError(3, "answers file is empty")
+	}
+	if requiredCount > 0 && countIntakeAnswerEntries(raw) < requiredCount {
+		return exitCodeError(3, "answers file must provide at least %d non-empty answers", requiredCount)
+	}
+	return nil
+}
+
+func countIntakeAnswerEntries(raw []byte) int {
+	var value any
+	if json.Unmarshal(raw, &value) == nil {
+		return countStructuredIntakeAnswers(value)
+	}
+	count := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func countStructuredIntakeAnswers(value any) int {
+	switch typed := value.(type) {
+	case map[string]any:
+		count := 0
+		for _, item := range typed {
+			count += countStructuredIntakeAnswers(item)
+		}
+		return count
+	case []any:
+		count := 0
+		for _, item := range typed {
+			count += countStructuredIntakeAnswers(item)
+		}
+		return count
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return 0
+		}
+		return 1
+	case nil:
+		return 0
+	default:
+		return 1
+	}
 }
 
 func appendIntakeAnswers(deckAbs string, raw []byte) error {
@@ -4302,6 +4462,9 @@ func runAppServerAuthoring(appRun *appServerWorkflowRun, deckAbs string, state s
 	if status, _ := result.StructuredOutput["status"].(string); status != "pass" && status != "pass_with_risks" {
 		return path, exitCodeError(3, "App Server authoring stage %s returned stop condition %s", stage, status)
 	}
+	if err := validateAuthoringMateriality(stage, result.StructuredOutput); err != nil {
+		return path, exitCodeError(3, "App Server authoring stage %s did not produce material output: %v", stage, err)
+	}
 	_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "codex_authoring_app_server", "stage": stage, "turn": path, "status": result.StructuredOutput["status"]})
 	return path, nil
 }
@@ -4313,6 +4476,9 @@ func runCodexExecAuthoring(deckAbs string, state slidexState, stage string) (str
 	}
 	if status, _ := payload["status"].(string); status != "pass" && status != "pass_with_risks" {
 		return path, exitCodeError(3, "codex exec authoring stage %s returned stop condition %s", stage, status)
+	}
+	if err := validateAuthoringMateriality(stage, payload); err != nil {
+		return path, exitCodeError(3, "codex exec authoring stage %s did not produce material output: %v", stage, err)
 	}
 	_ = appendRunLog(filepath.Join(deckAbs, "out"), map[string]any{"event": "codex_authoring_exec", "stage": stage, "execRun": path, "status": payload["status"]})
 	return path, nil
@@ -4353,8 +4519,8 @@ Stage-specific contract:
 - strategy: set stage "strategy", status "pass" when enough context exists, and provide strategyMarkdown as concise Korean/English business strategy markdown with source, audience, purpose, claim policy, story arc, and risks.
 - spec: set stage "spec", status "pass" when enough context exists, and provide 3 to 8 slideBlueprints with action headlines, concise key messages, bodyContent bullets, evidenceRefs, and claims.
 - build_html: set stage "build_html", status "pass" when enough context exists, provide htmlNotes, and fill layoutContract. The Go HTML writer will consume layoutContract.panelLabel, panelText, primaryColor, accentColor, and layoutMode directly in final_deck.html.
-- For fields not used by the current stage, return an empty string or empty array.
-- layoutContract is always required; for non-build stages use empty strings or the default safe values.
+- For fields not used by the current stage, return an empty string or empty array, except layoutContract.
+- layoutContract is always required; for non-build stages use the default safe non-empty values.
 - risks must use owner, reason, expiration, and artifactLink only for concrete non-blocking risks.`, runtime, stage, deckAbs, string(goalRaw), string(inputsRaw), brief, design, strategy, spec))
 }
 
@@ -5137,6 +5303,7 @@ func verifyStructuredReviewGate(path, expectedStage string, manifest renderManif
 	}
 	expectedHashes := map[string]string{
 		"htmlSha256":            mustSHA256(htmlPath),
+		"deckSpecSha256":        mustSHA256(filepath.Join(filepath.Dir(htmlPath), "deck_spec.json")),
 		"manifestSha256":        mustSHA256(filepath.Join(filepath.Dir(htmlPath), "render_manifest.json")),
 		"qaReportSha256":        mustSHA256(qaReportPath),
 		"deliverySummarySha256": mustSHA256(deliverySummaryPath),

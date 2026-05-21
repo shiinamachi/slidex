@@ -2541,6 +2541,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		findings = append(findings, fail("package.rendered_slides", "missing rendered slide images", filepath.Join(outDir, "rendered_slides")))
 	}
 	manifestPath := filepath.Join(outDir, "render_manifest.json")
+	specPath := filepath.Join(outDir, "deck_spec.json")
 	htmlPath := filepath.Join(outDir, "final_deck.html")
 	qaReportPath := filepath.Join(outDir, "qa_report.md")
 	deliverySummaryPath := filepath.Join(outDir, "delivery_summary.md")
@@ -2550,6 +2551,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	for _, stage := range structuredReviewStages() {
 		structuredReviewPaths = append(structuredReviewPaths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+stage+".json"))
 	}
+	findings = append(findings, verifyPackageSpec(specPath)...)
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		var manifest renderManifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -2612,6 +2614,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			if reportFindings := verifyTextArtifactFreshness("qa_report", qaReportPath, manifestPath, []string{manifest.SourceHTML.SHA256, mustSHA256(manifestPath), hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))}); len(reportFindings) > 0 {
 				findings = append(findings, reportFindings...)
 			}
+			findings = append(findings, verifyQAReportStatus(qaReportPath)...)
 			if summaryFindings := verifyTextArtifactFreshness("delivery_summary", deliverySummaryPath, manifestPath, []string{mustSHA256(manifestPath), mustSHA256(qaReportPath), riskStateHashForDeck(filepath.Dir(outDir))}); len(summaryFindings) > 0 {
 				findings = append(findings, summaryFindings...)
 			}
@@ -2639,6 +2642,56 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		"status":   status,
 		"findings": findings,
 	}, nil
+}
+
+func verifyPackageSpec(path string) []qaFinding {
+	specFindings, err := validateSpecFile(path)
+	if err != nil {
+		return []qaFinding{fail("package.deck_spec", err.Error(), path)}
+	}
+	for i := range specFindings {
+		if !strings.HasPrefix(specFindings[i].Check, "package.") {
+			specFindings[i].Check = "package.deck_spec." + specFindings[i].Check
+		}
+	}
+	return specFindings
+}
+
+func verifyQAReportStatus(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("package.qa_report_status", "QA report missing: "+err.Error(), path)}
+	}
+	text := string(raw)
+	var findings []qaFinding
+	for _, key := range []string{"deterministicStatus", "visualStatus"} {
+		value := qaReportStatusField(text, key)
+		if value == "" {
+			findings = append(findings, fail("package.qa_report_status", key+" is missing from QA report", path))
+			continue
+		}
+		if value != "pass" {
+			findings = append(findings, fail("package.qa_report_status", key+" is "+value+", want pass", path))
+		}
+	}
+	overall := qaReportStatusField(text, "Overall status")
+	if overall == "" {
+		findings = append(findings, fail("package.qa_report_status", "Overall status is missing from QA report", path))
+	} else if overall != "pass" {
+		findings = append(findings, fail("package.qa_report_status", "Overall status is "+overall+", want pass", path))
+	}
+	return findings
+}
+
+func qaReportStatusField(text, key string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if !strings.HasPrefix(line, key+":") {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, key+":")), "`")
+	}
+	return ""
 }
 
 func verifyRiskPolicy(path string) []qaFinding {

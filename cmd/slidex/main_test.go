@@ -94,7 +94,9 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if manifest.SlideEnumerationMethod != "chrome-dom" {
 		t.Fatalf("expected chrome-dom enumeration, got %q", manifest.SlideEnumerationMethod)
 	}
-	qa, err := qaDeck(deck, true)
+	qa, err := qaDeckWithVisualReviewRunner(deck, true, "manual", func(string, renderManifest, string) (string, []qaFinding) {
+		return "pass", nil
+	})
 	if err != nil {
 		t.Fatalf("qa failed: %v", err)
 	}
@@ -119,6 +121,76 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	}
 	if pkg["status"] != "pass" {
 		t.Fatalf("package should pass, got %#v", pkg)
+	}
+	specPath := filepath.Join(outDir, "deck_spec.json")
+	qaReportPath := filepath.Join(outDir, "qa_report.md")
+	originalSpec := readFileOrEmpty(specPath)
+	originalQAReport := readFileOrEmpty(qaReportPath)
+
+	if err := os.WriteFile(specPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invalidSpecPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidSpecFindings, _ := invalidSpecPkg["findings"].([]qaFinding)
+	if invalidSpecPkg["status"] != "fail" || !hasFindingCheck(invalidSpecFindings, "package.deck_spec") {
+		t.Fatalf("package should reject invalid current deck_spec.json, got %#v", invalidSpecPkg)
+	}
+	if err := os.WriteFile(specPath, []byte(originalSpec+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hashDriftPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashDriftFindings, _ := hashDriftPkg["findings"].([]qaFinding)
+	if hashDriftPkg["status"] != "fail" || !hasFindingCheck(hashDriftFindings, "deckSpecSha256") {
+		t.Fatalf("package should reject structured review deckSpecSha256 drift, got %#v", hashDriftPkg)
+	}
+	if err := os.WriteFile(specPath, []byte(originalSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(qaReportPath, []byte(strings.Replace(originalQAReport, "deterministicStatus: pass", "deterministicStatus: fail", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeDeliverySummary(deck); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	qaStatusPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qaStatusFindings, _ := qaStatusPkg["findings"].([]qaFinding)
+	if qaStatusPkg["status"] != "fail" || !hasFindingCheck(qaStatusFindings, "package.qa_report_status") {
+		t.Fatalf("package should reject non-pass QA report status, got %#v", qaStatusPkg)
+	}
+	if err := os.WriteFile(qaReportPath, []byte(originalQAReport), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeDeliverySummary(deck); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range structuredReviewStages() {
+		if _, err := writeStructuredReview(deck, stage, 1); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if status, findings := runVisualReview(deck, manifest, "none"); status != "pass_with_risks" || hasFailures(findings) {
 		t.Fatalf("visual review none should be non-blocking at QA stage, status=%s findings=%v", status, findings)
@@ -150,6 +222,15 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if !errors.As(err, &coded) || coded.ExitCode() != 5 {
 		t.Fatalf("runPackage stale exit code = %v, %v; want 5", coded, err)
 	}
+}
+
+func hasFindingCheck(findings []qaFinding, needle string) bool {
+	for _, finding := range findings {
+		if strings.Contains(finding.Check, needle) || strings.Contains(finding.Message, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunIntakeInteractiveAppliesAnswers(t *testing.T) {
@@ -190,6 +271,52 @@ func TestRunIntakeInteractiveAppliesAnswers(t *testing.T) {
 	intake := readFileOrEmpty(filepath.Join(deck, "out", "intake_questions.md"))
 	if !strings.Contains(intake, "Status: `complete`") {
 		t.Fatalf("interactive intake should mark questions complete:\n%s", intake)
+	}
+}
+
+func TestRunIntakeRejectsEmptyAndPartialAnswers(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("TODO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answers := filepath.Join(t.TempDir(), "answers.md")
+	if err := os.WriteFile(answers, []byte("\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runIntake([]string{"--deck", deck, "--answers", answers})
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
+		t.Fatalf("empty answers should fail with exit 3, got %v", err)
+	}
+
+	oldStdin := os.Stdin
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = writer.WriteString("회사소개서\n")
+	_ = writer.Close()
+	os.Stdin = reader
+	defer func() {
+		os.Stdin = oldStdin
+		_ = reader.Close()
+	}()
+	err = runIntake([]string{"--deck", deck, "--interactive"})
+	if !errors.As(err, &coded) || coded.ExitCode() != 3 {
+		t.Fatalf("partial interactive answers should fail with exit 3, got %v", err)
+	}
+	if strings.Contains(readFileOrEmpty(filepath.Join(deck, "brief.md")), "회사소개서") {
+		t.Fatal("partial interactive answers must not close intake or append to brief.md")
 	}
 }
 
@@ -280,6 +407,37 @@ func TestStrictAppServerSchemasAcceptLocalPayloads(t *testing.T) {
 	}
 	if err := validatePayloadAgainstSchema(authoringPayload, filepath.Join("schemas", "app_authoring_result.strict.schema.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAuthoringMaterialityRejectsEmptyPassPayload(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	empty := map[string]any{
+		"schemaVersion":    "slidex.appAuthoringResult.v1",
+		"stage":            "spec",
+		"status":           "pass",
+		"summary":          "empty",
+		"strategyMarkdown": "",
+		"slideBlueprints":  []map[string]any{},
+		"htmlNotes":        []string{},
+		"layoutContract":   defaultLayoutContract(),
+		"claimPolicy":      "unsupported claims are assumptions",
+		"risks":            []map[string]any{},
+	}
+	if err := validateAuthoringMateriality("spec", empty); err == nil {
+		t.Fatal("schema-valid empty spec authoring should not be material")
+	}
+	if err := validatePayloadAgainstSchema(empty, filepath.Join("schemas", "app_authoring_result.strict.schema.json")); err == nil {
+		t.Fatal("strict authoring schema should reject empty spec slideBlueprints")
 	}
 }
 
@@ -932,8 +1090,40 @@ func TestWebSocketHealthProbeDegradesOnHTTPFailure(t *testing.T) {
 		func(conn net.Conn) { handleFakeWebSocketPing(t, conn) },
 	)
 	health := probeWebSocketAppServer(listen, webSocketAuthConfig{})
-	if health["status"] != "degraded" {
-		t.Fatalf("websocket health should degrade on readyz failure: %#v", health)
+	if health["status"] != "fail" {
+		t.Fatalf("websocket health should fail on readyz failure: %#v", health)
+	}
+}
+
+func TestManagedAppServerStatusFailsDeadProcess(t *testing.T) {
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	path := appServerMetadataPath()
+	if err := secureWriteJSON(path, map[string]any{"pid": 99999999, "listen": "ws://127.0.0.1:1/app"}); err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	err = statusManagedAppServer()
+	_ = writer.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("status output is not JSON: %s", raw)
+	}
+	if payload["status"] != "fail" {
+		t.Fatalf("dead managed process should fail status: %#v", payload)
 	}
 }
 
@@ -1034,6 +1224,31 @@ func TestStrictStageAndReviewSchemasValidateRuntimePayloads(t *testing.T) {
 	}
 	if err := validatePayloadAgainstSchema(reviewPayload, filepath.Join("schemas", "app_review_findings.strict.schema.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNormalizedReviewImageEvidenceUsesRenderManifest(t *testing.T) {
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	imagePath := filepath.Join(outDir, "rendered_slides", "slide_01.png")
+	manifest := renderManifest{
+		PNGFiles: []renderedImage{{
+			SlideID:    "slide_01",
+			Path:       imagePath,
+			SHA256:     strings.Repeat("a", 64),
+			Dimensions: dimension{Width: 1920, Height: 1080},
+			Blank:      false,
+		}},
+	}
+	if err := secureWriteJSON(filepath.Join(outDir, "render_manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	evidence := normalizedReviewImageEvidence(deck)
+	if len(evidence) != 1 {
+		t.Fatalf("image evidence count = %d, want 1", len(evidence))
+	}
+	if evidence[0]["slideId"] != "slide_01" || evidence[0]["sha256"] != strings.Repeat("a", 64) || evidence[0]["fidelity"] != "original" {
+		t.Fatalf("unexpected image evidence: %#v", evidence[0])
 	}
 }
 
