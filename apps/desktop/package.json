@@ -40,6 +40,9 @@
     "vite": "8.0.14",
     "wait-on": "9.0.10"
   },
+  "overrides": {
+    "yauzl": "3.3.1"
+  },
   "build": {
     "appId": "kr.shiinamachi.slidex.desktop",
     "productName": "slidex",
