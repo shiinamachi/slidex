@@ -1,7 +1,7 @@
-export const IPC_CHANNELS = {
-  appInfo: "app:info",
-  slidexStatus: "slidex:status"
-} as const;
+export const enum IPC_CHANNELS {
+  appInfo = "app:info",
+  slidexStatus = "slidex:status"
+}
 
 export type DesktopAppInfo = {
   name: string;
