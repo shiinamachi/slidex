@@ -138,6 +138,23 @@ slidex package --deck decks/customer-retention
 목표 상태를 deck의 `out/slidex_state.json`과 가능하면 App Server `thread/goal/*`
 API에 동기화하는 로컬 CLI wrapper입니다.
 
+## Desktop GUI Boilerplate
+
+`apps/desktop/`에는 현재 CLI workflow를 GUI로 감싸기 위한 Electron 보일러플레이트가
+있습니다. 이 단계에서는 실제 `slidex` CLI 실행을 연결하지 않고, Electron main,
+preload IPC 경계, Vite + React renderer, TypeScript build, electron-builder
+packaging 설정만 준비합니다.
+
+```bash
+cd apps/desktop
+mise exec -- npm install
+mise exec -- npm run dev
+mise exec -- npm run build
+```
+
+CLI 연결을 구현할 때는 `src/main/`에서 `slidex` 바이너리를 child process로 실행하고,
+`src/shared/api.ts`의 contract를 확장합니다.
+
 ## Advanced Prompt Fallback
 
 직접 prompt 파일을 실행하는 방식은 CLI가 없는 환경이나 디버깅용 fallback입니다.
@@ -151,7 +168,8 @@ DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_
 ## 런타임과 버전 고정
 
 런타임 관리는 mise를 사용합니다. 이 저장소의 Go 버전은 `.mise.toml`과
-`go.mod`의 `go` 지시문에서 모두 `1.26.3`으로 exact pin합니다.
+`go.mod`의 `go` 지시문에서 모두 `1.26.3`으로 exact pin하고, Electron
+보일러플레이트용 Node는 `.mise.toml`에서 `24.16.0`으로 exact pin합니다.
 
 ```bash
 mise install

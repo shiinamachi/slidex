@@ -15,8 +15,9 @@ cp -R decks/_template decks/customer-retention
 
 ## 런타임 준비
 
-Go 런타임은 mise로 exact pin합니다. 현재 핀은 `.mise.toml`과 `go.mod`의
-`go` 지시문에 기록된 `1.26.3`입니다.
+Go와 Node 런타임은 mise로 exact pin합니다. 현재 Go 핀은 `.mise.toml`과
+`go.mod`의 `go` 지시문에 기록된 `1.26.3`이고, Electron 보일러플레이트용
+Node 핀은 `.mise.toml`의 `24.16.0`입니다.
 
 ```bash
 mise install
@@ -79,6 +80,20 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 사용합니다.
 
 문서와 acceptance 기준의 canonical 이름은 `slidex`입니다.
+
+## Desktop GUI Boilerplate
+
+Electron 앱 보일러플레이트는 `apps/desktop/` 아래에 있습니다. 현재는 GUI shell,
+preload IPC, Vite + React renderer, TypeScript build, packaging 설정만 포함하며
+실제 `slidex` CLI 실행 연결은 다음 구현 단계의 범위입니다.
+
+```bash
+cd apps/desktop
+mise exec -- npm install
+mise exec -- npm run dev
+mise exec -- npm run typecheck
+mise exec -- npm run build
+```
 
 ## Advanced Prompt Fallback
 

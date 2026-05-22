@@ -1,0 +1,65 @@
+{
+  "name": "slidex-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell for the slidex CLI workflow.",
+  "author": "slidex contributors",
+  "main": "dist/main/index.js",
+  "packageManager": "npm@11.13.0",
+  "engines": {
+    "node": "24.16.0"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.cjs",
+    "dev": "concurrently -k -n renderer,main,electron -c blue,green,magenta \"npm run dev:renderer\" \"npm run dev:main\" \"npm run dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:main": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
+    "dev:electron": "wait-on tcp:127.0.0.1:5173 dist/main/index.js dist/preload/index.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "build": "npm run clean && npm run typecheck && npm run build:main && npm run build:renderer",
+    "build:main": "tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "preview": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "concurrently": "9.2.1",
+    "cross-env": "10.1.0",
+    "electron": "42.2.0",
+    "electron-builder": "26.8.1",
+    "typescript": "6.0.3",
+    "vite": "8.0.14",
+    "wait-on": "9.0.10"
+  },
+  "build": {
+    "appId": "kr.shiinamachi.slidex.desktop",
+    "productName": "slidex",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "category": "Office"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
