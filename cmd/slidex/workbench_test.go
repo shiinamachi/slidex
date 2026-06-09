@@ -210,6 +210,7 @@ func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
 		DraftStatus:                     "draft_saved",
 		SaveStatus:                      "saved",
 		StopStatus:                      "stopped",
+		StartedNew:                      true,
 		ServerBind:                      "127.0.0.1",
 		TokenRedacted:                   true,
 		HTMLBootstrapTokenFound:         true,
@@ -224,9 +225,71 @@ func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
 	if status := workbenchSaveSmokeStatus(result); status != "pass" {
 		t.Fatalf("status = %q, want pass", status)
 	}
+	result.StartedNew = false
+	result.ReusedExisting = true
+	result.StopStatus = "reused_not_stopped"
+	if status := workbenchSaveSmokeStatus(result); status != "pass" {
+		t.Fatalf("reused status = %q, want pass", status)
+	}
 	result.IsActualCodexAppBrowserEvidence = true
 	if status := workbenchSaveSmokeStatus(result); status != "fail" {
 		t.Fatalf("save smoke must not pass as actual browser evidence: %q", status)
+	}
+}
+
+func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "reused-token"
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", token, port, os.Getpid(), "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", handler.handleReady)
+	mux.HandleFunc("/workbench/session-1", handler.handleWorkbench)
+	mux.HandleFunc("/workbench/session-1/api/draft", handler.handleDraft)
+	mux.HandleFunc("/workbench/session-1/api/save", handler.handleSave)
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	result, err := smokeSaveWorkbench(workspace, "demo", "", "decks/_template", workbenchSaveInput{
+		Title:              "Reused workbench",
+		Audience:           "QA",
+		DecisionGoal:       "Keep the user's workbench running",
+		SourceNotes:        "Existing server should be reused.",
+		OutputExpectations: "save-smoke must not stop reused workbench.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "pass" || result.StartedNew || !result.ReusedExisting || result.StopStatus != "reused_not_stopped" {
+		t.Fatalf("unexpected save-smoke result: %#v", result)
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after save-smoke")
+	}
+	if recorded.Status == "stopped" {
+		t.Fatalf("save-smoke stopped a reused workbench: %#v", recorded)
 	}
 }
 

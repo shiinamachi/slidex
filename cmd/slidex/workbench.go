@@ -148,6 +148,8 @@ type workbenchSaveSmokeResult struct {
 	DraftStatus                     string              `json:"draftStatus"`
 	SaveStatus                      string              `json:"saveStatus"`
 	StopStatus                      string              `json:"stopStatus"`
+	StartedNew                      bool                `json:"startedNew"`
+	ReusedExisting                  bool                `json:"reusedExisting"`
 	TokenRedacted                   bool                `json:"tokenRedacted"`
 	HTMLBootstrapTokenFound         bool                `json:"htmlBootstrapTokenFound"`
 	RawTokenAbsentFromArtifacts     bool                `json:"rawTokenAbsentFromArtifacts"`
@@ -216,7 +218,7 @@ func runWorkbenchStart(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	result, manifest, err := startWorkbench(*workspace, *deckID, *deck, *fromTemplate)
+	result, manifest, startedNew, err := startWorkbench(*workspace, *deckID, *deck, *fromTemplate)
 	if err != nil {
 		return err
 	}
@@ -229,6 +231,8 @@ func runWorkbenchStart(args []string) error {
 		"browserOpenStrategy":     manifest.BrowserOpenStrategy,
 		"proprietaryCanvasAPI":    "not_used",
 		"tokenHandling":           "write token is redacted from CLI output and manifest",
+		"startedNew":              startedNew,
+		"reusedExisting":          !startedNew,
 		"workbenchManifestPath":   filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
 		"supportedURLMechanism":   "Codex in-app browser can open local URLs by URL click, manual navigation, or Browser plugin use.",
 		"unsupportedURLMechanism": "No Codex 0.138.0 App Server client request method was found for plugin-owned automatic browser opening.",
@@ -409,13 +413,15 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
-	result, manifest, err := startWorkbench(workspace, deckID, deck, "decks/_template")
+	result, manifest, startedNew, err := startWorkbench(workspace, deckID, deck, "decks/_template")
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"deck":                 result,
 		"workbench":            publicWorkbenchStatus(manifest),
+		"startedNew":           startedNew,
+		"reusedExisting":       !startedNew,
 		"openInstruction":      "Open workbench.url in the Codex App in-app browser, or ask @Browser to navigate to it.",
 		"proprietaryCanvasAPI": "not_used",
 	}, nil
@@ -448,7 +454,7 @@ func smokeSaveWorkbench(workspace, deckID, deck, fromTemplate string, input work
 	if input.Title == "" || input.Audience == "" || input.DecisionGoal == "" {
 		return result, errors.New("save smoke requires title, audience, and decision goal")
 	}
-	bootstrap, manifest, err := startWorkbench(workspace, deckID, deck, fromTemplate)
+	bootstrap, manifest, startedNew, err := startWorkbench(workspace, deckID, deck, fromTemplate)
 	if err != nil {
 		return result, err
 	}
@@ -477,6 +483,8 @@ func smokeSaveWorkbench(workspace, deckID, deck, fromTemplate string, input work
 		SessionID:                       manifest.SessionID,
 		ServerBind:                      manifest.ServerBind,
 		StartStatus:                     manifest.Status,
+		StartedNew:                      startedNew,
+		ReusedExisting:                  !startedNew,
 		TokenRedacted:                   manifest.TokenRedacted,
 		BriefPath:                       filepath.ToSlash(briefPath),
 		DraftPath:                       filepath.ToSlash(draftPath),
@@ -489,15 +497,23 @@ func smokeSaveWorkbench(workspace, deckID, deck, fromTemplate string, input work
 		Checks:                          map[string]any{"actualCodexAppBrowserEvidence": false},
 	}
 	defer func() {
-		stopped, stopErr := stopWorkbench(workspaceAbs, result.DeckID, "")
-		if stopErr != nil {
-			result.Findings = append(result.Findings, "workbench stop failed: "+stopErr.Error())
-			if err == nil {
-				err = stopErr
+		if !result.StartedNew {
+			result.StopStatus = "reused_not_stopped"
+			result.Checks["workbenchStop"] = map[string]any{
+				"status": "reused_not_stopped",
+				"reason": "save-smoke reused an existing workbench and did not stop it",
 			}
 		} else {
-			result.StopStatus = stopped.Status
-			result.Checks["workbenchStop"] = publicWorkbenchStatus(stopped)
+			stopped, stopErr := stopWorkbench(workspaceAbs, result.DeckID, "")
+			if stopErr != nil {
+				result.Findings = append(result.Findings, "workbench stop failed: "+stopErr.Error())
+				if err == nil {
+					err = stopErr
+				}
+			} else {
+				result.StopStatus = stopped.Status
+				result.Checks["workbenchStop"] = publicWorkbenchStatus(stopped)
+			}
 		}
 		if result.Status == "" || result.Status == "fail" {
 			result.Status = workbenchSaveSmokeStatus(result)
@@ -708,10 +724,12 @@ func workbenchSaveSmokeFindings(result workbenchSaveSmokeResult, manifest workbe
 }
 
 func workbenchSaveSmokeStatus(result workbenchSaveSmokeResult) string {
+	stopOK := (result.StartedNew && result.StopStatus == "stopped") ||
+		(result.ReusedExisting && result.StopStatus == "reused_not_stopped")
 	if result.StartStatus == "running" &&
 		result.DraftStatus == "draft_saved" &&
 		result.SaveStatus == "saved" &&
-		result.StopStatus == "stopped" &&
+		stopOK &&
 		result.ServerBind == "127.0.0.1" &&
 		result.TokenRedacted &&
 		result.HTMLBootstrapTokenFound &&
@@ -724,10 +742,10 @@ func workbenchSaveSmokeStatus(result workbenchSaveSmokeResult) string {
 	return "fail"
 }
 
-func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrapResult, workbenchManifest, error) {
+func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrapResult, workbenchManifest, bool, error) {
 	deckAbs, err := resolveDeckDir(workspace, deckID, deck, true, fromTemplate)
 	if err != nil {
-		return deckBootstrapResult{}, workbenchManifest{}, err
+		return deckBootstrapResult{}, workbenchManifest{}, false, err
 	}
 	result := deckBootstrapResult{
 		Workspace: filepath.ToSlash(workspaceRoot(workspace)),
@@ -738,7 +756,7 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 	if existing, ok := readWorkbenchManifest(deckAbs); ok {
 		if isWorkbenchReady(existing) {
 			existing.Status = "running"
-			return result, existing, nil
+			return result, existing, false, nil
 		}
 		existing.Status = "stale"
 		existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -746,31 +764,31 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 	}
 	sessionID, err := randomURLToken(18)
 	if err != nil {
-		return result, workbenchManifest{}, err
+		return result, workbenchManifest{}, false, err
 	}
 	token, err := randomURLToken(32)
 	if err != nil {
-		return result, workbenchManifest{}, err
+		return result, workbenchManifest{}, false, err
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return result, workbenchManifest{}, err
+		return result, workbenchManifest{}, false, err
 	}
 	outDir := filepath.Join(deckAbs, "out")
 	if err := ensureSecureDir(outDir); err != nil {
-		return result, workbenchManifest{}, err
+		return result, workbenchManifest{}, false, err
 	}
 	logPath := filepath.Join(outDir, "workbench_server.log")
 	logFile, err := openSecureAppendFile(logPath, 0o600)
 	if err != nil {
-		return result, workbenchManifest{}, err
+		return result, workbenchManifest{}, false, err
 	}
 	defer logFile.Close()
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		port, err := chooseLoopbackPort()
 		if err != nil {
-			return result, workbenchManifest{}, err
+			return result, workbenchManifest{}, false, err
 		}
 		cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", "SLIDEX_WORKBENCH_TOKEN", "--port", strconv.Itoa(port))
 		cmd.Env = append(os.Environ(), "SLIDEX_WORKBENCH_TOKEN="+token)
@@ -784,7 +802,7 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		manifest := newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, cmd.Process.Pid, "starting")
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
 			stopWorkbenchProcess(manifest)
-			return result, manifest, err
+			return result, manifest, true, err
 		}
 		if err := waitForWorkbenchReady(manifest, 3*time.Second); err != nil {
 			lastErr = err
@@ -797,11 +815,11 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		manifest.Status = "running"
 		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
-			return result, manifest, err
+			return result, manifest, true, err
 		}
-		return result, manifest, nil
+		return result, manifest, true, nil
 	}
-	return result, workbenchManifest{}, fmt.Errorf("workbench did not become ready after port retries: %w", lastErr)
+	return result, workbenchManifest{}, false, fmt.Errorf("workbench did not become ready after port retries: %w", lastErr)
 }
 
 func serveWorkbench(deckAbs, workspace, sessionID, token string, port int) error {
