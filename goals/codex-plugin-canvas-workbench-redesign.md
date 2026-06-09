@@ -8,20 +8,20 @@ This file is not an active Goal. It becomes active thread-scoped Goal state only
 
 ## Goal Text
 
-slidex의 별도 Electron Desktop App 방향을 중단하고 Codex Plugin 중심의 Codex App 통합 UX로 재설계 및 구현한다. 완료란 Codex CLI `0.138.0` 기준으로 plugin manifest, skills, MCP server, App Server protocol artifacts, doctor checks, docs, tests가 갱신되고, Codex App에서 slidex plugin을 설치한 뒤 `@slidex` 또는 동등한 plugin 호출을 실행하면 문서화된 Codex App 작업 표면 안에서 deck 생성 workbench가 즉시 열려 `decks/<deck_id>/` 생성과 초기 deck creation input 저장을 수행하는 상태를 의미한다. 공개 또는 제품 계약으로 plugin-owned Canvas frontend API가 확인되면 그 API를 사용하고 증거를 남긴다. 확인되지 않으면 임의 Canvas mount를 주장하지 않고 Codex App이 지원하는 in-app browser, artifact preview, local workbench URL, 또는 동등한 지원 표면으로 MVP를 검증하며 Canvas 미지원은 명시적 product gap으로 기록한다. 기존 CLI-first 계약, deck-local workspace, HTML/PDF delivery contract, exact dependency pinning, user change preservation을 보존하고, later-stage authoring/render/QA 고도화는 이번 Goal 범위 밖으로 둔다.
+slidex의 별도 Electron Desktop App 방향을 중단하고 Codex Plugin 중심의 Codex App 통합 UX로 재설계 및 구현한다. 완료란 Codex CLI `0.138.0` 기준으로 plugin manifest, skills, MCP server, App Server protocol artifacts, doctor checks, docs, tests가 갱신되고, Codex App에서 slidex plugin을 설치한 뒤 `@slidex` 또는 동등한 plugin 호출을 실행하면 plugin이 별도 local frontend server를 background로 시작하고, Codex App browser/work surface가 해당 local URL을 열어 deck 생성 workbench를 즉시 표시하며, `decks/<deck_id>/` 생성과 초기 deck creation input 저장을 수행하는 상태를 의미한다. 이 Goal에서 "Canvas" 또는 "Canvas-style experience"는 undocumented plugin-owned arbitrary UI mount API가 아니라, OpenDesign App/MagicPath plugin 방식처럼 background frontend server와 Codex App browser/work surface를 결합한 local workbench UX를 뜻한다. 구현은 documented/supported Codex App URL-opening 또는 browser/work-surface mechanism을 사용해야 하며, proprietary Canvas mount API가 존재한다고 주장하지 않는다. 향후 공식 plugin-owned Canvas/frontend lifecycle API가 확인되면 optional enhancement로 검토하고 출처와 evidence를 남긴다. 기존 CLI-first 계약, deck-local workspace, HTML/PDF delivery contract, exact dependency pinning, user change preservation을 보존하고, later-stage authoring/render/QA 고도화는 이번 Goal 범위 밖으로 둔다.
 
 ## Interview Summary
 
 - Desired outcome: slidex 사용자가 별도 Electron 앱을 열지 않고 Codex App 채팅에서 slidex plugin을 호출하여 deck 생성 workbench를 바로 시작한다.
 - Primary product decision: `apps/desktop`은 canonical UX가 아니며, `plugins/slidex`가 새 front door가 된다.
 - Codex integration target: Codex CLI `0.138.0` 기준의 plugin, skills, MCP, App Server protocol, doctor, docs, tests를 일관되게 갱신한다.
-- Canvas/work-surface policy: true Canvas API가 확인되면 구현하고 출처를 남긴다. 확인되지 않으면 지원되는 Codex App 작업 표면으로 MVP를 만들되 Canvas라고 과장하지 않는다.
+- Canvas/work-surface policy: 사용자가 말한 "Canvas"는 proprietary hidden mount API가 아니라, plugin이 local frontend server를 background로 띄우고 Codex App browser/work surface에서 그 local URL을 여는 Canvas-style workflow를 의미한다. 따라서 MVP의 primary path는 supported Codex App browser/work surface에서 local workbench를 여는 것이다. 공식 plugin-owned Canvas lifecycle API는 별도 future enhancement로만 다루며, 존재한다고 가정하지 않는다.
 - MVP boundary: plugin invocation -> deck bootstrap -> workbench display -> initial deck creation data 저장까지만 완료한다. full strategy/spec/build/render/QA/finalize UI는 후속 Goal이다.
 - Evidence required: official Codex docs, GPT Pro review, local repo inspection, Codex CLI `0.138.0` artifact proof, doctor JSON, Go tests, plugin install/invocation demo, workbench security tests.
-- Non-goals: hosted SaaS, standalone Electron app shipping, full slide editor, full pipeline UI, legacy standalone instruction workflows, generated delivery artifacts committing, unsupported Canvas claim.
-- Autonomy: implementation 중 명확한 공개 계약과 local evidence로 판단 가능한 사항은 직접 진행한다. Canvas API 여부, plugin UI product contract, dependency/license/security policy가 불명확하면 증거와 함께 멈춘다.
+- Non-goals: hosted SaaS, standalone Electron app shipping, full slide editor, full pipeline UI, legacy standalone instruction workflows, generated delivery artifacts committing, proprietary Canvas mount API claim.
+- Autonomy: implementation 중 명확한 공개 계약과 local evidence로 판단 가능한 사항은 직접 진행한다. Codex App browser/work-surface URL opening, plugin-managed server lifecycle, dependency/license/security policy가 불명확하면 증거와 함께 멈춘다.
 - Budget: explicit token/time budget 없음. 완료 증거가 모두 충족되거나 blocked stop condition에 도달할 때까지 진행한다.
-- Blocked condition: plugin-owned Canvas가 필수인데 지원 계약을 찾지 못하고 fallback 승인이 없거나, Codex CLI `0.138.0` schema/protocol generation을 재현할 수 없거나, Codex App plugin install/invocation demo를 3회 연속 검증하지 못하면 중단한다.
+- Blocked condition: plugin이 local frontend server를 시작 또는 조율할 수 없고 Codex App이 해당 local URL을 browser/work surface로 열거나 표시하는 지원 경로도 없거나, Codex CLI `0.138.0` schema/protocol generation을 재현할 수 없거나, Codex App plugin install/invocation demo를 3회 연속 검증하지 못하면 중단한다. proprietary Canvas mount API 부재만으로는 blocker가 아니다.
 
 ## Research And Review Summary
 
@@ -40,8 +40,8 @@ slidex의 별도 Electron Desktop App 방향을 중단하고 Codex Plugin 중심
 - Codex plugin packaging is confirmed around `.codex-plugin/plugin.json`, local/repo marketplace flows, skills, MCP config, app integrations, hooks, interface metadata, assets, and default prompts.
 - Codex App features confirmed by official docs include local/worktree/cloud threads, skills, plugins, MCP, automations, integrated terminal, Git/diff tools, in-app browser, web search, image generation, and task/sidebar artifact previews.
 - Codex App Server is confirmed as a JSON-RPC interface with version-specific generated TypeScript and JSON schema outputs.
-- Public Codex documentation reviewed for this Goal did not confirm a generic plugin-owned Canvas API that auto-mounts arbitrary plugin frontend code when a plugin is invoked.
-- Apps SDK documentation confirms ChatGPT app widgets through MCP resources, `text/html;profile=mcp-app`, `_meta["openai/outputTemplate"]`, and the `window.openai` UI bridge. This is relevant as a design reference but is not, by itself, proof that Codex App plugins can mount arbitrary Canvas widgets.
+- Public Codex documentation reviewed for this Goal did not confirm a generic plugin-owned Canvas API that auto-mounts arbitrary plugin frontend code when a plugin is invoked. That is no longer the primary target; the primary target is plugin-managed background server plus Codex App browser/work-surface open.
+- Apps SDK documentation confirms ChatGPT app widgets through MCP resources, `text/html;profile=mcp-app`, `_meta["openai/outputTemplate"]`, and the `window.openai` UI bridge. This is relevant as a design reference but is not, by itself, proof that Codex App plugins can mount arbitrary proprietary Canvas widgets.
 - npm registry evidence confirms `@openai/codex@0.138.0` exists with exact tarball and integrity metadata.
 
 ### GPT Pro Review Evidence
@@ -59,39 +59,45 @@ GPT Pro's critical review agreed with the main direction:
 - Keep `cmd/slidex` as the engine.
 - Add a minimal local workbench rendered inside Codex App through documented/supported surfaces.
 - Upgrade every active Codex protocol, doctor, plugin, and test path to `0.138.0`.
-- Treat unsupported Canvas behavior as a product gap unless proven otherwise.
+- Treat proprietary Canvas mount APIs as optional/future-facing; the primary architecture is the Canvas-style local workbench pattern.
 
-## Confirmed Versus Unconfirmed Capability Gate
+A follow-up GPT Pro refinement was run after the user clarified that "Canvas" means a background frontend server opened inside the Codex App browser/work surface, comparable to OpenDesign App or MagicPath plugin behavior. The follow-up review concluded that this server/browser flow should be the primary architecture, not a fallback, and that the document should reserve uncertainty only for proprietary hidden mount APIs.
 
-### Confirmed Target
+## Canvas-Style Workbench Capability Gate
 
-- slidex can become a Codex Plugin-first integration.
-- The plugin can bundle skills and MCP configuration.
+### Confirmed Or Assumed For This Goal
+
+- User intent: "Canvas" means a Codex App browser/work-surface-hosted local workbench experience, not an undocumented arbitrary plugin-owned UI mount API.
+- Primary UX target: plugin invocation starts a background local frontend server, waits for readiness, then opens the local workbench URL inside the Codex App browser/work surface.
+- User expects this pattern to be comparable to the OpenDesign App / MagicPath plugin style described by the user.
+- MVP success can be achieved without claiming a proprietary Canvas API, as long as the user can invoke the plugin and immediately begin deck creation in the Codex App-hosted local workbench.
+- slidex can become a Codex Plugin-first integration that bundles skills and MCP configuration.
 - A plugin invocation can guide Codex to run slidex CLI/MCP operations in a local/worktree thread.
-- Codex App has supported surfaces that can show artifacts/previews and browser-based local targets.
 - App Server/protocol artifacts can and should be generated for a specific Codex version.
 
-### Unconfirmed Target
+### Still Unconfirmed Or Must Verify
 
-- A general plugin-owned Canvas lifecycle that lets slidex register arbitrary frontend code and auto-mount it inside Codex App Canvas immediately on plugin invocation.
-- A documented `plugin invoked -> open Canvas widget` manifest or MCP contract in the public Codex docs reviewed for this Goal.
+- The exact Codex Plugin mechanism for opening a local URL in the Codex App browser/work surface.
+- Whether the local URL should be opened by a tool response, skill-guided browser action, Codex App browser API, artifact/link action, or another supported mechanism.
+- Process lifecycle expectations: how the plugin should start, monitor, reuse, and terminate the background frontend server.
+- Codex App behavior for loopback URLs, allowed schemes, port handling, refresh behavior, session/deep-link URLs, file downloads, clipboard, drag-and-drop, and WebSocket/SSE if the frontend uses them.
+- Whether any official plugin-owned Canvas/frontend lifecycle API exists. This is optional/future-facing and not required for the primary MVP architecture.
 
 ### Required Decision Gate
 
-The first implementation phase must verify current Codex `0.138.0` documentation and generated plugin/app-server schema for any supported plugin UI or Canvas field.
+The first implementation phase must verify current Codex `0.138.0` documentation and generated plugin/app-server schema for the supported path to open a plugin-managed local frontend URL in Codex App.
 
-If a supported Canvas/frontend contract exists:
+If a documented proprietary plugin-owned Canvas/frontend lifecycle exists:
 
 - cite the documentation or product contract in implementation notes,
-- encode it in plugin manifest/MCP resources as documented,
-- demonstrate the frontend opening inside Codex App Canvas.
+- evaluate whether it improves the local workbench architecture,
+- treat it as an optional enhancement unless it is clearly the supported URL-opening path.
 
-If no supported Canvas/frontend contract exists:
+If no proprietary Canvas/frontend lifecycle exists:
 
-- do not build an imaginary Canvas mount,
-- implement the MVP through the most direct supported Codex App surface,
-- record this as a product gap,
-- phrase the result as Codex App workbench integration, not Canvas support.
+- continue with the primary Canvas-style local workbench architecture,
+- do not claim undocumented mount APIs,
+- verify the plugin invocation -> background server ready -> Codex App browser/work surface opens local URL -> deck creation persists flow end to end.
 
 ## Target Architecture
 
@@ -112,7 +118,8 @@ Codex App thread
   -> slidex Codex Plugin
        -> skills for user-facing workflow semantics
        -> MCP server for deterministic deck/workbench operations
-       -> supported Codex App work surface for the workbench
+       -> background local frontend server for the workbench
+       -> Codex App browser/work surface opened to the local URL
        -> cmd/slidex as the local CLI source of truth
 ```
 
@@ -192,25 +199,58 @@ Out of MVP:
 
 ### Codex App Surface Strategy
 
-Primary strategy:
+Primary strategy is the Canvas-style local workbench architecture:
 
-- use a supported Codex App surface to open a local loopback workbench or render a workbench artifact.
+1. User invokes the slidex Codex Plugin.
+2. Plugin starts or reuses a local frontend server in the background.
+3. Plugin waits for readiness through `/healthz`, `/readyz`, or equivalent.
+4. Plugin opens the local workbench URL inside the Codex App browser/work surface.
+5. The workbench persists initial deck creation state under `decks/<deck_id>/`.
+6. The plugin records server/session metadata under `decks/<deck_id>/out/workbench_manifest.json` or equivalent.
 
-Fallback strategy:
+Reference URL shape:
 
-- generate a static HTML workbench artifact under `decks/<deck_id>/out/` and have Codex App preview/open it through a supported artifact/browser path.
+```text
+http://127.0.0.1:<port>/workbench/<session-id>?token=<short-lived-token>
+```
 
-Canvas strategy:
+The exact URL shape can change, but it must be loopback-only, session-scoped, token-protected for state-changing actions, and redacted in logs/chat-visible output.
 
-- implement only if current Codex documentation or product contract confirms the required plugin-owned frontend lifecycle.
+Fallback strategy only applies if browser URL opening is not available:
+
+- generate a static HTML workbench artifact under `decks/<deck_id>/out/` and have Codex App preview/open it through a supported artifact/browser path,
+- document why the background-server path failed,
+- keep the fallback subordinate to the primary Canvas-style server architecture.
+
+Optional future strategy:
+
+- if official Codex documentation exposes a proprietary plugin-owned Canvas/frontend lifecycle API, evaluate it as an enhancement,
+- do not make that hidden API the baseline requirement unless Codex explicitly documents it as the supported route.
 
 The acceptance wording is:
 
-> The slidex workbench appears inside Codex App using a documented and supported Codex App work surface.
+> The slidex plugin starts a background local frontend server and opens its loopback workbench URL inside the Codex App browser/work surface, where the user begins deck creation.
 
 The rejected wording is:
 
-> The plugin mounts arbitrary UI into Canvas.
+> The plugin depends on an undocumented arbitrary UI mount API.
+
+### Frontend Server Lifecycle And Security
+
+Because the background frontend server is the primary architecture, completion requires explicit lifecycle and security behavior:
+
+- bind to `127.0.0.1` by default; support `localhost` or `::1` only when intentionally tested,
+- never bind to `0.0.0.0` by default,
+- handle port collisions, stale previous servers, concurrent slidex sessions, and crash restart,
+- expose readiness checks before opening the browser surface,
+- require unguessable session IDs or short-lived tokens for write-capable routes,
+- protect mutating routes against CSRF with token checks and Origin/Referer validation where applicable,
+- avoid permissive CORS,
+- reject path traversal and symlink escapes where relevant,
+- write only under the selected repository/deck workspace,
+- redact full tokens, private deck contents, and sensitive paths from logs and chat-visible output,
+- define shutdown/reuse semantics so the server is not an unmanaged background process,
+- define draft persistence, autosave, reload, and crash recovery behavior for the deck-creation form.
 
 ### App Server And Protocol Strategy
 
@@ -255,8 +295,8 @@ The tight MVP is:
 3. User invokes `@slidex create a new deck called <deck_id>` or equivalent.
 4. Codex loads the slidex start skill.
 5. The plugin MCP server or CLI creates `decks/<deck_id>/`.
-6. slidex starts or emits the workbench.
-7. Codex App shows the workbench through the chosen supported work surface.
+6. slidex starts or reuses the background local frontend server.
+7. The plugin waits for readiness and opens the local workbench URL in the Codex App browser/work surface.
 8. User enters initial deck creation information.
 9. slidex writes `brief.md` and `out/workbench_manifest.json` or equivalent deck-local state.
 
@@ -266,7 +306,8 @@ In scope:
 - non-empty plugin MCP configuration,
 - start skill,
 - deck bootstrap,
-- minimal workbench,
+- minimal workbench served through the background local frontend server,
+- server lifecycle/readiness/session management,
 - security boundaries,
 - doctor/test/docs proof,
 - desktop de-scope.
@@ -378,9 +419,15 @@ Doctor should fail if:
 ## Verification Checklist
 
 - [ ] Re-read current official Codex plugin, Codex App, Codex App Server, and Apps SDK docs before implementation.
-- [ ] Verify whether Codex CLI/App `0.138.0` exposes a documented plugin-owned Canvas or frontend mount contract.
-- [ ] If such a contract exists, cite it and implement it.
-- [ ] If not, document the gap and implement the supported work surface fallback without claiming Canvas support.
+- [ ] Verify the supported Codex Plugin mechanism for opening a local URL in the Codex App browser/work surface.
+- [ ] Verify that the plugin can start or coordinate a background local frontend server for the slidex workbench.
+- [ ] Verify loopback URL behavior inside Codex App: `127.0.0.1` versus `localhost`, allowed schemes, port restrictions, navigation behavior, refresh behavior, and session/deep-link URL behavior.
+- [ ] Verify frontend server readiness flow: the plugin must not open the browser surface before `/healthz`, `/readyz`, or equivalent readiness check succeeds.
+- [ ] Verify process lifecycle: start, reuse existing instance, detect stale instance, restart after crash, and clean shutdown where appropriate.
+- [ ] Verify session isolation: each deck creation session has a session ID, workspace path, or equivalent state boundary.
+- [ ] Verify repository persistence: deck metadata, generated slide files, assets, exports, and recovery state are written to predictable repo paths.
+- [ ] Verify that no documentation or UI copy implies the existence of a proprietary plugin-owned Canvas mount API.
+- [ ] If a documented official Canvas/frontend lifecycle API is found, record evidence and evaluate it as an optional enhancement, not as an MVP blocker.
 - [ ] Verify `@openai/codex@0.138.0` exact package metadata if used for generation.
 - [ ] Run `codex --version` in the environment used for generation and record `0.138.0`.
 - [ ] Regenerate active protocol artifacts under `internal/codex/protocol/codex-cli-0.138.0/`.
@@ -389,7 +436,8 @@ Doctor should fail if:
 - [ ] Implement or update `plugins/slidex/.mcp.json` so it defines a slidex MCP server.
 - [ ] Add the `slidex-start` skill and default plugin prompt for deck creation workbench startup.
 - [ ] Implement deck bootstrap and workbench start/status/stop through CLI/MCP code paths.
-- [ ] Build the minimal non-Electron workbench or static artifact fallback.
+- [ ] Build the minimal non-Electron workbench served by the background local frontend server.
+- [ ] Keep static artifact preview only as an explicit degraded fallback if Codex App cannot open local workbench URLs.
 - [ ] Ensure deck bootstrap uses `slidex init <deck_id>` semantics or shared code that preserves template behavior.
 - [ ] Ensure workbench writes only deck-local source/state files.
 - [ ] Ensure any generated workbench state lives under `decks/<deck_id>/out/`.
@@ -404,7 +452,10 @@ Doctor should fail if:
 - [ ] Verify `brief.md`, `DESIGN.md` if applicable, `out/slidex_state.json` if applicable, and `out/workbench_manifest.json` are current and deck-local.
 - [ ] Verify path traversal and writes outside `decks/<deck_id>/` fail.
 - [ ] Verify loopback server binds only to `127.0.0.1`.
+- [ ] Verify the workbench server does not bind to `0.0.0.0` by default and is not reachable from the LAN.
+- [ ] Verify port collision handling and stale server recovery.
 - [ ] Verify write endpoints require token authorization.
+- [ ] Verify mutating routes reject unexpected origins and avoid permissive CORS.
 - [ ] Verify tokens are redacted from logs, manifests, and chat-visible output.
 - [ ] Remove, de-scope, or tombstone `apps/desktop` as the active product path.
 - [ ] Update README, `commands.md`, plugin docs, and skill docs so Codex Plugin workbench is the documented direction.
@@ -418,8 +469,8 @@ Doctor should fail if:
 - Do not create root-level `brief.md`, `assets/`, `brand/`, `data/`, or `out/` for new work.
 - Do not restore legacy standalone instruction-file workflows or direct execution fallback paths.
 - Do not build a hosted service or SaaS product.
-- Do not claim visual or Canvas QA passed unless the corresponding UI surface was actually inspected.
-- Do not make `.app.json` or plugin app integration metadata pretend to be a custom UI mount unless current Codex documentation says so.
+- Do not claim visual or Canvas-style workbench QA passed unless the corresponding Codex App browser/work surface was actually inspected.
+- Do not make `.app.json` or plugin app integration metadata pretend to be a proprietary custom UI mount unless current Codex documentation says so.
 - Keep every runtime and dependency exactly pinned.
 - When adding or updating dependencies, update lockfiles, manifests, docs, validation checks, and license/SHA evidence in the same coherent change.
 - Do not revert unrelated user changes.
@@ -427,8 +478,8 @@ Doctor should fail if:
 
 ## Iteration Policy
 
-1. Start with a capability verification spike for Codex CLI/App `0.138.0` plugin UI, Canvas, App Server, plugin list/detail JSON, and MCP behavior.
-2. If Canvas is confirmed, implement against that contract; otherwise choose the supported work surface fallback and record the gap.
+1. Start with a capability verification spike for Codex CLI/App `0.138.0` local URL opening, browser/work-surface behavior, plugin list/detail JSON, App Server, and MCP behavior.
+2. Implement the Canvas-style local workbench path: plugin invocation -> background frontend server ready -> Codex App browser/work surface opens local URL -> deck creation state persists.
 3. Upgrade `0.138.0` protocol/version gates before building UI behavior that depends on them.
 4. Make `plugins/slidex` installable and useful before broadening workbench UI.
 5. Implement the narrow deck bootstrap path before adding later workflow controls.
@@ -441,7 +492,8 @@ Doctor should fail if:
 
 Stop and report blocked status if any of these remain true after reasonable investigation:
 
-- No supported Codex plugin-owned Canvas/frontend contract exists and the user does not accept a supported Codex App work-surface fallback.
+- Codex Plugin execution cannot start or coordinate a local frontend server, and Codex App provides no supported way to open or display the resulting local URL in its browser/work surface.
+- The end-to-end flow cannot be provided: invocation -> background frontend server ready -> Codex App browser/work surface opens local workbench URL -> deck creation state persists to the repo.
 - Codex CLI `0.138.0` cannot be installed, invoked, or used to regenerate protocol artifacts in the current environment.
 - `codex --version` cannot be made to report `0.138.0` in the generation environment.
 - `slidex doctor --codex --json` cannot prove `0.138.0` compatibility after three focused attempts.
@@ -458,7 +510,8 @@ The final Goal run should report in Korean:
 - changed files grouped by area,
 - Codex `0.138.0` research sources and capability decision,
 - GPT Pro review points incorporated,
-- whether true Canvas was confirmed or a supported work-surface fallback was used,
+- how the Canvas-style local workbench flow was implemented and verified,
+- whether any proprietary Canvas/frontend API was found and, if so, why it was or was not used,
 - plugin install/invocation demo evidence,
 - workbench URL/artifact path and deck path used for verification,
 - protocol artifact paths and version proof,
@@ -472,7 +525,8 @@ The final Goal run should report in Korean:
 
 - The immediate business objective is deck creation startup inside Codex App, not a full replacement for every later slidex workflow stage.
 - The future slidex user is already working in a Codex local/worktree thread with repository access.
-- A supported Codex App surface is acceptable if a true plugin-owned Canvas API is not publicly or contractually available.
+- In this Goal, "Canvas" means the Codex App browser/work-surface-hosted local workbench opened from a plugin-managed background frontend server.
+- A proprietary plugin-owned Canvas mount API is not required for MVP success.
 - The Go CLI remains the source of truth for workspace creation and validation.
 - Exact package evidence for `@openai/codex@0.138.0` is sufficient as a starting point, but the implementation must still prove the local generation command used a real `0.138.0` binary.
 
