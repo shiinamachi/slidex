@@ -30,23 +30,36 @@ if (!isWsl()) {
 
 const packageJson = require(path.join(process.cwd(), "package.json"));
 const electronVersion = packageJson.devDependencies.electron;
+const electronPackage = `electron@${electronVersion}`;
 const windowsAppPath = toWindowsPath(process.cwd());
 const devServerUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
 
 const command = [
   "$ErrorActionPreference = 'Stop'",
-  "if (-not (Get-Command pnpm.cmd -ErrorAction SilentlyContinue)) {",
-  "  throw 'pnpm.cmd was not found on the Windows host. Install pnpm for Windows Node.js.'",
-  "}",
+  `$electronPackage = ${toPowerShellString(electronPackage)}`,
+  `$appPath = ${toPowerShellString(windowsAppPath)}`,
   `$env:VITE_DEV_SERVER_URL = ${toPowerShellString(devServerUrl)}`,
-  [
-    "pnpm.cmd",
-    "dlx",
-    "--package",
-    toPowerShellString(`electron@${electronVersion}`),
-    "electron",
-    toPowerShellString(windowsAppPath)
-  ].join(" ")
+  "$mise = Get-Command mise -ErrorAction SilentlyContinue",
+  "if ($mise) {",
+  "  Push-Location $appPath",
+  "  try {",
+  "    & $mise.Source exec -- pnpm dlx --package $electronPackage electron $appPath",
+  "    exit $LASTEXITCODE",
+  "  } finally {",
+  "    Pop-Location",
+  "  }",
+  "}",
+  "$pnpm = Get-Command pnpm.cmd -ErrorAction SilentlyContinue",
+  "if ($pnpm) {",
+  "  & $pnpm.Source dlx --package $electronPackage electron $appPath",
+  "  exit $LASTEXITCODE",
+  "}",
+  "$npx = Get-Command npx.cmd -ErrorAction SilentlyContinue",
+  "if ($npx) {",
+  "  & $npx.Source --yes --package $electronPackage electron $appPath",
+  "  exit $LASTEXITCODE",
+  "}",
+  "throw 'Neither mise, pnpm.cmd, nor npx.cmd was found on the Windows host. Install mise or Windows Node.js.'"
 ].join(os.EOL);
 
 const child = spawn(

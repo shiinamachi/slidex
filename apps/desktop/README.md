@@ -26,9 +26,10 @@ pnpm run build
 pnpm run pack
 ```
 
-`pnpm run dev:wsl`은 WSL에서 renderer/dev main watch를 실행하고 Windows host의
-`pnpm.cmd dlx electron@<pinned version>`로 Electron dev 앱을 띄웁니다. Windows
-host에 Node.js와 pnpm이 설치되어 있어야 합니다.
+`pnpm run dev:wsl`은 WSL에서 renderer/dev main watch를 실행하고 Windows host에서
+pinned Electron dev 앱을 띄웁니다. Windows host에 `mise`가 있으면
+`mise exec -- pnpm dlx`로 `.mise.toml`의 pinned runtime을 사용하고, 없으면
+`pnpm.cmd`, 그 다음 Windows Node.js의 `npx.cmd`를 fallback으로 사용합니다.
 
 ## Structure
 
