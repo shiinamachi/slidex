@@ -913,6 +913,14 @@ func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !sameOriginOrNoOrigin(r, s.manifest.URL) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	if !validWorkbenchToken(r.Header.Get("X-Slidex-Workbench-Token"), s.token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	_ = writeJSONResponse(w, publicWorkbenchStatus(s.manifest))
 }
 

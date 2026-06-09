@@ -216,6 +216,30 @@ func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {
 		t.Fatalf("wrong session API status = %d, want %d", sessionRec.Code, http.StatusNotFound)
 	}
 
+	noTokenSession := httptest.NewRequest(http.MethodGet, "/workbench/session-1/api/session", nil)
+	noTokenSessionRecorder := httptest.NewRecorder()
+	server.handleSession(noTokenSessionRecorder, noTokenSession)
+	if noTokenSessionRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("session API without token status = %d, want %d", noTokenSessionRecorder.Code, http.StatusUnauthorized)
+	}
+
+	badOriginSession := httptest.NewRequest(http.MethodGet, "/workbench/session-1/api/session", nil)
+	badOriginSession.Header.Set("Origin", "http://evil.example")
+	badOriginSession.Header.Set("X-Slidex-Workbench-Token", token)
+	badOriginSessionRecorder := httptest.NewRecorder()
+	server.handleSession(badOriginSessionRecorder, badOriginSession)
+	if badOriginSessionRecorder.Code != http.StatusForbidden {
+		t.Fatalf("session API bad origin status = %d, want %d", badOriginSessionRecorder.Code, http.StatusForbidden)
+	}
+
+	goodSession := httptest.NewRequest(http.MethodGet, "/workbench/session-1/api/session", nil)
+	goodSession.Header.Set("X-Slidex-Workbench-Token", token)
+	goodSessionRecorder := httptest.NewRecorder()
+	server.handleSession(goodSessionRecorder, goodSession)
+	if goodSessionRecorder.Code != http.StatusOK {
+		t.Fatalf("session API with token status = %d body=%s", goodSessionRecorder.Code, goodSessionRecorder.Body.String())
+	}
+
 	payload := []byte(`{"title":"Demo","audience":"Board","decisionGoal":"Approve pilot"}`)
 	draftReq := httptest.NewRequest(http.MethodPost, "/workbench/wrong-session/api/draft", bytes.NewReader(payload))
 	draftReq.Header.Set("Origin", "http://127.0.0.1:43210")
