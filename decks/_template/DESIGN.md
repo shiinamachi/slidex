@@ -1,4 +1,4 @@
-# Business Document Design Prompt
+# Business Document Design Guidance
 
 Optional. Use this file to describe the specific visual style this business
 document should follow.

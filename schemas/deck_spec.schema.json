@@ -38,7 +38,7 @@
         "deckId": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
         "activeDeckDir": {"type": "string"},
         "outputDir": {"type": "string"},
-        "designPromptFile": {"type": "string"},
+        "designGuidanceFile": {"type": "string"},
         "schemaVersion": {"type": "string"},
         "toolName": {"type": "string"},
         "referenceFiles": {
@@ -146,10 +146,10 @@
         "typography": {"type": "object", "additionalProperties": {"type": "string"}},
         "layout": {"type": "object", "additionalProperties": {"type": "string"}},
         "cssVariables": {"type": "object", "additionalProperties": {"type": "string"}},
-        "stylePromptSummary": {"type": "string"},
-        "stylePromptDirectives": {"type": "array", "items": {"type": "string"}},
-        "stylePromptAvoid": {"type": "array", "items": {"type": "string"}},
-        "stylePromptConflicts": {"type": "array", "items": {"type": "string"}},
+        "styleGuidanceSummary": {"type": "string"},
+        "styleGuidanceDirectives": {"type": "array", "items": {"type": "string"}},
+        "styleGuidanceAvoid": {"type": "array", "items": {"type": "string"}},
+        "styleGuidanceConflicts": {"type": "array", "items": {"type": "string"}},
         "htmlCssNotes": {"type": "array", "items": {"type": "string"}}
       }
     },

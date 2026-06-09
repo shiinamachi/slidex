@@ -338,7 +338,7 @@ func classifyPath(path string) string {
 	case p == "brief.md":
 		return "brief"
 	case p == "design.md":
-		return "design_prompt"
+		return "design_guidance"
 	case strings.HasPrefix(p, "brand/"):
 		return "brand"
 	case strings.HasPrefix(p, "data/"):
