@@ -1231,6 +1231,16 @@ func editorialRenderFindings(htmlSlides []slideInfo, pngs []string, manifest ren
 	return findings
 }
 
+func editorialManifestWarningFindings(manifest renderManifest, manifestPath string) []qaFinding {
+	var findings []qaFinding
+	for _, warning := range manifest.Warnings {
+		if strings.Contains(strings.ToLower(warning), "overflow check could not run") {
+			findings = append(findings, fail("ED-GRID-003", "render clipping probe did not complete: "+warning, manifestPath))
+		}
+	}
+	return findings
+}
+
 func reconciledCounts(counts map[string]int) bool {
 	expected := -1
 	for _, count := range counts {
@@ -1787,7 +1797,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("overflow check could not run for %s: %v", slide.ID, err))
 		}
 		if len(overflowIssues) > 0 {
-			return manifest, fmt.Errorf("visible clipping or overflow risk on %s: %s", slide.ID, strings.Join(overflowIssues, "; "))
+			return manifest, editorialGridClippingError(slide.ID, overflowIssues)
 		}
 		pngPath := filepath.Join(cfg.OutDir, fmt.Sprintf("slide_%02d.png", i+1))
 		if err := captureScreenshot(chromePath, wrapperPath, pngPath, cfg.Width, cfg.Height, cfg.ChromeNoSandbox); err != nil {
@@ -2086,6 +2096,10 @@ func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) 
 		))
 	}
 	return issues, nil
+}
+
+func editorialGridClippingError(slideID string, issues []string) error {
+	return fmt.Errorf("ED-GRID-003 visible clipping or overflow risk on %s: %s", slideID, strings.Join(issues, "; "))
 }
 
 func validatePNG(path string, expectedW, expectedH int) (dimension, bool, error) {
@@ -2647,6 +2661,7 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 			result.Findings = append(result.Findings, dependencyPinFindings("manifest.stylesheet_pin", manifest.Stylesheets, manifestPath)...)
 			result.Findings = append(result.Findings, dependencyPinFindings("manifest.asset_pin", manifest.Assets, manifestPath)...)
 			result.Findings = append(result.Findings, dependencyPinFindings("manifest.font_pin", manifest.Fonts, manifestPath)...)
+			result.Findings = append(result.Findings, editorialManifestWarningFindings(manifest, manifestPath)...)
 		}
 	}
 	for _, p := range pngs {

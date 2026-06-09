@@ -44,6 +44,8 @@ of the editorial policy:
   `editorialDesignPolicy.safeMarginPx`.
 - `ED-GRID-002`: major grid gaps are reported when below
   `editorialDesignPolicy.gridGutterPx` or off the spacing scale.
+- `ED-GRID-003`: render clipping or overflow evidence, including an incomplete
+  clipping probe, blocks QA.
 - `ED-HIER-001`: competing primary headlines on one non-appendix slide fail.
 - `ED-TYPE-001`: Korean documents must use a Korean-capable font stack.
 - `ED-TYPE-002`: explicit body, table, chart, footer, source, and caption font

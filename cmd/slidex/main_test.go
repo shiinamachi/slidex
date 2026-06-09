@@ -403,6 +403,17 @@ func TestVerifyHTMLEditSyncFailsWhenBaselineDiffers(t *testing.T) {
 	}
 }
 
+func TestEditorialGridClippingEvidenceUsesRuleID(t *testing.T) {
+	err := editorialGridClippingError("slide_01", []string{"div.content overflows"})
+	if err == nil || !strings.Contains(err.Error(), "ED-GRID-003") {
+		t.Fatalf("clipping error should include ED-GRID-003, got %v", err)
+	}
+	findings := editorialManifestWarningFindings(renderManifest{Warnings: []string{"overflow check could not run for slide_01: chrome failed"}}, "render_manifest.json")
+	if !hasFindingCheck(findings, "ED-GRID-003") {
+		t.Fatalf("manifest overflow warning should become ED-GRID-003, got %#v", findings)
+	}
+}
+
 func TestRunIntakeInteractiveAppliesAnswers(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()
