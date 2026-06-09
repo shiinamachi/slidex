@@ -360,6 +360,55 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 	}
 }
 
+func TestEditorialSpecFindingsRelaxAppendixDensity(t *testing.T) {
+	denseBody := []any{
+		"한국어문장이너무길어서줄바꿈위험",
+		"두 번째 과밀 항목",
+		"세 번째 과밀 항목",
+	}
+	spec := map[string]any{
+		"editorialDesignPolicy": map[string]any{
+			"appendixRelaxationAllowed": true,
+			"copyLimits": map[string]any{
+				"headlineChars": 80,
+				"takeawayChars": 80,
+				"maxBullets":    2,
+				"bulletChars":   80,
+				"cjkLineChars":  6,
+			},
+		},
+		"slides": []any{
+			map[string]any{
+				"id":          "appendix_01",
+				"sectionRole": "appendix",
+				"slideType":   "appendix",
+				"appendix":    true,
+				"headline":    "부록",
+				"takeaway":    "상세 근거",
+				"bodyContent": denseBody,
+			},
+			map[string]any{
+				"id":          "slide_01",
+				"sectionRole": "content",
+				"slideType":   "custom",
+				"appendix":    false,
+				"headline":    "본문",
+				"takeaway":    "핵심 근거",
+				"bodyContent": denseBody,
+			},
+		},
+	}
+	findings := editorialSpecFindings(spec, "deck_spec.json")
+	for _, finding := range findings {
+		if strings.Contains(finding.Message, "appendix_01") {
+			t.Fatalf("appendix slide should relax density findings, got %#v", findings)
+		}
+	}
+	if !hasFindingCheck(findings, "slide_01 has 3 body bullets") || !hasFindingCheck(findings, "slide_01 bullet 1 has a CJK run") {
+		t.Fatalf("non-appendix dense slide should still report copy and CJK findings: %#v", findings)
+	}
+}
+
 func TestEditorialHTMLFindingsEnforceStructureTypeAndA11y(t *testing.T) {
 	html := `<!doctype html><html lang="ko"><head><style>
 body { font-family: Arial, sans-serif; text-align: justify; }
