@@ -10,12 +10,15 @@ export type DesktopAppInfo = {
   cliBridge: "not-implemented";
 };
 
+export type DesktopPlatform = NodeJS.Platform;
+
 export type SlidexStatus = {
   ready: false;
   reason: string;
 };
 
 export type SlidexDesktopAPI = {
+  platform: DesktopPlatform;
   getAppInfo: () => Promise<DesktopAppInfo>;
   getSlidexStatus: () => Promise<SlidexStatus>;
 };

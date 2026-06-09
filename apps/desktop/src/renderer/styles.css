@@ -108,10 +108,34 @@ a:focus-visible {
     backdrop-filter: blur(16px);
   }
 
+  .ds-titlebar-traffic-zone {
+    border-right: 1px solid var(--color-border-subtle);
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-app-region: drag;
+    app-region: drag;
+    user-select: none;
+  }
+
   .ds-command-bar {
     border-bottom: 1px solid var(--color-border-subtle);
     background: color-mix(in srgb, var(--color-surface) 90%, transparent);
     backdrop-filter: blur(16px);
+    padding-inline: 1.5rem;
+    -webkit-app-region: drag;
+    app-region: drag;
+    user-select: none;
+  }
+
+  .desktop-root:not([data-platform="darwin"]) .ds-command-bar {
+    padding-right: calc(1.5rem + 138px);
+  }
+
+  .ds-command-bar :where(button, a, input, textarea, select, [role="button"]) {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+    user-select: auto;
   }
 
   .ds-panel {

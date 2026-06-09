@@ -11,6 +11,18 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     minHeight: 680,
     show: false,
     title: "slidex",
+    titleBarStyle: "hidden",
+    ...(process.platform === "darwin"
+      ? {
+          trafficLightPosition: { x: 18, y: 21 }
+        }
+      : {
+          titleBarOverlay: {
+            color: "#ffffff00",
+            symbolColor: "#4b5568",
+            height: 60
+          }
+        }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,

@@ -57,10 +57,33 @@ function classNames(...values: Array<string | false | null | undefined>): string
 }
 
 function DesktopRoot(): ReactElement {
+  const desktopPlatform = window.slidex?.platform ?? "linux";
+
   return (
-    <main className="desktop-root bg-canvas text-ink antialiased" aria-label="slidex Desktop">
-      <div className="grid min-h-screen grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="ds-rail px-4 py-5">
+    <main
+      className="desktop-root bg-canvas text-ink antialiased"
+      data-platform={desktopPlatform}
+      aria-label="slidex Desktop"
+    >
+      <div className="grid min-h-screen grid-cols-[240px_minmax(0,1fr)] grid-rows-[60px_minmax(0,1fr)]">
+        <div className="ds-titlebar-traffic-zone col-start-1 row-start-1" aria-hidden="true" />
+
+        <header className="ds-command-bar col-start-2 row-start-1 flex h-[60px] items-center justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase text-ink-subtle">Workspace</p>
+            <h1 className="text-lg font-semibold leading-6 text-ink">Investor Update Deck</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="ds-btn ds-btn-secondary" type="button">
+              Preview
+            </button>
+            <button className="ds-btn ds-btn-primary" type="button">
+              New deck
+            </button>
+          </div>
+        </header>
+
+        <aside className="ds-rail col-start-1 row-start-2 px-4 py-5">
           <div className="flex h-full flex-col gap-7">
             <div className="flex items-center gap-3 px-1">
               <div className="ds-brand-mark" aria-hidden="true">
@@ -112,22 +135,7 @@ function DesktopRoot(): ReactElement {
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-col">
-          <header className="ds-command-bar flex h-[60px] items-center justify-between px-6">
-            <div>
-              <p className="text-[11px] font-semibold uppercase text-ink-subtle">Workspace</p>
-              <h1 className="text-lg font-semibold leading-6 text-ink">Investor Update Deck</h1>
-            </div>
-            <div className="flex items-center gap-2">
-              <button className="ds-btn ds-btn-secondary" type="button">
-                Preview
-              </button>
-              <button className="ds-btn ds-btn-primary" type="button">
-                New deck
-              </button>
-            </div>
-          </header>
-
+        <section className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col">
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_300px] xl:gap-5 xl:p-5">
             <div className="flex min-w-0 flex-col gap-4 xl:gap-5">
               <section className="ds-panel p-5">
