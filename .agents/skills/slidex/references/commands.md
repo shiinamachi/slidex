@@ -33,6 +33,7 @@ versions at or above that minimum satisfy the runtime gate.
 slidex codex doctor --json
 slidex codex schema refresh --codex-version 0.138.0
 slidex codex app-server probe
+slidex codex app-server plugin-smoke --workspace /tmp/slidex-plugin-smoke --deck-id plugin-smoke
 ```
 
 Goal mirror:

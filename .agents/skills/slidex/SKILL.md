@@ -11,12 +11,13 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 
 1. For new deck creation through the plugin, make sure the PATH binary is current with `mise exec -- go install ./cmd/slidex`, then run `slidex workbench start --deck-id <deck_id>` and open the returned URL in the Codex App in-app browser or with `@Browser`.
 2. Verify `brief.md`, `out/workbench_draft.json`, and `out/workbench_manifest.json` after the user saves the workbench form.
-3. After actual Codex App browser/work-surface inspection, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --url "<workbench.url>" --workbench-visible --saved-input-verified` to record `out/workbench_browser_evidence.json`.
-4. Resolve an existing deck with `slidex inspect --deck decks/<deck_id> --write`.
-5. Run `slidex intake --deck decks/<deck_id>` and stop on exit code 3 when Korean intake questions are produced.
-6. Use `slidex run --deck decks/<deck_id>` for the standard local workflow through delivery summary and package.
-7. For direct HTML edits, run `slidex sync-html-edits --deck decks/<deck_id>` before claiming downstream artifacts are current.
-8. Final success requires current rendered PNGs, `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`, `qa_report.md`, `delivery_summary.md`, and package freshness.
+3. Use `slidex codex app-server plugin-smoke --workspace <tmp-workspace> --deck-id <deck_id>` as a pre-GUI check that App Server can read the installed plugin, discover `slidex-start`, and call `workbench.start/status/stop` through MCP.
+4. After actual Codex App browser/work-surface inspection, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --url "<workbench.url>" --workbench-visible --saved-input-verified` to record `out/workbench_browser_evidence.json`.
+5. Resolve an existing deck with `slidex inspect --deck decks/<deck_id> --write`.
+6. Run `slidex intake --deck decks/<deck_id>` and stop on exit code 3 when Korean intake questions are produced.
+7. Use `slidex run --deck decks/<deck_id>` for the standard local workflow through delivery summary and package.
+8. For direct HTML edits, run `slidex sync-html-edits --deck decks/<deck_id>` before claiming downstream artifacts are current.
+9. Final success requires current rendered PNGs, `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`, `qa_report.md`, `delivery_summary.md`, and package freshness.
 
 ## Rules
 

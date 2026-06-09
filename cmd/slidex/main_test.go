@@ -1045,6 +1045,46 @@ build = ["mcpServer/tool/call"]
 	}
 }
 
+func TestAppServerPluginSmokeHelpers(t *testing.T) {
+	params := appServerWorkbenchToolCallParams("thread-1", "workbench.start", "/tmp/workspace", "demo")
+	if params["server"] != "slidex" || params["tool"] != "workbench.start" || params["threadId"] != "thread-1" {
+		t.Fatalf("unexpected tool params: %#v", params)
+	}
+	args, _ := params["arguments"].(map[string]any)
+	if args["workspace"] != "/tmp/workspace" || args["deckId"] != "demo" {
+		t.Fatalf("unexpected tool arguments: %#v", args)
+	}
+
+	resp := map[string]any{"result": map[string]any{"structuredContent": map[string]any{"status": "running"}}}
+	if got := structuredContentFromMCPToolCall(resp)["status"]; got != "running" {
+		t.Fatalf("structured content status = %#v", got)
+	}
+	summary := summarizeJSONForEvidence(map[string]any{"token": "secret-value", "safe": "ok"})
+	raw, _ := json.Marshal(summary)
+	if strings.Contains(string(raw), "secret-value") {
+		t.Fatalf("summary leaked secret: %s", raw)
+	}
+}
+
+func TestRepoConfigAllowsOnlyPluginSmokeMCPToolCall(t *testing.T) {
+	root := repoRootForTest(t)
+	path := filepath.Join(root, "slidex.toml")
+	allowed, err := dangerousAppServerMethodAllowedAtPath(path, "mcpServer/tool/call", "plugin_smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !allowed {
+		t.Fatal("plugin_smoke should allow mcpServer/tool/call")
+	}
+	allowed, err = dangerousAppServerMethodAllowedAtPath(path, "process/spawn", "plugin_smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed {
+		t.Fatal("plugin_smoke should not allow process/spawn")
+	}
+}
+
 func TestGoalStatusEnumIsReadFromGeneratedSchema(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

@@ -181,6 +181,14 @@ plugin을 검증하려면 먼저 현재 소스를 설치합니다.
 mise exec -- go install ./cmd/slidex
 ```
 
+Codex App GUI 검증 전 단계로 App Server가 설치된 plugin, `slidex-start` skill,
+thread-scoped MCP server, `workbench.start/status/stop` tool call을 볼 수 있는지 smoke할
+수 있습니다. 이 명령은 Codex App browser 표시 증거를 대체하지 않습니다.
+
+```bash
+slidex codex app-server plugin-smoke --workspace /tmp/slidex-plugin-smoke --deck-id plugin-smoke
+```
+
 Codex 0.138.0 공개 문서와 생성 App Server schema에는 plugin-owned arbitrary Canvas
 mount 또는 직접 browser-open request API가 확인되지 않았습니다. 따라서 slidex는
 proprietary Canvas API를 주장하지 않고, 공식 in-app browser 경로인 URL 클릭, 수동

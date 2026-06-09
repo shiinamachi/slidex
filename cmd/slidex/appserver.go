@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 )
+
+const appServerPluginSmokeName = "app_server_plugin_smoke.json"
 
 type appServerClient struct {
 	cmd    *exec.Cmd
@@ -50,6 +53,32 @@ type appServerTurnResult struct {
 	AuditCorrection  any              `json:"auditCorrection,omitempty"`
 	Events           []map[string]any `json:"events"`
 	EventLog         string           `json:"eventLog,omitempty"`
+}
+
+type appServerPluginSmokeResult struct {
+	SchemaVersion        string         `json:"schemaVersion"`
+	ToolName             string         `json:"toolName"`
+	ToolVersion          string         `json:"toolVersion"`
+	Status               string         `json:"status"`
+	GeneratedAt          string         `json:"generatedAt"`
+	CodexVersion         string         `json:"codexVersion"`
+	Workspace            string         `json:"workspace"`
+	DeckID               string         `json:"deckId"`
+	ThreadID             string         `json:"threadId"`
+	MarketplacePath      string         `json:"marketplacePath"`
+	PluginReadOK         bool           `json:"pluginReadOk"`
+	StartSkillFound      bool           `json:"startSkillFound"`
+	MCPServerFound       bool           `json:"mcpServerFound"`
+	WorkbenchToolsFound  []string       `json:"workbenchToolsFound"`
+	WorkbenchURL         string         `json:"workbenchUrl,omitempty"`
+	ServerBind           string         `json:"serverBind,omitempty"`
+	StartStatus          string         `json:"startStatus,omitempty"`
+	StatusStatus         string         `json:"statusStatus,omitempty"`
+	StopStatus           string         `json:"stopStatus,omitempty"`
+	EvidencePath         string         `json:"evidencePath,omitempty"`
+	BrowserOpenStrategy  string         `json:"browserOpenStrategy,omitempty"`
+	ProprietaryCanvasAPI string         `json:"proprietaryCanvasApi,omitempty"`
+	Checks               map[string]any `json:"checks"`
 }
 
 func newAppServerClient() (*appServerClient, error) {
@@ -560,6 +589,221 @@ func appServerThreadFeatureProbe(threadID string) (map[string]any, error) {
 	}
 	snapshot["experimentalFeature_thread_scoped"] = resp["result"]
 	return snapshot, nil
+}
+
+func appServerWorkbenchPluginSmoke(workspace, deckID string) (appServerPluginSmokeResult, error) {
+	workspace = workspaceRoot(workspace)
+	if err := validateDeckID(deckID); err != nil {
+		return appServerPluginSmokeResult{}, err
+	}
+	if err := ensureSmokeWorkspaceTemplate(workspace); err != nil {
+		return appServerPluginSmokeResult{}, err
+	}
+	result := appServerPluginSmokeResult{
+		SchemaVersion:   "slidex.appServerPluginSmoke.v1",
+		ToolName:        toolName,
+		ToolVersion:     toolVersion,
+		Status:          "fail",
+		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
+		CodexVersion:    installedCodexVersion(),
+		Workspace:       filepath.ToSlash(workspace),
+		DeckID:          deckID,
+		MarketplacePath: filepath.ToSlash(mustAbs(filepath.Join(".agents", "plugins", "marketplace.json"))),
+		Checks:          map[string]any{},
+	}
+	client, err := newAppServerClient()
+	if err != nil {
+		return result, err
+	}
+	defer client.close()
+	if _, _, err := client.request("initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "slidex", "title": "slidex CLI", "version": toolVersion},
+		"capabilities": map[string]any{"experimentalApi": true},
+	}, 10*time.Second); err != nil {
+		return result, err
+	}
+	if err := client.notify("initialized", nil); err != nil {
+		return result, err
+	}
+	pluginResp, _, err := client.request("plugin/read", map[string]any{
+		"pluginName":      "slidex",
+		"marketplacePath": mustAbs(filepath.Join(".agents", "plugins", "marketplace.json")),
+	}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	result.PluginReadOK = pluginResp["result"] != nil
+	result.Checks["pluginRead"] = summarizeJSONForEvidence(pluginResp["result"])
+
+	skillsResp, _, err := client.request("skills/list", map[string]any{"cwds": []string{mustAbs(".")}, "forceReload": true}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	result.StartSkillFound = jsonContainsString(skillsResp["result"], "slidex-start")
+	result.Checks["skillsList"] = map[string]any{"containsSlidexStart": result.StartSkillFound}
+
+	threadResp, _, err := client.request("thread/start", map[string]any{
+		"cwd":                   mustAbs("."),
+		"approvalPolicy":        "never",
+		"sandbox":               "read-only",
+		"serviceName":           "slidex-plugin-smoke",
+		"model":                 defaultCodexModel(),
+		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), workspace}),
+	}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	result.ThreadID = extractThreadID(threadResp["result"])
+	if result.ThreadID == "" {
+		return result, errors.New("app-server thread/start did not return a thread id")
+	}
+
+	mcpResp, _, err := client.request("mcpServerStatus/list", map[string]any{"threadId": result.ThreadID, "detail": "toolsAndAuthOnly"}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	result.MCPServerFound = jsonContainsString(mcpResp["result"], "slidex")
+	for _, tool := range []string{"workbench.start", "workbench.status", "workbench.stop"} {
+		if jsonContainsString(mcpResp["result"], tool) {
+			result.WorkbenchToolsFound = append(result.WorkbenchToolsFound, tool)
+		}
+	}
+	result.Checks["mcpServerStatus"] = map[string]any{"containsSlidex": result.MCPServerFound, "workbenchToolsFound": result.WorkbenchToolsFound}
+
+	previousStage := client.stage
+	client.stage = "plugin_smoke"
+	defer func() { client.stage = previousStage }()
+	startResp, _, err := client.request("mcpServer/tool/call", appServerWorkbenchToolCallParams(result.ThreadID, "workbench.start", workspace, deckID), 45*time.Second)
+	if err != nil {
+		return result, err
+	}
+	startContent := structuredContentFromMCPToolCall(startResp)
+	result.StartStatus, _ = startContent["status"].(string)
+	if workbench, _ := startContent["workbench"].(map[string]any); workbench != nil {
+		if result.StartStatus == "" {
+			result.StartStatus, _ = workbench["status"].(string)
+		}
+		result.WorkbenchURL, _ = workbench["url"].(string)
+		result.ServerBind, _ = workbench["serverBind"].(string)
+		result.BrowserOpenStrategy, _ = workbench["browserOpenStrategy"].(string)
+	}
+	result.ProprietaryCanvasAPI, _ = startContent["proprietaryCanvasAPI"].(string)
+	result.Checks["workbenchStart"] = summarizeJSONForEvidence(startContent)
+
+	statusResp, _, err := client.request("mcpServer/tool/call", appServerWorkbenchToolCallParams(result.ThreadID, "workbench.status", workspace, deckID), 20*time.Second)
+	if err != nil {
+		_, _ = appServerWorkbenchStop(client, result.ThreadID, workspace, deckID)
+		return result, err
+	}
+	statusContent := structuredContentFromMCPToolCall(statusResp)
+	if statusWorkbench, _ := statusContent["workbench"].(map[string]any); statusWorkbench != nil {
+		result.StatusStatus, _ = statusWorkbench["status"].(string)
+	} else {
+		result.StatusStatus, _ = statusContent["status"].(string)
+	}
+	result.Checks["workbenchStatus"] = summarizeJSONForEvidence(statusContent)
+
+	stopContent, stopErr := appServerWorkbenchStop(client, result.ThreadID, workspace, deckID)
+	if stopErr != nil {
+		return result, stopErr
+	}
+	if stopContent != nil {
+		result.StopStatus, _ = stopContent["status"].(string)
+		result.Checks["workbenchStop"] = summarizeJSONForEvidence(stopContent)
+	}
+	if result.PluginReadOK && result.StartSkillFound && result.MCPServerFound &&
+		containsAllStrings(result.WorkbenchToolsFound, []string{"workbench.start", "workbench.status", "workbench.stop"}) &&
+		result.StartStatus == "running" && result.StatusStatus == "running" && result.StopStatus == "stopped" &&
+		result.ServerBind == "127.0.0.1" && result.ProprietaryCanvasAPI == "not_used" {
+		result.Status = "pass"
+	}
+	deckAbs := filepath.Join(workspace, "decks", deckID)
+	evidencePath := filepath.Join(deckAbs, "out", appServerPluginSmokeName)
+	result.EvidencePath = filepath.ToSlash(evidencePath)
+	if err := secureWriteJSON(evidencePath, result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func ensureSmokeWorkspaceTemplate(workspace string) error {
+	template := filepath.Join(workspace, "decks", "_template")
+	if _, err := os.Stat(template); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	source := filepath.Join(mustAbs("."), "decks", "_template")
+	if _, err := os.Stat(source); err != nil {
+		return fmt.Errorf("smoke workspace template missing and source template is unavailable: %s: %w", filepath.ToSlash(source), err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "decks"), 0o755); err != nil {
+		return err
+	}
+	return copyDir(source, template)
+}
+
+func appServerWorkbenchToolCallParams(threadID, tool, workspace, deckID string) map[string]any {
+	return map[string]any{
+		"threadId": threadID,
+		"server":   "slidex",
+		"tool":     tool,
+		"arguments": map[string]any{
+			"workspace": workspace,
+			"deckId":    deckID,
+		},
+	}
+}
+
+func appServerWorkbenchStop(client *appServerClient, threadID, workspace, deckID string) (map[string]any, error) {
+	stopResp, _, err := client.request("mcpServer/tool/call", appServerWorkbenchToolCallParams(threadID, "workbench.stop", workspace, deckID), 20*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return structuredContentFromMCPToolCall(stopResp), nil
+}
+
+func structuredContentFromMCPToolCall(resp map[string]any) map[string]any {
+	result, _ := resp["result"].(map[string]any)
+	content, _ := result["structuredContent"].(map[string]any)
+	if content == nil {
+		return map[string]any{}
+	}
+	return content
+}
+
+func jsonContainsString(v any, needle string) bool {
+	raw, err := json.Marshal(v)
+	return err == nil && strings.Contains(string(raw), needle)
+}
+
+func containsAllStrings(got, want []string) bool {
+	set := map[string]bool{}
+	for _, item := range got {
+		set[item] = true
+	}
+	for _, item := range want {
+		if !set[item] {
+			return false
+		}
+	}
+	return true
+}
+
+func summarizeJSONForEvidence(v any) any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	redacted := []byte(redactSecrets(string(raw)))
+	if len(redacted) > 32*1024 {
+		return map[string]any{"sha256": sha256Bytes(raw), "bytes": len(raw), "redacted": true}
+	}
+	var out any
+	if err := json.Unmarshal(redacted, &out); err != nil {
+		return map[string]any{"sha256": sha256Bytes(raw), "bytes": len(raw), "redacted": true}
+	}
+	return out
 }
 
 func extractThreadID(v any) string {

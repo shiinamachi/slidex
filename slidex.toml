@@ -19,6 +19,7 @@ websocket_auth_required = true
 # Stage-specific exact App Server methods may be added here when a workflow
 # explicitly requires a host-executing API, for example:
 # build = ["mcpServer/tool/call"]
+plugin_smoke = ["mcpServer/tool/call"]
 
 [logs]
 secure_file_mode = "0600"
