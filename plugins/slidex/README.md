@@ -54,16 +54,18 @@ current repository binary before local plugin invocation tests:
 mise exec -- go install ./cmd/slidex
 ```
 
-Before a full Codex App GUI smoke, verify the App Server/plugin/MCP layer:
+Before a full Codex App GUI smoke, run the headless pre-GUI App Server skill
+smoke:
 
 ```bash
-slidex codex app-server plugin-smoke --workspace /tmp/slidex-plugin-smoke --deck-id plugin-smoke
+slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke
 ```
 
-This proves App Server can read the installed `slidex` plugin, discover
-`slidex-start`, and call `workbench.start/status/stop` through the plugin MCP
-server. It does not prove that the Codex App browser displayed the workbench;
-that still requires `workbench_browser_evidence.json` from actual inspection.
+This starts an App Server turn with the installed `slidex:slidex-start` skill
+input, verifies that the loopback workbench starts, and writes smoke evidence
+JSON. It does not prove that the Codex App GUI/browser displayed the workbench;
+that still requires `slidex workbench evidence` followed by
+`slidex workbench verify-evidence` after actual inspection.
 
 ## Codex 0.138.0 Evidence
 

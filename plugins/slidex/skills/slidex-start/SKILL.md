@@ -27,7 +27,7 @@ Do not run the full render, QA, or package workflow during startup unless the us
 - Keep writes under `decks/<deck_id>/`.
 - Do not expose full workbench write tokens in chat-visible output.
 - If local plugin invocation does not expose `workbench.start`, install the current repository binary with `mise exec -- go install ./cmd/slidex` because the plugin MCP config resolves `slidex` through PATH.
-- Use `slidex codex app-server plugin-smoke --workspace <tmp-workspace> --deck-id <deck_id>` only as an App Server/plugin/MCP layer check; it does not replace actual Codex App browser inspection.
+- Use `slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>` only as a headless pre-GUI App Server check that sends installed `slidex:slidex-start` skill input, verifies the loopback workbench starts, and writes smoke evidence JSON; it does not replace actual Codex App GUI/browser inspection.
 - Treat the local workbench as the Canvas-style surface for this plugin; do not claim a proprietary Canvas lifecycle API exists.
 - Do not claim the Codex App browser/work-surface path passed unless `out/workbench_browser_evidence.json` was recorded after actual inspection.
 - Treat a failing `slidex workbench verify-evidence` result as stale browser evidence that must be re-inspected or re-recorded.
