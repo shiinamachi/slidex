@@ -1,6 +1,6 @@
 {
   "name": "slidex",
-  "version": "0.1.0+codex.20260609105453",
+  "version": "0.1.0+codex.20260609112229",
   "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
   "author": {
     "name": "slidex maintainers"
