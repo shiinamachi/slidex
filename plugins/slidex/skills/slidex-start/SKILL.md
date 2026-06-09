@@ -1,0 +1,27 @@
+---
+name: slidex-start
+description: Start a slidex deck creation session from Codex by bootstrapping decks/<deck_id>, starting the loopback workbench, and opening or instructing the Codex App browser to open the returned local URL.
+user-invocable: true
+---
+
+# slidex-start
+
+Use this as the default slidex plugin entry point.
+
+## Workflow
+
+1. Resolve the active workspace root from the current Codex local/worktree thread.
+2. Pick or ask for a `deck_id`; it must be a simple deck id, not a path.
+3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
+4. Confirm the JSON response reports a loopback `workbench.url`, `serverBind: 127.0.0.1`, and `tokenRedacted: true`.
+5. Open the returned URL in the Codex App in-app browser by clicking it or asking `@Browser` to navigate to it. Public Codex 0.138.0 docs do not expose a plugin-owned arbitrary Canvas mount API.
+6. Have the user enter deck title, audience, decision goal, source notes, and output expectations in the workbench.
+7. Verify `decks/<deck_id>/brief.md` and `decks/<deck_id>/out/workbench_manifest.json` are written.
+
+Do not run the full render, QA, or package workflow during startup unless the user asks for it.
+
+## Rules
+
+- Keep writes under `decks/<deck_id>/`.
+- Do not expose full workbench write tokens in chat-visible output.
+- Treat the local workbench as the Canvas-style surface for this plugin; do not claim a proprietary Canvas lifecycle API exists.

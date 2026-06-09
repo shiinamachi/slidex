@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	requiredCodexVersion = "0.132.0"
+	requiredCodexVersion = "0.138.0"
 	stateSchemaVersion   = "slidex.state.v1"
 	threadsSchemaVersion = "slidex.codexThreads.v1"
 )
@@ -203,18 +203,11 @@ func runInit(args []string) error {
 	if fs.NArg() != 1 {
 		return exitCodeError(2, "usage: slidex init <deck_id> [--from-template decks/_template]")
 	}
-	deckID := fs.Arg(0)
-	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(deckID) {
-		return exitCodeError(2, "deck_id must contain only letters, numbers, underscore, dash, and dot")
-	}
-	dst := filepath.Join("decks", deckID)
-	if _, err := os.Stat(dst); err == nil {
-		return fmt.Errorf("deck already exists: %s", dst)
-	}
-	if err := copyDir(*fromTemplate, dst); err != nil {
+	result, err := bootstrapDeckWorkspace(".", fs.Arg(0), *fromTemplate, false)
+	if err != nil {
 		return err
 	}
-	return printJSON(map[string]any{"toolName": toolName, "version": toolVersion, "deckDir": dst, "status": "created"})
+	return printJSON(map[string]any{"toolName": toolName, "version": toolVersion, "deckDir": result.DeckDir, "status": result.Status})
 }
 
 func runDoctor(args []string) error {
@@ -267,6 +260,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		findings = append(findings, fail("doctor.forbidden_skill_path", "forbidden companion skill path exists", ".codex/skills/slidex/SKILL.md"))
 	}
 	chrome := ""
+	pluginList := ""
 	if checkRender {
 		if path, err := resolveChrome(""); err != nil {
 			findings = append(findings, fail("doctor.chrome", err.Error(), "PATH"))
@@ -281,8 +275,9 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	codexDoctor := ""
 	featureList := ""
 	mcpList := ""
-	pluginList := ""
-	protocol := map[string]any{}
+	protocol := localProtocolBundleStatus()
+	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
+	findings = append(findings, doctorProtocolBundleFindings(protocol)...)
 	if checkCodex {
 		codexVersion = installedCodexVersion()
 		if !codexVersionAtLeast(codexVersion, requiredCodexVersion) {
@@ -292,11 +287,14 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		featureList = commandOutput(8*time.Second, "codex", "features", "list")
 		mcpList = commandOutput(8*time.Second, "codex", "mcp", "list")
 		pluginList = commandOutput(8*time.Second, "codex", "plugin", "list")
-		protocol = probeProtocolSchema()
-		if ok, _ := protocol["ok"].(bool); !ok {
-			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.protocol_schema", Message: fmt.Sprint(protocol["error"]), Path: "codex app-server generate-json-schema"})
+		probe := probeProtocolSchema()
+		for key, value := range probe {
+			protocol[key] = value
 		}
-		findings = append(findings, codexDoctorFindings(protocol, mcpList, pluginList)...)
+		if ok, _ := probe["ok"].(bool); !ok {
+			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.protocol_schema", Message: fmt.Sprint(probe["error"]), Path: "codex app-server generate-json-schema"})
+		}
+		findings = append(findings, codexDoctorFindings(probe, mcpList)...)
 	}
 	if deck != "" {
 		if _, err := inspectDeck(deck); err != nil {
@@ -314,6 +312,8 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"minimumRequiredCodex":        requiredCodexVersion,
 		"chromeVersion":               chrome,
 		"protocolSchema":              protocol,
+		"plugin":                      pluginDoctorSnapshot(pluginList),
+		"workbench":                   workbenchDoctorSnapshot(),
 		"dangerousAppServerApiPolicy": dangerousAppServerPolicySnapshot(),
 		"codexDoctorJson":             json.RawMessage(nullOrRaw(codexDoctor)),
 		"features":                    featureList,
@@ -324,11 +324,10 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	}
 }
 
-func codexDoctorFindings(protocol map[string]any, mcpList, pluginList string) []qaFinding {
+func codexDoctorFindings(protocol map[string]any, mcpList string) []qaFinding {
 	var findings []qaFinding
 	findings = append(findings, doctorGoalMethodFindings(protocol)...)
 	findings = append(findings, doctorRequiredMCPFindings(mcpList)...)
-	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
 	return findings
 }
 
@@ -386,9 +385,128 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 	}
 	findings = append(findings, validatePluginJSONManifest(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"))...)
 	findings = append(findings, validatePluginVersionLock(filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"))...)
+	findings = append(findings, validatePluginMCPConfig(filepath.Join("plugins", "slidex", ".mcp.json"))...)
 	findings = append(findings, validateHookManifest(filepath.Join("plugins", "slidex", "hooks", "manifest.json"))...)
 	if commandOutputLooksFailed(pluginList) {
 		findings = append(findings, fail("doctor.plugin_list", "codex plugin list failed", "codex plugin list"))
+	}
+	return findings
+}
+
+func pluginDoctorSnapshot(pluginList string) map[string]any {
+	mcpConfigured := len(validatePluginMCPConfig(filepath.Join("plugins", "slidex", ".mcp.json"))) == 0
+	defaultPromptPresent := false
+	if raw, err := os.ReadFile(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")); err == nil {
+		var manifest map[string]any
+		if json.Unmarshal(raw, &manifest) == nil {
+			iface, _ := manifest["interface"].(map[string]any)
+			defaultPromptPresent = strings.TrimSpace(fmt.Sprint(iface["defaultPrompt"])) != ""
+		}
+	}
+	installed := false
+	enabled := false
+	for _, line := range strings.Split(pluginList, "\n") {
+		if !strings.Contains(line, "slidex@") && !strings.HasPrefix(strings.TrimSpace(line), "slidex ") {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "not installed") {
+			continue
+		}
+		if strings.Contains(lower, "installed") {
+			installed = true
+			if !strings.Contains(lower, "disabled") {
+				enabled = true
+			}
+		}
+	}
+	return map[string]any{
+		"name":                 "slidex",
+		"installed":            installed,
+		"enabled":              enabled,
+		"mcpConfigured":        mcpConfigured,
+		"defaultPromptPresent": defaultPromptPresent,
+	}
+}
+
+func workbenchDoctorSnapshot() map[string]any {
+	return map[string]any{
+		"mode":    "loopback",
+		"status":  "available",
+		"command": "slidex workbench start --deck-id <deck_id>",
+	}
+}
+
+func validatePluginMCPConfig(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return []qaFinding{fail("doctor.plugin_mcp", err.Error(), path)}
+	}
+	servers, _ := config["mcpServers"].(map[string]any)
+	if len(servers) == 0 {
+		servers, _ = config["mcp_servers"].(map[string]any)
+	}
+	if len(servers) == 0 {
+		return []qaFinding{fail("doctor.plugin_mcp", "plugin MCP config must define a slidex server", path)}
+	}
+	server, _ := servers["slidex"].(map[string]any)
+	if len(server) == 0 {
+		return []qaFinding{fail("doctor.plugin_mcp", "plugin MCP config must define mcpServers.slidex", path)}
+	}
+	if strings.TrimSpace(fmt.Sprint(server["command"])) == "" {
+		return []qaFinding{fail("doctor.plugin_mcp", "slidex MCP server command is required", path)}
+	}
+	args, _ := server["args"].([]any)
+	if len(args) < 2 || fmt.Sprint(args[0]) != "mcp-server" || fmt.Sprint(args[1]) != "--stdio" {
+		return []qaFinding{fail("doctor.plugin_mcp", "slidex MCP server args must run mcp-server --stdio", path)}
+	}
+	return nil
+}
+
+func localProtocolBundleStatus() map[string]any {
+	bundle := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
+	manifestPath := filepath.Join(bundle, "protocol_manifest.json")
+	constantsPath := filepath.Join(bundle, "method_constants.go")
+	status := map[string]any{
+		"version": requiredCodexVersion,
+		"path":    filepath.ToSlash(bundle),
+		"status":  "ok",
+	}
+	var manifest map[string]any
+	if raw, err := os.ReadFile(manifestPath); err != nil {
+		status["status"] = "missing"
+		status["error"] = err.Error()
+	} else if err := json.Unmarshal(raw, &manifest); err != nil {
+		status["status"] = "fail"
+		status["error"] = err.Error()
+	} else {
+		status["manifestVersion"] = fmt.Sprint(manifest["codexVersion"])
+	}
+	constants := readFileOrEmpty(constantsPath)
+	re := regexp.MustCompile(`RequiredCodexCLIVersion\s*=\s*"([^"]+)"`)
+	if m := re.FindStringSubmatch(constants); len(m) > 1 {
+		status["constantsVersion"] = m[1]
+	} else if constants == "" {
+		status["constantsVersion"] = ""
+	}
+	return status
+}
+
+func doctorProtocolBundleFindings(protocol map[string]any) []qaFinding {
+	var findings []qaFinding
+	path := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
+	if protocol["status"] != "ok" {
+		findings = append(findings, fail("doctor.protocol_bundle", "active Codex protocol bundle is not available", path))
+	}
+	if got := fmt.Sprint(protocol["manifestVersion"]); got != requiredCodexVersion {
+		findings = append(findings, fail("doctor.protocol_bundle", "protocol manifest codexVersion must be "+requiredCodexVersion+", got "+got, filepath.Join(path, "protocol_manifest.json")))
+	}
+	if got := fmt.Sprint(protocol["constantsVersion"]); got != requiredCodexVersion {
+		findings = append(findings, fail("doctor.protocol_bundle", "method constants RequiredCodexCLIVersion must be "+requiredCodexVersion+", got "+got, filepath.Join(path, "method_constants.go")))
 	}
 	return findings
 }
@@ -1412,7 +1530,7 @@ func runCodex(args []string) error {
 
 func runCodexSchema(args []string) error {
 	if len(args) == 0 || args[0] != "refresh" {
-		return exitCodeError(2, "usage: slidex codex schema refresh [--codex-version 0.132.0]")
+		return exitCodeError(2, "usage: slidex codex schema refresh [--codex-version 0.138.0]")
 	}
 	fs := flag.NewFlagSet("codex schema refresh", flag.ContinueOnError)
 	version := fs.String("codex-version", requiredCodexVersion, "Codex CLI version")
@@ -3036,6 +3154,11 @@ func handleMCPRequest(req map[string]any) (any, error) {
 		return map[string]any{"protocolVersion": "2024-11-05", "serverInfo": map[string]any{"name": "slidex", "version": toolVersion}, "capabilities": map[string]any{"tools": map[string]any{}}}, nil
 	case "tools/list":
 		return map[string]any{"tools": []map[string]any{
+			mcpTool("deck.bootstrap", "Create a deck workspace under decks/<deck_id>"),
+			mcpTool("deck.inspect", "Inspect a deck workspace and expected files"),
+			mcpTool("workbench.start", "Start or reuse the loopback slidex workbench"),
+			mcpTool("workbench.status", "Report the loopback slidex workbench status"),
+			mcpTool("workbench.stop", "Stop the loopback slidex workbench started by slidex"),
 			mcpTool("inspect", "Inventory deck inputs and outputs"),
 			mcpTool("render", "Render deck HTML to PNG/PDF/manifest/montage"),
 			mcpTool("qa", "Run deterministic QA"),
@@ -3056,16 +3179,36 @@ func mcpTool(name, description string) map[string]any {
 	return map[string]any{
 		"name":        name,
 		"description": description,
-		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"deck": map[string]any{"type": "string"}, "includeLogs": map[string]any{"type": "boolean"}}},
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"workspace":          map[string]any{"type": "string"},
+			"deck":               map[string]any{"type": "string"},
+			"deckId":             map[string]any{"type": "string"},
+			"title":              map[string]any{"type": "string"},
+			"audience":           map[string]any{"type": "string"},
+			"decisionGoal":       map[string]any{"type": "string"},
+			"sourceNotes":        map[string]any{"type": "string"},
+			"outputExpectations": map[string]any{"type": "string"},
+			"includeLogs":        map[string]any{"type": "boolean"},
+		}},
 	}
 }
 
 func callMCPTool(name string, args map[string]any) (any, error) {
 	deck, _ := args["deck"].(string)
-	if deck == "" && name != "state/read" {
+	if deck == "" && !in(name, []string{"state/read", "deck.bootstrap", "deck.inspect", "workbench.start", "workbench.status", "workbench.stop"}) {
 		return nil, errors.New("deck argument is required")
 	}
 	switch name {
+	case "deck.bootstrap":
+		return callMCPDeckBootstrap(args)
+	case "deck.inspect":
+		return callMCPDeckInspect(args)
+	case "workbench.start":
+		return callMCPWorkbenchStart(args)
+	case "workbench.status":
+		return callMCPWorkbenchStatus(args)
+	case "workbench.stop":
+		return callMCPWorkbenchStop(args)
 	case "inspect":
 		return inspectDeck(deck)
 	case "render":
@@ -4695,9 +4838,9 @@ func writeProtocolManifest(bundleDir string) (string, error) {
 }
 
 func writeMethodConstants(bundleDir string) error {
-	content := `package protocol
+	content := fmt.Sprintf(`package protocol
 
-const RequiredCodexCLIVersion = "0.132.0"
+const RequiredCodexCLIVersion = %q
 
 const (
 	MethodInitialize = "initialize"
@@ -4716,7 +4859,7 @@ const (
 	MethodThreadGoalClear = "thread/goal/clear"
 	MethodReviewStart = "review/start"
 )
-`
+`, requiredCodexVersion)
 	if err := os.WriteFile(filepath.Join(bundleDir, "method_constants.go"), []byte(content), 0o644); err != nil {
 		return err
 	}

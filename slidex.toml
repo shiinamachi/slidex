@@ -3,8 +3,8 @@ default_deck = ""
 
 [codex]
 mode = "app-server"
-required_version = "0.132.0"
-protocol_bundle = "codex-cli-0.132.0"
+required_version = "0.138.0"
+protocol_bundle = "codex-cli-0.138.0"
 allow_protocol_mismatch = false
 enable_goals = true
 enable_subagents = true

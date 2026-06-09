@@ -1,7 +1,10 @@
-# slidex Desktop Design System
+# slidex Desktop Tombstone Design Notes
 
-이 문서는 `apps/desktop` 전용 디자인 기준이다. 덱 작업공간의 `DESIGN.md`와
-분리하며, Electron desktop 앱 UI를 수정하거나 새 화면을 만들 때 이 문서를 우선한다.
+이 문서는 과거 Electron prototype의 디자인 기록이다. `apps/desktop`은 더 이상 slidex의
+canonical UX나 future product path가 아니다. 새 화면과 interaction은 Codex Plugin
+workbench와 Go CLI 쪽에 구현한다.
+
+아래 내용은 migration reference이며, 새 기능 구현 지침으로 사용하지 않는다.
 
 ## Reference Basis
 

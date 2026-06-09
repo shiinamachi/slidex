@@ -41,7 +41,7 @@ artifact is a deck-local `out/final_deck.pdf`.
 - `fixtures/minimal_deck/`: regression fixture used by Go tests.
 - `plugins/slidex/` and `.agents/skills/slidex/`: companion plugin, skill, hook,
   and local agent guidance package checked by `slidex doctor`.
-- `internal/codex/protocol/codex-cli-0.132.0/`: vendored Codex protocol bundle.
+- `internal/codex/protocol/codex-cli-0.138.0/`: vendored Codex protocol bundle.
 - `apps/desktop/`: Electron boilerplate for a future GUI wrapper around the
   CLI. It is not the canonical workflow surface yet.
 

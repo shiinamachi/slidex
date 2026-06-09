@@ -1,19 +1,27 @@
 {
   "name": "slidex",
   "version": "0.1.0",
-  "description": "Local companion plugin for slidex HTML-first document workflows.",
+  "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
   "author": {
     "name": "slidex maintainers"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Slidex",
-    "shortDescription": "Run slidex deck workflows.",
-    "longDescription": "Slidex provides Codex with discoverable helpers for local HTML-first deck intake, rendering, QA, packaging, and protocol diagnostics.",
+    "shortDescription": "Create slidex decks and open the local workbench.",
+    "longDescription": "Slidex starts a loopback deck-creation workbench from Codex, bootstraps deck-local workspaces, and keeps the CLI as the source of truth for later HTML/PDF render, QA, and package stages.",
     "developerName": "slidex maintainers",
     "category": "Productivity",
-    "capabilities": [],
-    "defaultPrompt": "Use slidex run --deck decks/<deck_id> and verify render, QA, delivery summary, and package gates."
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Start a new slidex deck in this workspace and open the slidex workbench.",
+      "Create a slidex deck called <deck_id> and save the initial brief from the workbench.",
+      "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
+    ]
   },
   "mcpServers": "./.mcp.json"
 }

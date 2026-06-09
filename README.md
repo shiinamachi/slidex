@@ -117,6 +117,8 @@ slidex package --deck decks/customer-retention
 
 제공 명령:
 
+- `workbench`: Codex Plugin에서 쓰는 deck creation workbench를 `127.0.0.1` loopback
+  서버로 시작, 상태 확인, 중지합니다.
 - `run`: 표준 workflow를 package gate까지 실행합니다.
 - `doctor`: Go, Chrome, Codex CLI, protocol schema, skill/plugin 경로를 점검합니다.
 - `intake`, `strategy`, `spec`, `build`, `finalize`: 표준 stage 산출물을 생성합니다.
@@ -129,7 +131,7 @@ slidex package --deck decks/customer-retention
 - `sync-html-edits`: 사용자가 직접 수정한 HTML을 baseline과 비교하고 spec/notes/QA
   stale 상태를 동기화합니다.
 - `package`: 최종 산출물 존재와 manifest freshness를 확인합니다.
-- `codex`: Codex CLI 0.132.0 protocol/schema/doctor/review 보조 명령입니다.
+- `codex`: Codex CLI 0.138.0 protocol/schema/doctor/review 보조 명령입니다.
 - `goal`: App Server goal mirror 또는 local goal state를 관리합니다.
 - `migrate`, `clean`, `mcp-server`: migration, log retention, MCP stdio surface를 제공합니다.
 
@@ -139,29 +141,38 @@ slidex package --deck decks/customer-retention
 목표 상태를 deck의 `out/slidex_state.json`과 가능하면 App Server `thread/goal/*`
 API에 동기화하는 로컬 CLI wrapper입니다.
 
-## Desktop GUI Boilerplate
+## Codex Plugin Workbench
 
-`apps/desktop/`에는 현재 CLI workflow를 GUI로 감싸기 위한 Electron 보일러플레이트가
-있습니다. 이 단계에서는 실제 `slidex` CLI 실행을 연결하지 않고, Electron main,
-preload IPC 경계, Vite + React + TanStack Router renderer, TypeScript build, electron-builder
-packaging 설정만 준비합니다.
+새 deck creation UX의 front door는 `plugins/slidex` Codex Plugin입니다. 사용자가
+Codex App local/worktree thread에서 `@slidex` 또는 `slidex-start`를 호출하면
+plugin skill/MCP가 다음 좁은 startup flow를 수행합니다.
 
 ```bash
-cd apps/desktop
-mise exec -- pnpm install
-mise exec -- pnpm run dev
-mise exec -- pnpm run build
+slidex workbench start --deck-id customer-retention
 ```
 
-CLI 연결을 구현할 때는 `src/main/`에서 `slidex` 바이너리를 child process로 실행하고,
-`src/shared/api.ts`의 contract를 확장합니다.
+이 명령은 `decks/customer-retention/`을 만들거나 선택하고, `127.0.0.1`에만 bind되는
+local workbench 서버를 background로 시작한 뒤 Codex App in-app browser에서 열 수 있는
+loopback URL을 반환합니다. Workbench 저장은 `brief.md`와
+`out/workbench_manifest.json`에만 기록됩니다.
+
+Codex 0.138.0 공개 문서와 생성 App Server schema에는 plugin-owned arbitrary Canvas
+mount 또는 직접 browser-open request API가 확인되지 않았습니다. 따라서 slidex는
+proprietary Canvas API를 주장하지 않고, 공식 in-app browser 경로인 URL 클릭, 수동
+navigation, 또는 Browser plugin navigation을 사용합니다.
+
+## Desktop Tombstone
+
+`apps/desktop/`은 과거 Electron prototype입니다. canonical UX 또는 future product path가
+아니며, 새 기능은 Codex Plugin workbench와 Go CLI에 구현합니다. 이 디렉터리는 migration
+reference로만 남겨 두고 packaging/shipping 대상에서 제외합니다.
 
 ## 런타임과 버전 고정
 
 런타임 관리는 mise를 사용합니다. 이 저장소의 Go 버전은 `.mise.toml`과
-`go.mod`의 `go` 지시문에서 모두 `1.26.3`으로 exact pin하고, Electron
-보일러플레이트용 Node는 `.mise.toml`에서 `24.16.0`으로, pnpm은 `11.5.2`로
-exact pin합니다.
+`go.mod`의 `go` 지시문에서 모두 `1.26.3`으로 exact pin하고, tombstoned desktop
+prototype에 남아 있는 Node는 `.mise.toml`에서 `24.16.0`으로, pnpm은 `11.5.2`로 exact
+pin합니다.
 
 ```bash
 mise install

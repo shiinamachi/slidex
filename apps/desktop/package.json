@@ -2,7 +2,7 @@
   "name": "slidex-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron desktop shell for the slidex CLI workflow.",
+  "description": "Tombstoned Electron prototype; canonical slidex UX is the Codex Plugin workbench.",
   "author": "slidex contributors",
   "main": "dist/main/index.js",
   "packageManager": "pnpm@11.5.2",

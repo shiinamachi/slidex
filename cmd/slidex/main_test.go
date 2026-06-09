@@ -1088,6 +1088,10 @@ func TestRuntimeGateBlocksProtocolMismatchByDefault(t *testing.T) {
 		t.Fatalf("exact minimum version should pass: %v", err)
 	}
 	state.CodexRuntime.InstalledVersion = "0.137.0"
+	if err := enforceCodexRuntimeGate(state); err == nil {
+		t.Fatal("below 0.138.0 should fail minimum gate")
+	}
+	state.CodexRuntime.InstalledVersion = "0.139.0"
 	if err := enforceCodexRuntimeGate(state); err != nil {
 		t.Fatalf("higher Codex CLI version should pass minimum gate: %v", err)
 	}
@@ -1104,11 +1108,11 @@ func TestCodexVersionAtLeast(t *testing.T) {
 		minimum   string
 		want      bool
 	}{
-		{"codex-cli 0.132.0", "0.132.0", true},
-		{"0.137.0", "0.132.0", true},
-		{"0.131.9", "0.132.0", false},
-		{"missing", "0.132.0", false},
-		{"0.132", "0.132.0", true},
+		{"codex-cli 0.138.0", "0.138.0", true},
+		{"0.139.0", "0.138.0", true},
+		{"0.137.0", "0.138.0", false},
+		{"missing", "0.138.0", false},
+		{"0.138", "0.138.0", true},
 	}
 	for _, tc := range tests {
 		if got := codexVersionAtLeast(tc.installed, tc.minimum); got != tc.want {
@@ -1238,7 +1242,7 @@ func TestProtocolMismatchAllowRecordsAcceptedRisk(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, risk.Expiration); err != nil {
 		t.Fatalf("risk expiration is not RFC3339: %v", err)
 	}
-	state.CodexRuntime.InstalledVersion = "0.137.0"
+	state.CodexRuntime.InstalledVersion = "0.139.0"
 	if risk := protocolMismatchAcceptedRisk(state); risk != nil {
 		t.Fatalf("higher Codex CLI version should not record an accepted risk: %#v", risk)
 	}

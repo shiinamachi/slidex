@@ -3,6 +3,7 @@
 Primary workflow:
 
 ```bash
+slidex workbench start --deck-id <deck_id>
 slidex run --deck decks/<deck_id>
 ```
 
@@ -23,12 +24,12 @@ slidex package --deck decks/<deck_id>
 
 Codex checks:
 
-The repository vendors Codex protocol schema `0.132.0`; installed Codex CLI
+The repository vendors Codex protocol schema `0.138.0`; installed Codex CLI
 versions at or above that minimum satisfy the runtime gate.
 
 ```bash
 slidex codex doctor --json
-slidex codex schema refresh --codex-version 0.132.0
+slidex codex schema refresh --codex-version 0.138.0
 slidex codex app-server probe
 ```
 

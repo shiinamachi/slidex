@@ -1,3 +1,11 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "slidex": {
+      "command": "slidex",
+      "args": [
+        "mcp-server",
+        "--stdio"
+      ]
+    }
+  }
 }

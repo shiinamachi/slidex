@@ -1,0 +1,20 @@
+{
+  "name": "slidex-local",
+  "interface": {
+    "displayName": "slidex local"
+  },
+  "plugins": [
+    {
+      "name": "slidex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/slidex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

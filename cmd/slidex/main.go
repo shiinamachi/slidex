@@ -197,6 +197,8 @@ func main() {
 		err = runPipeline(os.Args[2:])
 	case "codex":
 		err = runCodex(os.Args[2:])
+	case "workbench":
+		err = runWorkbench(os.Args[2:])
 	case "goal":
 		err = runGoal(os.Args[2:])
 	case "mcp-server":
@@ -246,6 +248,7 @@ Commands:
   clean --deck decks/<deck_id> [--logs] [--older-than DURATION]
   run --deck decks/<deck_id> [--until package|qa|render] [--non-interactive]
   codex doctor|app-server|schema|exec|models|features|mcp|plugins|threads|turn|review|remote-control
+  workbench start|status|stop --deck-id <deck_id>
   goal set|status|pause|resume|complete|clear --deck decks/<deck_id>
   mcp-server --stdio
   migrate --deck decks/<deck_id> [--from html-pdf] [--write]

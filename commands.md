@@ -15,7 +15,7 @@ mise exec -- slidex init customer-retention
 
 ## 런타임 준비
 
-Go와 Node 런타임 및 Electron 보일러플레이트용 pnpm은 mise로 exact pin합니다.
+Go와 Node 런타임 및 tombstoned desktop prototype용 pnpm은 mise로 exact pin합니다.
 현재 Go 핀은 `.mise.toml`과 `go.mod`의 `go` 지시문에 기록된 `1.26.3`이고,
 Node 핀은 `.mise.toml`의 `24.16.0`, pnpm 핀은 `11.5.2`입니다.
 
@@ -26,6 +26,16 @@ mise exec -- go install ./cmd/slidex
 ```
 
 ## Primary CLI Workflow
+
+새 deck creation을 Codex App에서 시작할 때는 plugin workbench를 사용합니다.
+
+```bash
+mise exec -- slidex workbench start --deck-id customer-retention
+```
+
+반환된 loopback URL은 Codex App in-app browser에서 URL 클릭, 수동 navigation, 또는
+`@Browser` navigation으로 엽니다. Public Codex 0.138.0 계약에는 plugin-owned arbitrary
+Canvas mount 또는 직접 browser-open request API가 확인되지 않았습니다.
 
 기본 실행은 `slidex run`을 사용합니다.
 
@@ -67,7 +77,7 @@ mise exec -- slidex render \
 
 ```bash
 mise exec -- slidex doctor --deck decks/customer-retention --codex --render --json
-mise exec -- slidex codex schema refresh --codex-version 0.132.0
+mise exec -- slidex codex schema refresh --codex-version 0.138.0
 mise exec -- slidex codex app-server probe
 mise exec -- slidex codex review --deck decks/customer-retention --stage delivery
 mise exec -- slidex goal set --deck decks/customer-retention --objective "현재 HTML/PDF 산출물의 package gate 통과"
@@ -81,19 +91,11 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 
 문서와 acceptance 기준의 canonical 이름은 `slidex`입니다.
 
-## Desktop GUI Boilerplate
+## Desktop Tombstone
 
-Electron 앱 보일러플레이트는 `apps/desktop/` 아래에 있습니다. 현재는 GUI shell,
-preload IPC, Vite + React renderer, TypeScript build, packaging 설정만 포함하며
-실제 `slidex` CLI 실행 연결은 다음 구현 단계의 범위입니다.
-
-```bash
-cd apps/desktop
-mise exec -- pnpm install
-mise exec -- pnpm run dev
-mise exec -- pnpm run typecheck
-mise exec -- pnpm run build
-```
+`apps/desktop/`은 과거 Electron prototype이며 canonical workflow가 아닙니다. 새 UX와
+검증은 `plugins/slidex`, `slidex workbench`, `slidex mcp-server`, Go CLI tests, doctor
+checks에 구현합니다.
 
 ## 설치와 배포
 
