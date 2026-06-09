@@ -7,8 +7,8 @@
 
 ## Project Purpose
 
-This repository is a reusable Codex CLI prompt system and local automation kit
-for producing polished, structured, HTML-first business documents. It supports
+This repository is the `slidex` local CLI and automation kit for producing
+polished, structured, HTML-first business documents. It supports
 business plans, IR or company introductions, government grant plans, proposals,
 and executive review documents. It is not a hosted application or SaaS product.
 
@@ -18,13 +18,14 @@ primary delivery artifact is `${OUT_DIR}/final_deck.pdf`.
 ## Workspace Model
 
 This repository supports multiple document workspaces under `decks/<deck_id>/`.
-Before every run, resolve the active deck directory using
-`prompts/_active_deck_context.md` and keep inputs and outputs scoped there.
+Before every run, resolve the active deck directory with an explicit `--deck`
+argument or `slidex.toml` default, then verify it with
+`slidex inspect --deck <deck_dir> --write`.
 
-- Preferred active path: `decks/<deck_id>/`
+- Canonical active path: `decks/<deck_id>/`
 - Per-deck output path: `${ACTIVE_DECK_DIR}/out/`
-- Root-level `brief.md`, `assets/`, `brand/`, `data/`, and `out/` are
-  supported only for single-document compatibility.
+- Root-level `brief.md`, `assets/`, `brand/`, `data/`, and `out/` are legacy
+  migration inputs only. Do not create them for new work.
 - Do not mix materials from multiple workspaces unless the user explicitly asks
   for a combined or comparative document.
 - Use `shared/brand/`, `shared/assets/`, or `shared/data/` only when explicitly
@@ -83,11 +84,11 @@ source/reference documents after their contents are accessible as ordinary
 source evidence. The system must not generate non-HTML/PDF delivery artifacts
 or list them as future required or optional deliverables.
 
-If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific style
-prompt. Apply it after the brief, source evidence, approved brand constraints,
-and accessibility requirements, but before general design defaults. Document its
-source, applied directives, and conflicts in strategy, spec, notes, QA, or
-delivery outputs.
+If `${ACTIVE_DECK_DIR}/DESIGN.md` exists, treat it as the deck-specific design
+guidance. Apply it after the brief, source evidence, approved brand
+constraints, and accessibility requirements, but before general design defaults.
+Document its source, applied directives, and conflicts in strategy, spec, notes,
+QA, or delivery outputs.
 
 ## Required HTML/PDF Workflow
 
@@ -170,7 +171,7 @@ PDF were produced from the current HTML and inspected.
 ## HTML Edit Sync
 
 Users may edit `${OUT_DIR}/final_deck.html` directly. After any direct edit,
-run the sync prompt or CLI command. The sync flow must:
+run `slidex sync-html-edits --deck <deck_dir>`. The sync flow must:
 
 - compare the current HTML to `final_deck.generated_baseline.html` or the spec,
 - detect slide additions, removals, reordering, copy changes, visual changes,
@@ -201,7 +202,7 @@ Expected final outputs are:
 ## Do Not Do
 
 - Do not build a web app, SaaS product, or hosted service in this workspace.
-- Do not create an actual final business document during prompt-system setup.
+- Do not create an actual final business document during repository setup.
 - Do not skip intake, strategy, spec, rendering, visual QA, revision, or final
   delivery notes in future workflows.
 - Do not generate non-HTML/PDF files as required, optional, or compatibility

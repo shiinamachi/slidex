@@ -1,4 +1,4 @@
-# Brand Guidelines Template
+# Brand Guidelines Example
 
 ## Brand Personality
 

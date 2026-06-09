@@ -140,7 +140,7 @@ type threadState struct {
 	OutputSchemaHash         string         `json:"outputSchemaHash,omitempty"`
 	LastEventLog             string         `json:"lastEventLog,omitempty"`
 	GoalStatus               string         `json:"goalStatus,omitempty"`
-	PromptTemplateVersion    string         `json:"promptTemplateVersion,omitempty"`
+	RuntimeTemplateVersion   string         `json:"runtimeTemplateVersion,omitempty"`
 }
 
 type codexIntervention struct {
@@ -4906,7 +4906,7 @@ func recordAppServerTurn(outDir, stage string, result appServerTurnResult) error
 			TokenUsage:              tokenUsageFromEvents(result.Events, result.ThreadID),
 			OutputSchemaHash:        result.OutputSchemaHash,
 			LastEventLog:            result.EventLog,
-			PromptTemplateVersion:   toolVersion,
+			RuntimeTemplateVersion:  toolVersion,
 		})
 	}
 	return writeThreadIndex(outDir, idx)
@@ -5046,7 +5046,7 @@ func threadIndexFromAppServerSnapshot(deckAbs string, snapshot map[string]any) c
 		GlobalFeatureProbe:       snapshot["experimentalFeature_list"],
 		ThreadScopedFeatureProbe: snapshot["experimentalFeature_thread_scoped"],
 		OutputSchemaHash:         mustSHA256(filepath.Join("schemas", "app_stage_result.strict.schema.json")),
-		PromptTemplateVersion:    toolVersion,
+		RuntimeTemplateVersion:   toolVersion,
 	}}
 	if cwd != "" {
 		idx.Threads[0].EffectiveWorkspaceRoots = append(idx.Threads[0].EffectiveWorkspaceRoots, "cwd:"+cwd)
@@ -5873,7 +5873,7 @@ func recordGoalSync(outDir, threadID, status string, events []map[string]any) er
 			EffectiveWorkspaceRoots: []string{mustAbs("."), filepath.Dir(outDir)},
 			TokenUsage:              map[string]int{},
 			GoalStatus:              status,
-			PromptTemplateVersion:   toolVersion,
+			RuntimeTemplateVersion:  toolVersion,
 		})
 	}
 	idx.SchemaVersion = threadsSchemaVersion

@@ -1,12 +1,12 @@
 # 명령어 가이드
 
-이 문서는 `slidex` 프롬프트 시스템과 로컬 CLI를 사용해
-HTML-first 비즈니스 문서와 페이지형 PDF를 만드는 명령을 정리합니다.
+이 문서는 `slidex` CLI로 HTML-first 비즈니스 문서와 페이지형 PDF를 만드는
+명령을 정리합니다.
 
 ## 작업공간 만들기
 
 ```bash
-cp -R decks/_template decks/customer-retention
+mise exec -- slidex init customer-retention
 ```
 
 그 뒤 `decks/customer-retention/brief.md`를 작성하고 필요한 `assets/`,
@@ -27,7 +27,7 @@ mise exec -- go install ./cmd/slidex
 
 ## Primary CLI Workflow
 
-기본 실행은 prompt 파일을 직접 조합하지 않고 `slidex run`을 사용합니다.
+기본 실행은 `slidex run`을 사용합니다.
 
 ```bash
 mise exec -- slidex run --deck decks/customer-retention
@@ -94,21 +94,6 @@ mise exec -- npm run dev
 mise exec -- npm run typecheck
 mise exec -- npm run build
 ```
-
-## Advanced Prompt Fallback
-
-직접 prompt 파일을 실행하는 방식은 CLI가 없는 환경이나 디버깅용 fallback입니다.
-
-```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_start_business_doc.md
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/one_shot_create_business_doc.md
-```
-
-## 샌드박스
-
-- 일반 프롬프트 실행에는 `--sandbox workspace-write`를 사용합니다.
-- 알 수 없는 외부 자료를 다룰 때는 불필요한 네트워크 접근과 전체 파일시스템
-  접근을 피합니다.
 
 ## 설치와 배포
 

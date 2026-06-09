@@ -5,7 +5,7 @@ description: Use slidex for deterministic HTML/PDF business document workflows, 
 
 # slidex
 
-Use the repository CLI as the canonical interface. Do not run prompt files directly unless the user explicitly asks for the advanced fallback path.
+Use the repository CLI as the canonical interface. Do not bypass it with legacy direct execution paths.
 
 ## Workflow
 

@@ -39,13 +39,13 @@ decks/
       delivery_summary.md
 ```
 
-`prompts/`, `schemas/`, `checklists/`, `cmd/`, `internal/`은 저장소 공통
+`schemas/`, `checklists/`, `cmd/`, `internal/`, `plugins/`는 저장소 공통
 리소스입니다. 작업별 자료와 결과물은 항상 해당 작업 폴더 안에 둡니다.
 
 ## 새 작업 만들기
 
 ```bash
-cp -R decks/_template decks/<deck_id>
+slidex init <deck_id>
 ```
 
 `brief.md`를 작성하고 필요한 reference docs, 로고, 이미지, 데이터, 원문 자료를
@@ -54,7 +54,7 @@ cp -R decks/_template decks/<deck_id>
 예:
 
 ```bash
-DECK_ID=customer-retention codex exec --sandbox workspace-write - < prompts/00_start_business_doc.md
+slidex run --deck decks/customer-retention
 ```
 
 ## 공유 자료

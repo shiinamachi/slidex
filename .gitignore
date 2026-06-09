@@ -4,16 +4,12 @@
 !/decks/_template/
 !/decks/_template/**
 
-# Root compatibility local inputs and outputs.
+# Legacy root-level deck inputs and outputs. Use decks/<deck_id>/ for new work.
 /brief.md
-/assets/*
-!/assets/.gitkeep
-/brand/*
-!/brand/*.template.*
-/data/*
-!/data/.gitkeep
-/out/*
-!/out/.gitkeep
+/assets/
+/brand/
+/data/
+/out/
 
 # Electron desktop app local dependencies and build artifacts.
 /apps/desktop/node_modules/
