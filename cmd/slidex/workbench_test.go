@@ -193,6 +193,49 @@ func TestWorkbenchDraftRequiresTokenAndPersistsRecovery(t *testing.T) {
 	}
 }
 
+func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "session-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+
+	workbenchReq := httptest.NewRequest(http.MethodGet, "/workbench/wrong-session", nil)
+	workbenchRec := httptest.NewRecorder()
+	server.handleWorkbench(workbenchRec, workbenchReq)
+	if workbenchRec.Code != http.StatusNotFound {
+		t.Fatalf("wrong workbench session status = %d, want %d", workbenchRec.Code, http.StatusNotFound)
+	}
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/workbench/wrong-session/api/session", nil)
+	sessionRec := httptest.NewRecorder()
+	server.handleSession(sessionRec, sessionReq)
+	if sessionRec.Code != http.StatusNotFound {
+		t.Fatalf("wrong session API status = %d, want %d", sessionRec.Code, http.StatusNotFound)
+	}
+
+	payload := []byte(`{"title":"Demo","audience":"Board","decisionGoal":"Approve pilot"}`)
+	draftReq := httptest.NewRequest(http.MethodPost, "/workbench/wrong-session/api/draft", bytes.NewReader(payload))
+	draftReq.Header.Set("Origin", "http://127.0.0.1:43210")
+	draftReq.Header.Set("X-Slidex-Workbench-Token", token)
+	draftRec := httptest.NewRecorder()
+	server.handleDraft(draftRec, draftReq)
+	if draftRec.Code != http.StatusNotFound {
+		t.Fatalf("wrong draft session status = %d, want %d", draftRec.Code, http.StatusNotFound)
+	}
+
+	saveReq := httptest.NewRequest(http.MethodPost, "/workbench/wrong-session/api/save", bytes.NewReader(payload))
+	saveReq.Header.Set("Origin", "http://127.0.0.1:43210")
+	saveReq.Header.Set("X-Slidex-Workbench-Token", token)
+	saveRec := httptest.NewRecorder()
+	server.handleSave(saveRec, saveReq)
+	if saveRec.Code != http.StatusNotFound {
+		t.Fatalf("wrong save session status = %d, want %d", saveRec.Code, http.StatusNotFound)
+	}
+}
+
 func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
 	html := `<script>const boot = {"deckId":"demo","sessionId":"session-1","apiBase":"/workbench/session-1/api","token":"secret-token"};</script>`
 	boot, token, err := extractWorkbenchBoot(html)

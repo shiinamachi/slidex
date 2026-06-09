@@ -884,6 +884,10 @@ func (s *workbenchHTTPServer) handleReady(w http.ResponseWriter, r *http.Request
 }
 
 func (s *workbenchHTTPServer) handleWorkbench(w http.ResponseWriter, r *http.Request) {
+	if !workbenchSessionPathMatches(r.URL.Path, s.sessionID, "") {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -894,6 +898,10 @@ func (s *workbenchHTTPServer) handleWorkbench(w http.ResponseWriter, r *http.Req
 }
 
 func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Request) {
+	if !workbenchSessionPathMatches(r.URL.Path, s.sessionID, "/api/session") {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -902,6 +910,10 @@ func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request) {
+	if !workbenchSessionPathMatches(r.URL.Path, s.sessionID, "/api/draft") {
+		http.NotFound(w, r)
+		return
+	}
 	if !validWorkbenchToken(r.Header.Get("X-Slidex-Workbench-Token"), s.token) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -955,6 +967,10 @@ func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request
 }
 
 func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request) {
+	if !workbenchSessionPathMatches(r.URL.Path, s.sessionID, "/api/save") {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1004,6 +1020,10 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 	}
 	s.manifest = manifest
 	_ = writeJSONResponse(w, map[string]any{"status": "saved", "manifest": publicWorkbenchStatus(manifest)})
+}
+
+func workbenchSessionPathMatches(path, sessionID, suffix string) bool {
+	return path == "/workbench/"+sessionID+suffix
 }
 
 func (s *workbenchHTTPServer) workbenchHTML() string {
