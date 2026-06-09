@@ -281,6 +281,32 @@ func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
 	}
 }
 
+func TestWorkbenchRawTokenCheckIncludesServerLog(t *testing.T) {
+	dir := t.TempDir()
+	token := "raw-log-token"
+	brief := filepath.Join(dir, "brief.md")
+	draft := filepath.Join(dir, workbenchDraftName)
+	manifest := filepath.Join(dir, workbenchManifestName)
+	logPath := filepath.Join(dir, "workbench_server.log")
+	for _, path := range []string{brief, draft, manifest} {
+		if err := os.WriteFile(path, []byte("safe\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(logPath, []byte("safe log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !rawTokenAbsentFromFiles(token, []string{brief, draft, manifest, logPath}) {
+		t.Fatal("safe server log should pass raw token absence check")
+	}
+	if err := os.WriteFile(logPath, []byte("leaked "+token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rawTokenAbsentFromFiles(token, []string{brief, draft, manifest, logPath}) {
+		t.Fatal("server log containing raw token should fail absence check")
+	}
+}
+
 func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")

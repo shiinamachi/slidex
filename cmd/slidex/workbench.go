@@ -157,6 +157,7 @@ type workbenchSaveSmokeResult struct {
 	BriefPath                       string              `json:"briefPath"`
 	DraftPath                       string              `json:"draftPath"`
 	ManifestPath                    string              `json:"manifestPath"`
+	LogPath                         string              `json:"logPath"`
 	EvidencePath                    string              `json:"evidencePath"`
 	BrowserOpenStrategy             string              `json:"browserOpenStrategy"`
 	IsActualCodexAppBrowserEvidence bool                `json:"isActualCodexAppBrowserEvidence"`
@@ -470,6 +471,7 @@ func smokeSaveWorkbench(workspace, deckID, deck, fromTemplate string, input work
 	briefPath := filepath.Join(deckAbs, "brief.md")
 	draftPath := filepath.Join(deckAbs, "out", workbenchDraftName)
 	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
+	logPath := filepath.Join(deckAbs, "out", "workbench_server.log")
 	evidencePath := filepath.Join(deckAbs, "out", workbenchSaveSmokeName)
 	result = workbenchSaveSmokeResult{
 		SchemaVersion:                   "slidex.workbenchSaveSmoke.v1",
@@ -490,6 +492,7 @@ func smokeSaveWorkbench(workspace, deckID, deck, fromTemplate string, input work
 		BriefPath:                       filepath.ToSlash(briefPath),
 		DraftPath:                       filepath.ToSlash(draftPath),
 		ManifestPath:                    filepath.ToSlash(manifestPath),
+		LogPath:                         filepath.ToSlash(logPath),
 		EvidencePath:                    filepath.ToSlash(evidencePath),
 		BrowserOpenStrategy:             manifest.BrowserOpenStrategy,
 		IsActualCodexAppBrowserEvidence: false,
@@ -579,7 +582,11 @@ func smokeSaveWorkbench(workspace, deckID, deck, fromTemplate string, input work
 		"draft":    artifactFromPath(draftPath),
 		"manifest": artifactFromPath(manifestPath),
 	}
-	result.RawTokenAbsentFromArtifacts = rawTokenAbsentFromFiles(token, []string{briefPath, draftPath, manifestPath})
+	tokenCheckPaths := []string{briefPath, draftPath, manifestPath}
+	if pathExists(logPath) {
+		tokenCheckPaths = append(tokenCheckPaths, logPath)
+	}
+	result.RawTokenAbsentFromArtifacts = rawTokenAbsentFromFiles(token, tokenCheckPaths)
 	result.Findings = workbenchSaveSmokeFindings(result, updated)
 	result.Status = workbenchSaveSmokeStatus(result)
 	return result, nil
@@ -714,7 +721,7 @@ func workbenchSaveSmokeFindings(result workbenchSaveSmokeResult, manifest workbe
 		findings = append(findings, "HTML bootstrap token was not found")
 	}
 	if !result.RawTokenAbsentFromArtifacts {
-		findings = append(findings, "raw token appeared in persisted artifacts or artifact read failed")
+		findings = append(findings, "raw token appeared in persisted artifacts/logs or artifact read failed")
 	}
 	for name, artifact := range result.VerifiedFiles {
 		if artifact.SHA256 == "" || artifact.Size <= 0 {
