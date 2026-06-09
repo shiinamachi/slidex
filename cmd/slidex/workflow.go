@@ -431,18 +431,124 @@ func pluginDoctorSnapshot(pluginList string) map[string]any {
 }
 
 func workbenchDoctorSnapshot() map[string]any {
+	capability := codexBrowserCapabilitySnapshot()
 	return map[string]any{
-		"mode":                         "loopback",
-		"status":                       "available",
-		"command":                      "slidex workbench start --deck-id <deck_id>",
-		"browserOpenMechanism":         "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin",
-		"directBrowserOpenRequestAPI":  "not_found_in_codex_app_server_0.138.0",
-		"schemaOpenPageActionScope":    "web_search_action_only",
-		"proprietaryCanvasMountAPI":    "not_claimed",
-		"browserEvidenceRequired":      true,
-		"browserEvidenceCommand":       "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --workbench-visible --saved-input-verified",
-		"browserEvidenceVerifyCommand": "slidex workbench verify-evidence --deck-id <deck_id>",
+		"mode":                                "loopback",
+		"status":                              "available",
+		"command":                             "slidex workbench start --deck-id <deck_id>",
+		"browserOpenMechanism":                "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin",
+		"directBrowserOpenRequestAPI":         "not_found_in_codex_app_server_0.138.0",
+		"directBrowserOpenRequestMethods":     capability["directBrowserOpenRequestMethods"],
+		"clientRequestSchemaPath":             capability["clientRequestSchemaPath"],
+		"clientRequestSchemaScanned":          capability["clientRequestSchemaScanned"],
+		"clientRequestSchemaScanError":        capability["clientRequestSchemaScanError"],
+		"clientRequestMethodCount":            capability["clientRequestMethodCount"],
+		"schemaOpenPageActionScope":           "web_search_action_only",
+		"schemaOpenPageActionEvidence":        capability["schemaOpenPageActionEvidence"],
+		"officialInAppBrowserMechanismSource": "codex-manual:/codex/app/browser.md",
+		"proprietaryCanvasMountAPI":           "not_claimed",
+		"browserEvidenceRequired":             true,
+		"browserEvidenceCommand":              "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --workbench-visible --saved-input-verified",
+		"browserEvidenceVerifyCommand":        "slidex workbench verify-evidence --deck-id <deck_id>",
 	}
+}
+
+func codexBrowserCapabilitySnapshot() map[string]any {
+	schemaPath := repoRelativePath(filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion, "schema", "ClientRequest.json"))
+	methods, err := clientRequestMethodsFromSchema(schemaPath)
+	direct := browserOpenLikeClientRequestMethods(methods)
+	if direct == nil {
+		direct = []string{}
+	}
+	result := map[string]any{
+		"clientRequestSchemaPath":         filepath.ToSlash(schemaPath),
+		"clientRequestSchemaScanned":      err == nil,
+		"clientRequestSchemaScanError":    "",
+		"clientRequestMethodCount":        len(methods),
+		"directBrowserOpenRequestMethods": direct,
+		"schemaOpenPageActionEvidence":    "openPage/open_page appears only in web-search response action schemas, not as a ClientRequest method",
+	}
+	if err != nil {
+		result["clientRequestSchemaScanError"] = err.Error()
+	}
+	return result
+}
+
+func repoRelativePath(rel string) string {
+	for dir := mustAbs("."); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			candidate := filepath.Join(dir, rel)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return rel
+		}
+	}
+}
+
+func clientRequestMethodsFromSchema(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var root any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil, err
+	}
+	set := map[string]bool{}
+	collectClientRequestMethods(root, set)
+	methods := make([]string, 0, len(set))
+	for method := range set {
+		methods = append(methods, method)
+	}
+	sort.Strings(methods)
+	return methods, nil
+}
+
+func collectClientRequestMethods(v any, set map[string]bool) {
+	obj, ok := v.(map[string]any)
+	if ok {
+		if methodObj, _ := obj["method"].(map[string]any); methodObj != nil {
+			if values, _ := methodObj["enum"].([]any); len(values) > 0 {
+				for _, raw := range values {
+					if method, _ := raw.(string); method != "" {
+						set[method] = true
+					}
+				}
+			}
+		}
+		for _, value := range obj {
+			collectClientRequestMethods(value, set)
+		}
+		return
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		collectClientRequestMethods(item, set)
+	}
+}
+
+func browserOpenLikeClientRequestMethods(methods []string) []string {
+	var direct []string
+	for _, method := range methods {
+		normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(method, "_", ""), "-", ""))
+		if strings.Contains(normalized, "browser") ||
+			strings.Contains(normalized, "canvas") ||
+			strings.Contains(normalized, "worksurface") ||
+			strings.Contains(normalized, "navigate") ||
+			strings.Contains(normalized, "openurl") ||
+			strings.Contains(normalized, "openpage") {
+			direct = append(direct, method)
+		}
+	}
+	sort.Strings(direct)
+	return direct
 }
 
 func doctorWorkbenchFindings() []qaFinding {

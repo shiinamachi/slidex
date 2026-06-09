@@ -1146,6 +1146,15 @@ func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	if snapshot["directBrowserOpenRequestAPI"] != "not_found_in_codex_app_server_0.138.0" {
 		t.Fatalf("doctor snapshot should not claim a direct browser-open request API: %#v", snapshot)
 	}
+	if snapshot["clientRequestSchemaScanned"] != true {
+		t.Fatalf("doctor snapshot should scan ClientRequest schema: %#v", snapshot)
+	}
+	if count, _ := snapshot["clientRequestMethodCount"].(int); count == 0 {
+		t.Fatalf("doctor snapshot should report ClientRequest methods: %#v", snapshot)
+	}
+	if methods, _ := snapshot["directBrowserOpenRequestMethods"].([]string); len(methods) != 0 {
+		t.Fatalf("doctor snapshot should not find direct browser-open request methods: %#v", methods)
+	}
 	if snapshot["schemaOpenPageActionScope"] != "web_search_action_only" {
 		t.Fatalf("doctor snapshot should scope openPage to web search actions: %#v", snapshot)
 	}
@@ -1154,6 +1163,32 @@ func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	}
 	if snapshot["browserEvidenceRequired"] != true {
 		t.Fatalf("doctor snapshot must require actual browser evidence: %#v", snapshot)
+	}
+}
+
+func TestClientRequestMethodsFromSchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ClientRequest.json")
+	raw := []byte(`{
+	  "oneOf": [
+	    {"properties": {"method": {"enum": ["thread/start"]}}},
+	    {"properties": {"method": {"enum": ["turn/start"]}}},
+	    {"properties": {"method": {"enum": ["browser/openUrl"]}}}
+	  ]
+	}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	methods, err := clientRequestMethodsFromSchema(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(methods, []string{"browser/openUrl", "thread/start", "turn/start"}) {
+		t.Fatalf("methods = %#v", methods)
+	}
+	direct := browserOpenLikeClientRequestMethods(methods)
+	if !reflect.DeepEqual(direct, []string{"browser/openUrl"}) {
+		t.Fatalf("direct browser-like methods = %#v", direct)
 	}
 }
 
