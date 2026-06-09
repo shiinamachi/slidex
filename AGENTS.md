@@ -42,8 +42,9 @@ artifact is a deck-local `out/final_deck.pdf`.
 - `plugins/slidex/` and `.agents/skills/slidex/`: companion plugin, skill, hook,
   and local agent guidance package checked by `slidex doctor`.
 - `internal/codex/protocol/codex-cli-0.138.0/`: vendored Codex protocol bundle.
-- `apps/desktop/`: Electron boilerplate for a future GUI wrapper around the
-  CLI. It is not the canonical workflow surface yet.
+- `apps/desktop/`: tombstoned Electron prototype kept as migration reference
+  only. It is not the canonical UX or a future product path; new UX belongs in
+  `plugins/slidex`, `slidex workbench`, MCP, and Go CLI paths.
 
 ## Git Workflow
 

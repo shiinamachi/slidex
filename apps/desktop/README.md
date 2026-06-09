@@ -22,6 +22,10 @@ pnpm install
 
 ## Historical Commands
 
+These commands are only for inspecting the archived prototype. They are not part
+of the normal slidex development, release, or Codex Plugin workbench validation
+path.
+
 ```bash
 pnpm run dev
 pnpm run dev:wsl
@@ -44,7 +48,7 @@ src/main/      Electron main process bootstrap and IPC registration
 src/preload/   contextBridge API exposed to the renderer
 src/renderer/  Vite + React + TanStack Router desktop shell
 src/shared/    IPC channel names and shared TypeScript contracts
-resources/     icons and installer assets for future packaging work
+resources/     legacy icons and installer assets kept as migration reference
 ```
 
 새 CLI 연결은 이 Electron shell에 추가하지 않습니다. 필요한 UX는 Codex Plugin workbench로

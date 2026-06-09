@@ -24,11 +24,14 @@ workbench와 Go CLI 쪽에 구현한다.
 - Design Tokens Community Group은 도구와 플랫폼 간 시각 언어 공유를 위한 토큰
   표준화를 다룬다: <https://www.designtokens.org/>
 
-## Product Tone
+## Archived Product Tone
 
-slidex Desktop은 CLI 워크플로를 조작하는 운영형 생산성 앱이다. 첫 화면은 마케팅
-랜딩이 아니라 작업공간, 실행 상태, 검수 상태, 패키징 상태가 바로 보이는 조용한
-데스크톱 셸이어야 한다.
+아래 내용은 과거 Electron prototype이 목표로 삼았던 product tone 기록이다. 현재 slidex
+UX 구현 지침은 Codex Plugin workbench와 Go CLI 문서가 우선한다.
+
+당시 slidex Desktop은 CLI 워크플로를 조작하는 운영형 생산성 앱으로 구상했다. 첫 화면은
+마케팅 랜딩이 아니라 작업공간, 실행 상태, 검수 상태, 패키징 상태가 바로 보이는 조용한
+데스크톱 셸을 목표로 했다.
 
 화이트 모드를 기본으로 한다. 배경은 차가운 neutral gray, 주요 표면은 흰색, 경계선은
 hairline 중립 회색(`border-subtle` 우선), 텍스트는 고대비 neutral ink를 쓴다. Primary
@@ -145,19 +148,24 @@ Segmented control, toggle, checkbox, select, numeric input이 필요한 경우 n
 본문 텍스트 대비는 4.5:1 이상, 큰 텍스트와 아이콘성 그래픽은 3:1 이상을 목표로 한다.
 contrast가 불확실하면 더 어두운 토큰인 `ink`, `accent-strong`, `state-*`를 선택한다.
 
-## Implementation Rules
+## Archived Implementation Notes
+
+이 절은 historical prototype을 분석하거나 migration reference를 보존할 때만 사용한다.
+새 CLI bridge, 새 화면, 새 dependency, packaging/shipping 작업은 이 Electron shell에
+추가하지 않는다. 필요한 UX와 검증은 Codex Plugin workbench, Go CLI, MCP server, doctor
+checks 쪽에 구현한다.
 
 - Tailwind 토큰 변경은 `src/renderer/styles.css`의 `@theme static`에서 시작한다.
 - React 컴포넌트에서 raw hex, ad hoc shadow, arbitrary radius를 반복하지 않는다.
 - 새 공통 UI가 두 번 이상 반복되면 `src/renderer` 아래에 작고 명확한 컴포넌트로
   추출한다.
-- 새 dependency가 필요하면 exact version으로 추가하고 lockfile, 문서, 검증을 같은
-  변경에 포함한다.
 - 디자인 토큰, 컴포넌트 규칙, 화면 밀도가 바뀌면 이 문서를 함께 갱신한다.
 
 ## Verification
 
-Desktop UI 변경 시 최소 검증:
+Archived prototype을 의도적으로 조사하거나 보존해야 할 때만 아래 명령을 사용한다.
+일반 slidex 검증은 `go test ./...`, `slidex doctor`, Codex Plugin workbench smoke/evidence
+경로를 따른다.
 
 ```bash
 cd apps/desktop
