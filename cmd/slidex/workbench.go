@@ -797,42 +797,80 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		return result, workbenchManifest{}, false, err
 	}
 	defer logFile.Close()
-	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		port, err := chooseLoopbackPort()
-		if err != nil {
-			return result, workbenchManifest{}, false, err
-		}
+	var manifest workbenchManifest
+	err = retryWorkbenchPortAttempts(5, chooseLoopbackPort, func(port int) (bool, error) {
 		cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", "SLIDEX_WORKBENCH_TOKEN", "--port", strconv.Itoa(port))
 		cmd.Env = append(os.Environ(), "SLIDEX_WORKBENCH_TOKEN="+token)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
-			lastErr = err
-			continue
+			return true, err
 		}
-		manifest := newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, cmd.Process.Pid, "starting")
+		manifest = newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, cmd.Process.Pid, "starting")
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
 			stopWorkbenchProcess(manifest)
-			return result, manifest, true, err
+			return false, err
 		}
 		if err := waitForWorkbenchReady(manifest, 3*time.Second); err != nil {
-			lastErr = err
 			stopWorkbenchProcess(manifest)
 			manifest.Status = "stale"
 			manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 			_ = writeWorkbenchManifest(deckAbs, manifest)
-			continue
+			return true, err
 		}
 		manifest.Status = "running"
 		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
+			return false, err
+		}
+		return false, nil
+	})
+	if err != nil {
+		var exhausted workbenchPortRetryExhaustedError
+		if errors.As(err, &exhausted) {
+			return result, workbenchManifest{}, false, err
+		}
+		if manifest.PID > 0 {
 			return result, manifest, true, err
 		}
-		return result, manifest, true, nil
+		return result, workbenchManifest{}, false, err
 	}
-	return result, workbenchManifest{}, false, fmt.Errorf("workbench did not become ready after port retries: %w", lastErr)
+	return result, manifest, true, nil
+}
+
+type workbenchPortRetryExhaustedError struct {
+	err error
+}
+
+func (e workbenchPortRetryExhaustedError) Error() string {
+	if e.err == nil {
+		return "workbench did not become ready after port retries"
+	}
+	return fmt.Sprintf("workbench did not become ready after port retries: %v", e.err)
+}
+
+func (e workbenchPortRetryExhaustedError) Unwrap() error {
+	return e.err
+}
+
+func retryWorkbenchPortAttempts(maxAttempts int, choosePort func() (int, error), run func(port int) (bool, error)) error {
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		port, err := choosePort()
+		if err != nil {
+			return err
+		}
+		retry, err := run(port)
+		if err == nil {
+			return nil
+		}
+		if !retry {
+			return err
+		}
+		lastErr = err
+	}
+	return workbenchPortRetryExhaustedError{err: lastErr}
 }
 
 func serveWorkbench(deckAbs, workspace, sessionID, token string, port int) error {

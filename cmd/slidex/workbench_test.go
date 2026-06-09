@@ -1006,6 +1006,46 @@ func TestWorkbenchServeMarksManifestStaleOnPortCollision(t *testing.T) {
 	}
 }
 
+func TestRetryWorkbenchPortAttemptsRetriesOnlyRetryableFailures(t *testing.T) {
+	ports := []int{41001, 41002}
+	var chosen []int
+	choose := func() (int, error) {
+		if len(ports) == 0 {
+			t.Fatal("port chooser called too many times")
+		}
+		port := ports[0]
+		ports = ports[1:]
+		chosen = append(chosen, port)
+		return port, nil
+	}
+	var ran []int
+	err := retryWorkbenchPortAttempts(5, choose, func(port int) (bool, error) {
+		ran = append(ran, port)
+		if port == 41001 {
+			return true, fmt.Errorf("occupied port %d", port)
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(chosen) != "[41001 41002]" || fmt.Sprint(ran) != "[41001 41002]" {
+		t.Fatalf("retry did not advance ports: chosen=%v ran=%v", chosen, ran)
+	}
+
+	ports = []int{42001, 42002}
+	chosen = nil
+	err = retryWorkbenchPortAttempts(5, choose, func(port int) (bool, error) {
+		return false, fmt.Errorf("non-retryable %d", port)
+	})
+	if err == nil || !strings.Contains(err.Error(), "non-retryable") {
+		t.Fatalf("expected non-retryable error, got %v", err)
+	}
+	if len(chosen) != 1 || chosen[0] != 42001 {
+		t.Fatalf("non-retryable failure should stop after one attempt, chosen=%v", chosen)
+	}
+}
+
 func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
