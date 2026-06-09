@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -606,6 +607,7 @@ func editorialHTMLFindings(htmlPath, htmlString string, spec map[string]any, sli
 	if regexp.MustCompile(`(?is)text-align\s*:\s*justify\b`).MatchString(htmlString) && !strings.Contains(htmlString, `data-ed-exception="ED-TYPE-003"`) {
 		findings = append(findings, fail("ED-TYPE-003", "full justification is not allowed without an explicit ED-TYPE-003 exception", htmlPath))
 	}
+	findings = append(findings, editorialCSSFindings(htmlPath, htmlString, spec)...)
 	specSlides := specSlidesByHTMLID(spec)
 	for i, slide := range slides {
 		slideID := firstNonEmpty(slide.ID, fmt.Sprintf("slide_%02d", i+1))
@@ -706,6 +708,367 @@ func imageAltFindings(htmlPath, htmlString string) []qaFinding {
 		}
 	}
 	return findings
+}
+
+type cssRule struct {
+	Selector     string
+	Declarations map[string]string
+}
+
+type rgbColor struct {
+	R float64
+	G float64
+	B float64
+}
+
+type editorialCSSPolicy struct {
+	ContrastNormal   float64
+	ContrastLarge    float64
+	MinBodyFontPx    float64
+	MinCaptionFontPx float64
+}
+
+func editorialCSSFindings(htmlPath, htmlString string, spec map[string]any) []qaFinding {
+	rules := parseCSSRules(extractStyleCSS(htmlString))
+	if len(rules) == 0 {
+		return nil
+	}
+	vars := cssVariables(rules)
+	policy := editorialCSSPolicyFromSpec(spec)
+	inheritedText, _ := parseCSSColor("#111827", vars)
+	slideBackground, _ := parseCSSColor("#ffffff", vars)
+	if bodyRule := firstRuleMatching(rules, "body"); bodyRule != nil {
+		if colorValue := firstDeclaration(*bodyRule, "color"); colorValue != "" {
+			if parsed, ok := parseCSSColor(colorValue, vars); ok {
+				inheritedText = parsed
+			}
+		}
+	}
+	if slideRule := firstRuleMatching(rules, ".slide"); slideRule != nil {
+		if bgValue := firstDeclaration(*slideRule, "background-color", "background"); bgValue != "" {
+			if parsed, ok := parseCSSColor(bgValue, vars); ok {
+				slideBackground = parsed
+			}
+		}
+	}
+	var findings []qaFinding
+	for _, rule := range rules {
+		if !selectorLikelyContainsText(rule.Selector) {
+			continue
+		}
+		colorValue := firstDeclaration(rule, "color")
+		bgValue := firstDeclaration(rule, "background-color", "background")
+		fontValue := firstDeclaration(rule, "font-size")
+		fontSize, hasFontSize := parseCSSFontPx(fontValue, vars)
+		if hasFontSize {
+			minFont := minFontPxForSelector(rule.Selector, policy)
+			if fontSize < minFont {
+				findings = append(findings, fail("ED-TYPE-002", fmt.Sprintf("%s font-size %.1fpx is below %.1fpx minimum", strings.TrimSpace(rule.Selector), fontSize, minFont), htmlPath))
+			}
+		}
+		textColor := inheritedText
+		if colorValue != "" {
+			if parsed, ok := parseCSSColor(colorValue, vars); ok {
+				textColor = parsed
+			} else {
+				continue
+			}
+		}
+		background := slideBackground
+		if bgValue != "" {
+			if parsed, ok := parseCSSColor(bgValue, vars); ok {
+				background = parsed
+			}
+		}
+		if colorValue == "" && bgValue == "" {
+			continue
+		}
+		threshold := policy.ContrastNormal
+		if isLargeText(fontSize, cssFontWeight(rule)) {
+			threshold = policy.ContrastLarge
+		}
+		ratio := contrastRatio(textColor, background)
+		if ratio+0.0001 < threshold {
+			findings = append(findings, fail("ED-A11Y-001", fmt.Sprintf("%s contrast ratio %.2f:1 is below %.1f:1", strings.TrimSpace(rule.Selector), ratio, threshold), htmlPath))
+		}
+	}
+	return findings
+}
+
+func extractStyleCSS(htmlString string) string {
+	re := regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style>`)
+	var b strings.Builder
+	for _, match := range re.FindAllStringSubmatch(htmlString, -1) {
+		if len(match) > 1 {
+			b.WriteString(match[1])
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func parseCSSRules(css string) []cssRule {
+	css = regexp.MustCompile(`(?is)/\*.*?\*/`).ReplaceAllString(css, "")
+	re := regexp.MustCompile(`(?is)([^{}]+)\{([^{}]+)\}`)
+	var rules []cssRule
+	for _, match := range re.FindAllStringSubmatch(css, -1) {
+		if len(match) < 3 {
+			continue
+		}
+		selector := strings.TrimSpace(match[1])
+		if selector == "" || strings.HasPrefix(selector, "@") {
+			continue
+		}
+		decls := map[string]string{}
+		for _, part := range strings.Split(match[2], ";") {
+			name, value, ok := strings.Cut(part, ":")
+			if !ok {
+				continue
+			}
+			name = strings.ToLower(strings.TrimSpace(name))
+			value = strings.TrimSpace(value)
+			if name != "" && value != "" {
+				decls[name] = value
+			}
+		}
+		if len(decls) > 0 {
+			rules = append(rules, cssRule{Selector: selector, Declarations: decls})
+		}
+	}
+	return rules
+}
+
+func cssVariables(rules []cssRule) map[string]string {
+	vars := map[string]string{}
+	for _, rule := range rules {
+		for name, value := range rule.Declarations {
+			if strings.HasPrefix(name, "--") {
+				vars[name] = strings.TrimSpace(stripCSSImportant(value))
+			}
+		}
+	}
+	return vars
+}
+
+func editorialCSSPolicyFromSpec(spec map[string]any) editorialCSSPolicy {
+	policy := editorialCSSPolicy{ContrastNormal: 4.5, ContrastLarge: 3.0, MinBodyFontPx: 24, MinCaptionFontPx: 18}
+	if spec == nil {
+		return policy
+	}
+	rawPolicy, _ := spec["editorialDesignPolicy"].(map[string]any)
+	if n, ok := numberAsFloat(rawPolicy["contrastNormal"]); ok {
+		policy.ContrastNormal = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["contrastLarge"]); ok {
+		policy.ContrastLarge = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["minBodyFontPx"]); ok {
+		policy.MinBodyFontPx = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["minCaptionFontPx"]); ok {
+		policy.MinCaptionFontPx = n
+	}
+	return policy
+}
+
+func firstRuleMatching(rules []cssRule, needle string) *cssRule {
+	for i := range rules {
+		for _, selector := range strings.Split(rules[i].Selector, ",") {
+			if strings.TrimSpace(selector) == needle {
+				return &rules[i]
+			}
+		}
+	}
+	return nil
+}
+
+func firstDeclaration(rule cssRule, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(rule.Declarations[name]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func selectorLikelyContainsText(selector string) bool {
+	normalized := strings.ToLower(selector)
+	if strings.Contains(normalized, "::before") || strings.Contains(normalized, "::after") {
+		return false
+	}
+	for _, token := range []string{"body", "h1", "h2", "h3", "h4", "p", "li", "td", "th", "span", "strong", "em", "small", "caption", "footer", "label", ".kicker", ".message", ".points", ".panel", ".source", ".footnote", ".caption", ".chart", ".table"} {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func minFontPxForSelector(selector string, policy editorialCSSPolicy) float64 {
+	normalized := strings.ToLower(selector)
+	for _, token := range []string{"caption", "footer", "footnote", "source", "label", "small"} {
+		if strings.Contains(normalized, token) {
+			return policy.MinCaptionFontPx
+		}
+	}
+	return policy.MinBodyFontPx
+}
+
+func parseCSSFontPx(value string, vars map[string]string) (float64, bool) {
+	value = strings.ToLower(resolveCSSValue(value, vars))
+	value = stripCSSImportant(value)
+	if value == "" {
+		return 0, false
+	}
+	re := regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?)\s*(px|pt|rem)`)
+	match := re.FindStringSubmatch(value)
+	if len(match) < 3 {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(match[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	switch match[2] {
+	case "pt":
+		n *= 4.0 / 3.0
+	case "rem":
+		n *= 16
+	}
+	return n, true
+}
+
+func cssFontWeight(rule cssRule) float64 {
+	value := strings.ToLower(stripCSSImportant(firstDeclaration(rule, "font-weight")))
+	switch value {
+	case "bold", "bolder":
+		return 700
+	case "normal", "lighter", "":
+		return 400
+	default:
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return 400
+		}
+		return n
+	}
+}
+
+func parseCSSColor(value string, vars map[string]string) (rgbColor, bool) {
+	value = strings.ToLower(resolveCSSValue(value, vars))
+	value = stripCSSImportant(value)
+	if value == "" || strings.Contains(value, "transparent") {
+		return rgbColor{}, false
+	}
+	if strings.HasPrefix(value, "#") {
+		return parseHexCSSColor(value)
+	}
+	if strings.HasPrefix(value, "rgb(") {
+		return parseRGBCSSColor(value)
+	}
+	switch strings.Fields(value)[0] {
+	case "black":
+		return rgbColor{}, true
+	case "white":
+		return rgbColor{R: 255, G: 255, B: 255}, true
+	default:
+		return rgbColor{}, false
+	}
+}
+
+func parseHexCSSColor(value string) (rgbColor, bool) {
+	value = strings.TrimPrefix(strings.Fields(value)[0], "#")
+	if len(value) == 3 {
+		value = string([]byte{value[0], value[0], value[1], value[1], value[2], value[2]})
+	}
+	if len(value) != 6 {
+		return rgbColor{}, false
+	}
+	r, okR := parseHexByte(value[0:2])
+	g, okG := parseHexByte(value[2:4])
+	b, okB := parseHexByte(value[4:6])
+	if !okR || !okG || !okB {
+		return rgbColor{}, false
+	}
+	return rgbColor{R: float64(r), G: float64(g), B: float64(b)}, true
+}
+
+func parseRGBCSSColor(value string) (rgbColor, bool) {
+	re := regexp.MustCompile(`rgb\(\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*\)`)
+	match := re.FindStringSubmatch(value)
+	if len(match) < 4 {
+		return rgbColor{}, false
+	}
+	r, errR := strconv.ParseFloat(match[1], 64)
+	g, errG := strconv.ParseFloat(match[2], 64)
+	b, errB := strconv.ParseFloat(match[3], 64)
+	if errR != nil || errG != nil || errB != nil {
+		return rgbColor{}, false
+	}
+	return rgbColor{R: r, G: g, B: b}, true
+}
+
+func parseHexByte(value string) (int64, bool) {
+	parsed, err := strconv.ParseInt(value, 16, 64)
+	return parsed, err == nil
+}
+
+func resolveCSSValue(value string, vars map[string]string) string {
+	value = strings.TrimSpace(value)
+	re := regexp.MustCompile(`var\(\s*(--[A-Za-z0-9_-]+)(?:\s*,\s*([^)]+))?\)`)
+	for i := 0; i < 8; i++ {
+		changed := false
+		value = re.ReplaceAllStringFunc(value, func(token string) string {
+			match := re.FindStringSubmatch(token)
+			if len(match) < 2 {
+				return token
+			}
+			if replacement, ok := vars[match[1]]; ok {
+				changed = true
+				return replacement
+			}
+			if len(match) > 2 && strings.TrimSpace(match[2]) != "" {
+				changed = true
+				return strings.TrimSpace(match[2])
+			}
+			return token
+		})
+		if !changed {
+			break
+		}
+	}
+	return value
+}
+
+func stripCSSImportant(value string) string {
+	return strings.TrimSpace(strings.ReplaceAll(value, "!important", ""))
+}
+
+func isLargeText(fontSize, fontWeight float64) bool {
+	return fontSize >= 24 || (fontSize >= 18.66 && fontWeight >= 700)
+}
+
+func contrastRatio(fg, bg rgbColor) float64 {
+	l1 := relativeLuminance(fg)
+	l2 := relativeLuminance(bg)
+	if l2 > l1 {
+		l1, l2 = l2, l1
+	}
+	return (l1 + 0.05) / (l2 + 0.05)
+}
+
+func relativeLuminance(c rgbColor) float64 {
+	r := luminanceChannel(c.R / 255)
+	g := luminanceChannel(c.G / 255)
+	b := luminanceChannel(c.B / 255)
+	return 0.2126*r + 0.7152*g + 0.0722*b
+}
+
+func luminanceChannel(v float64) float64 {
+	if v <= 0.03928 {
+		return v / 12.92
+	}
+	return math.Pow((v+0.055)/1.055, 2.4)
 }
 
 func editorialRenderFindings(htmlSlides []slideInfo, pngs []string, manifest renderManifest, pdfPages int, manifestPath, renderedDir, pdfPath string) []qaFinding {

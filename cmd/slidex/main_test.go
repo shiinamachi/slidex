@@ -359,10 +359,12 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 func TestEditorialHTMLFindingsEnforceStructureTypeAndA11y(t *testing.T) {
 	html := `<!doctype html><html lang="ko"><head><style>
 body { font-family: Arial, sans-serif; text-align: justify; }
+.message { color: #777777; background: #777777; font-size: 12px; }
 </style></head><body><main class="deck">
 <section class="slide" id="slide_01" data-slide-id="slide_01">
   <h2>첫 번째 제목</h2>
   <h2>두 번째 제목</h2>
+  <p class="message">작은 저대비 본문</p>
   <table><tr><td>35%</td></tr></table>
   <img src="chart.png">
 </section>
@@ -375,7 +377,7 @@ body { font-family: Arial, sans-serif; text-align: justify; }
 		},
 	}
 	findings := editorialHTMLFindings("final_deck.html", html, spec, slides)
-	for _, check := range []string{"ED-TYPE-001", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-A11Y-002"} {
+	for _, check := range []string{"ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-A11Y-002"} {
 		if !hasFindingCheck(findings, check) {
 			t.Fatalf("expected %s finding, got %#v", check, findings)
 		}

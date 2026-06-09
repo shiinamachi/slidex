@@ -42,6 +42,8 @@ of the editorial policy:
 - `ED-STRUCT-003`: each non-appendix slide needs a takeaway or reader question.
 - `ED-HIER-001`: competing primary headlines on one non-appendix slide fail.
 - `ED-TYPE-001`: Korean documents must use a Korean-capable font stack.
+- `ED-TYPE-002`: explicit body, table, chart, footer, source, and caption font
+  sizes must meet the policy minimums.
 - `ED-TYPE-003`: full justification fails without an explicit exception.
 - `ED-COPY-001` and `ED-COPY-002`: copy length and bullet density are checked
   against `editorialDesignPolicy.copyLimits`; appendix relaxation is allowed
@@ -51,6 +53,8 @@ of the editorial policy:
   and period metadata; unsupported superlative or guarantee language fails.
 - `ED-DATAVIZ-001` and `ED-DATAVIZ-002`: charts and tables require a title or
   caption and a source line.
+- `ED-A11Y-001`: explicit text/background color pairs must meet 4.5:1 normal
+  text or 3:1 large text contrast thresholds unless policy overrides them.
 - `ED-A11Y-002`: meaningful images require alt text, `aria-label`, or
   decorative marking.
 - `ED-RENDER-001`, `ED-RENDER-002`, and `ED-RENDER-003`: rendered PNG/PDF
@@ -60,8 +64,8 @@ of the editorial policy:
   before package handoff.
 
 Manual visual inspection is still required for alignment drift, clipping,
-contrast nuance, chart semantics, and final PDF review until those checks have
-dedicated automated evidence.
+non-explicit inherited contrast nuance, chart semantics, and final PDF review
+until those checks have dedicated automated evidence.
 
 ## Typography And Korean Copy
 
