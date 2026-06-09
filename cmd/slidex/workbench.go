@@ -86,13 +86,17 @@ type workbenchBrowserEvidence struct {
 	SchemaVersion       string              `json:"schemaVersion"`
 	ToolName            string              `json:"toolName"`
 	ToolVersion         string              `json:"toolVersion"`
+	CodexVersion        string              `json:"codexVersion"`
+	PluginName          string              `json:"pluginName"`
+	PluginVersion       string              `json:"pluginVersion"`
 	DeckID              string              `json:"deckId"`
 	DeckDir             string              `json:"deckDir"`
 	Status              string              `json:"status"`
 	RecordedAt          string              `json:"recordedAt"`
 	Inspector           string              `json:"inspector"`
 	Surface             string              `json:"surface"`
-	Invocation          string              `json:"invocation,omitempty"`
+	Invocation          string              `json:"invocation"`
+	ThreadID            string              `json:"threadId,omitempty"`
 	URL                 string              `json:"url"`
 	SessionID           string              `json:"sessionId"`
 	ServerBind          string              `json:"serverBind"`
@@ -126,6 +130,7 @@ type workbenchBrowserEvidenceInput struct {
 	Inspector          string
 	Surface            string
 	Invocation         string
+	ThreadID           string
 	URL                string
 	WorkbenchVisible   bool
 	SavedInputVerified bool
@@ -255,6 +260,7 @@ func runWorkbenchEvidence(args []string) error {
 	inspector := fs.String("inspector", "", "person or role that inspected the Codex App browser surface")
 	surface := fs.String("surface", "codex_app_in_app_browser", "browser surface: codex_app_in_app_browser or codex_browser_plugin")
 	invocation := fs.String("invocation", "", "plugin invocation used, for example @slidex create a deck")
+	threadID := fs.String("thread-id", "", "Codex App thread id if visible")
 	observedURL := fs.String("url", "", "workbench URL observed in the Codex App browser")
 	workbenchVisible := fs.Bool("workbench-visible", false, "confirm the workbench UI was visible in the browser surface")
 	savedInputVerified := fs.Bool("saved-input-verified", false, "confirm saved deck creation input was verified")
@@ -266,6 +272,7 @@ func runWorkbenchEvidence(args []string) error {
 		Inspector:          *inspector,
 		Surface:            *surface,
 		Invocation:         *invocation,
+		ThreadID:           *threadID,
 		URL:                *observedURL,
 		WorkbenchVisible:   *workbenchVisible,
 		SavedInputVerified: *savedInputVerified,
@@ -1027,6 +1034,35 @@ func writeWorkbenchDraft(deckAbs string, input workbenchSaveInput, status string
 	return draft, nil
 }
 
+func localPluginVersion() string {
+	path := ""
+	if cwd, err := os.Getwd(); err == nil {
+		for current := cwd; ; current = filepath.Dir(current) {
+			candidate := filepath.Join(current, "plugins", "slidex", ".codex-plugin", "plugin.json")
+			if _, err := os.Stat(candidate); err == nil {
+				path = candidate
+				break
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+		}
+	}
+	if path == "" {
+		path = filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(manifest["version"]))
+}
+
 func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbenchBrowserEvidenceInput) (workbenchBrowserEvidence, error) {
 	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
 	if err != nil {
@@ -1057,6 +1093,9 @@ func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbe
 		SchemaVersion:       "slidex.workbenchBrowserEvidence.v1",
 		ToolName:            toolName,
 		ToolVersion:         toolVersion,
+		CodexVersion:        firstNonEmpty(installedCodexVersion(), "unavailable"),
+		PluginName:          "slidex",
+		PluginVersion:       firstNonEmpty(localPluginVersion(), "unavailable"),
 		DeckID:              manifest.DeckID,
 		DeckDir:             manifest.DeckDir,
 		Status:              "verified",
@@ -1064,6 +1103,7 @@ func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbe
 		Inspector:           strings.TrimSpace(input.Inspector),
 		Surface:             strings.TrimSpace(input.Surface),
 		Invocation:          strings.TrimSpace(input.Invocation),
+		ThreadID:            strings.TrimSpace(input.ThreadID),
 		URL:                 strings.TrimSpace(input.URL),
 		SessionID:           manifest.SessionID,
 		ServerBind:          manifest.ServerBind,
@@ -1140,6 +1180,18 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBr
 	}
 	if evidence.Status != "verified" {
 		addFinding("browser evidence status is %q", evidence.Status)
+	}
+	if strings.TrimSpace(evidence.CodexVersion) == "" || evidence.CodexVersion == "unavailable" {
+		addFinding("browser evidence codexVersion is %q", evidence.CodexVersion)
+	}
+	if evidence.PluginName != "slidex" {
+		addFinding("browser evidence pluginName is %q", evidence.PluginName)
+	}
+	if strings.TrimSpace(evidence.PluginVersion) == "" || evidence.PluginVersion == "unavailable" {
+		addFinding("browser evidence pluginVersion is %q", evidence.PluginVersion)
+	}
+	if !strings.Contains(strings.ToLower(evidence.Invocation), "slidex") {
+		addFinding("browser evidence invocation must name slidex, got %q", evidence.Invocation)
 	}
 	if evidence.DeckID != filepath.Base(deckAbs) {
 		addFinding("browser evidence deckId is %q, want %q", evidence.DeckID, filepath.Base(deckAbs))
@@ -1244,6 +1296,13 @@ func validateWorkbenchBrowserEvidenceInput(input workbenchBrowserEvidenceInput, 
 	surface := strings.TrimSpace(input.Surface)
 	if surface != "codex_app_in_app_browser" && surface != "codex_browser_plugin" {
 		return fmt.Errorf("--surface must be codex_app_in_app_browser or codex_browser_plugin, got %q", surface)
+	}
+	invocation := strings.TrimSpace(input.Invocation)
+	if invocation == "" {
+		return errors.New("--invocation is required and must describe the @slidex or slidex-start plugin call")
+	}
+	if !strings.Contains(strings.ToLower(invocation), "slidex") {
+		return fmt.Errorf("--invocation must name slidex, got %q", invocation)
 	}
 	observedURL := strings.TrimSpace(input.URL)
 	if observedURL == "" {

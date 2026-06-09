@@ -315,6 +315,12 @@ func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
 	if evidence.Status != "verified" || !evidence.WorkbenchVisible || !evidence.SavedInputVerified {
 		t.Fatalf("unexpected browser evidence: %#v", evidence)
 	}
+	if evidence.CodexVersion == "" || evidence.PluginName != "slidex" || evidence.PluginVersion == "" {
+		t.Fatalf("evidence omitted codex/plugin runtime fields: %#v", evidence)
+	}
+	if evidence.Invocation != "@slidex create a deck called demo" {
+		t.Fatalf("evidence invocation = %q", evidence.Invocation)
+	}
 	evidencePath := filepath.Join(deck, "out", workbenchBrowserEvidenceName)
 	raw := readFileOrEmpty(evidencePath)
 	if !strings.Contains(raw, "codex_app_in_app_browser") {
@@ -361,6 +367,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {
 	if _, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
 		Inspector:          "QA",
 		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
 		URL:                manifest.URL,
 		WorkbenchVisible:   true,
 		SavedInputVerified: true,
@@ -401,6 +408,7 @@ func TestWorkbenchBrowserEvidenceRequiresCurrentSavedArtifacts(t *testing.T) {
 	_, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
 		Inspector:          "QA",
 		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
 		URL:                manifest.URL,
 		WorkbenchVisible:   true,
 		SavedInputVerified: true,
@@ -416,6 +424,7 @@ func TestWorkbenchBrowserEvidenceRequiresCurrentSavedArtifacts(t *testing.T) {
 	_, err = recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
 		Inspector:          "QA",
 		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
 		URL:                "http://127.0.0.1:9999/workbench/wrong",
 		WorkbenchVisible:   true,
 		SavedInputVerified: true,

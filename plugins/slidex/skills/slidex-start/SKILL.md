@@ -17,7 +17,7 @@ Use this as the default slidex plugin entry point.
 5. Open the returned URL in the Codex App in-app browser by clicking it or asking `@Browser` to navigate to it. Public Codex 0.138.0 docs do not expose a plugin-owned arbitrary Canvas mount API.
 6. Have the user enter deck title, audience, decision goal, source notes, and output expectations in the workbench.
 7. Verify `decks/<deck_id>/brief.md`, `decks/<deck_id>/out/workbench_draft.json`, and `decks/<deck_id>/out/workbench_manifest.json` are written.
-8. After the Codex App browser surface has actually been inspected, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --url "<workbench.url>" --workbench-visible --saved-input-verified` to write `decks/<deck_id>/out/workbench_browser_evidence.json`.
+8. After the Codex App browser surface has actually been inspected, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --workbench-visible --saved-input-verified` to write `decks/<deck_id>/out/workbench_browser_evidence.json`.
 9. Run `slidex workbench verify-evidence --deck-id <deck_id>` before treating the browser evidence as current.
 
 Do not run the full render, QA, or package workflow during startup unless the user asks for it.

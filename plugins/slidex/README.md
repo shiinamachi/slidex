@@ -23,14 +23,18 @@ slidex workbench evidence --deck-id <deck_id> \
   --inspector "<name-or-role>" \
   --surface codex_app_in_app_browser \
   --invocation "@slidex create a deck called <deck_id>" \
+  --thread-id "<codex-app-thread-id-if-visible>" \
   --url "http://127.0.0.1:<port>/workbench/<session>" \
   --workbench-visible \
   --saved-input-verified
 ```
 
-This writes `decks/<deck_id>/out/workbench_browser_evidence.json`. Do not claim
-the Codex App browser/work-surface path has passed until this evidence reflects
-an actual inspection.
+`--invocation` is required and must describe the actual `@slidex` or
+`slidex-start` plugin call. `--thread-id` should be recorded when the Codex App
+thread id is visible. This writes
+`decks/<deck_id>/out/workbench_browser_evidence.json`. Do not claim the Codex
+App browser/work-surface path has passed until this evidence reflects an actual
+inspection.
 
 After recording the evidence, verify it still matches the current deck-local
 artifacts:

@@ -7,12 +7,16 @@
     "schemaVersion",
     "toolName",
     "toolVersion",
+    "codexVersion",
+    "pluginName",
+    "pluginVersion",
     "deckId",
     "deckDir",
     "status",
     "recordedAt",
     "inspector",
     "surface",
+    "invocation",
     "url",
     "sessionId",
     "serverBind",
@@ -37,6 +41,18 @@
       "const": "slidex"
     },
     "toolVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "codexVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pluginName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "pluginVersion": {
       "type": "string",
       "minLength": 1
     },
@@ -65,7 +81,12 @@
       "enum": ["codex_app_in_app_browser", "codex_browser_plugin"]
     },
     "invocation": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
+    },
+    "threadId": {
+      "type": "string",
+      "minLength": 1
     },
     "url": {
       "type": "string",

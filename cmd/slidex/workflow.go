@@ -440,7 +440,7 @@ func workbenchDoctorSnapshot() map[string]any {
 		"schemaOpenPageActionScope":    "web_search_action_only",
 		"proprietaryCanvasMountAPI":    "not_claimed",
 		"browserEvidenceRequired":      true,
-		"browserEvidenceCommand":       "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --url <workbench.url> --workbench-visible --saved-input-verified",
+		"browserEvidenceCommand":       "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --workbench-visible --saved-input-verified",
 		"browserEvidenceVerifyCommand": "slidex workbench verify-evidence --deck-id <deck_id>",
 	}
 }
@@ -476,6 +476,9 @@ func doctorWorkbenchFindings() []qaFinding {
 		SchemaVersion:       "slidex.workbenchBrowserEvidence.v1",
 		ToolName:            toolName,
 		ToolVersion:         toolVersion,
+		CodexVersion:        requiredCodexVersion,
+		PluginName:          "slidex",
+		PluginVersion:       "0.1.0+doctor",
 		DeckID:              manifest.DeckID,
 		DeckDir:             manifest.DeckDir,
 		Status:              "verified",
