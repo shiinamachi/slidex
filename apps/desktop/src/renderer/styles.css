@@ -73,20 +73,23 @@ button {
   gap: 8px;
 }
 
-.nav-list button {
+.nav-list a {
+  display: inline-flex;
   width: 100%;
   min-height: 42px;
+  align-items: center;
   border: 0;
   border-radius: 8px;
   padding: 0 14px;
   color: #d7dee4;
   background: transparent;
+  text-decoration: none;
   text-align: left;
   cursor: pointer;
 }
 
-.nav-list button:hover,
-.nav-list button.active {
+.nav-list a:hover,
+.nav-list a.active {
   color: #ffffff;
   background: #2c3c47;
 }
@@ -190,6 +193,10 @@ p {
   display: grid;
   grid-template-columns: 1.4fr repeat(2, minmax(220px, 0.8fr));
   gap: 18px;
+}
+
+.panel-grid.two-column {
+  grid-template-columns: minmax(320px, 1.2fr) minmax(260px, 0.8fr);
 }
 
 .panel {

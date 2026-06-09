@@ -15,9 +15,9 @@ mise exec -- slidex init customer-retention
 
 ## 런타임 준비
 
-Go와 Node 런타임은 mise로 exact pin합니다. 현재 Go 핀은 `.mise.toml`과
-`go.mod`의 `go` 지시문에 기록된 `1.26.3`이고, Electron 보일러플레이트용
-Node 핀은 `.mise.toml`의 `24.16.0`입니다.
+Go와 Node 런타임 및 Electron 보일러플레이트용 pnpm은 mise로 exact pin합니다.
+현재 Go 핀은 `.mise.toml`과 `go.mod`의 `go` 지시문에 기록된 `1.26.3`이고,
+Node 핀은 `.mise.toml`의 `24.16.0`, pnpm 핀은 `11.5.2`입니다.
 
 ```bash
 mise install
@@ -89,10 +89,10 @@ preload IPC, Vite + React renderer, TypeScript build, packaging 설정만 포함
 
 ```bash
 cd apps/desktop
-mise exec -- npm install
-mise exec -- npm run dev
-mise exec -- npm run typecheck
-mise exec -- npm run build
+mise exec -- pnpm install
+mise exec -- pnpm run dev
+mise exec -- pnpm run typecheck
+mise exec -- pnpm run build
 ```
 
 ## 설치와 배포

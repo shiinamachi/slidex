@@ -80,7 +80,7 @@ artifact is a deck-local `out/final_deck.pdf`.
   remove that deck afterward.
 - For render or PDF changes, verify current HTML renders to PNG/PDF and that
   `slidex qa` / `slidex package` still reflect freshness accurately.
-- For desktop changes, run the relevant `apps/desktop` npm typecheck/build
+- For desktop changes, run the relevant `apps/desktop` pnpm typecheck/build
   commands with mise.
 
 ## CLI Product Contract
