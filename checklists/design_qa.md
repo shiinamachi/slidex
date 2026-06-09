@@ -47,6 +47,8 @@ of the editorial policy:
 - `ED-GRID-003`: render clipping or overflow evidence, including an incomplete
   clipping probe, blocks QA.
 - `ED-HIER-001`: competing primary headlines on one non-appendix slide fail.
+- `ED-HIER-002`: explicit type sizes above
+  `editorialDesignPolicy.maxTypeSizePx` are reported.
 - `ED-TYPE-001`: Korean documents must use a Korean-capable font stack.
 - `ED-TYPE-002`: explicit body, table, chart, footer, source, and caption font
   sizes must meet the policy minimums.
@@ -57,6 +59,8 @@ of the editorial policy:
 - `ED-COPY-001` and `ED-COPY-002`: copy length and bullet density are checked
   against `editorialDesignPolicy.copyLimits`; appendix relaxation is allowed
   only when the policy says so.
+- `ED-COPY-003`: decision asks must include an actor, action, and decision
+  target when the editorial profile requires a decision.
 - `ED-CLAIM-001`, `ED-CLAIM-002`, and `ED-CLAIM-003`: material claims require
   source, user confirmation, or assumption labeling; metric claims require unit
   and period metadata; unsupported superlative or guarantee language fails.

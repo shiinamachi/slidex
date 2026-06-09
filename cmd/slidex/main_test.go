@@ -314,6 +314,10 @@ func hasFindingCheck(findings []qaFinding, needle string) bool {
 
 func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 	spec := map[string]any{
+		"editorialProfile": map[string]any{
+			"decisionRequirement": "decision",
+			"requestedDecision":   "승인",
+		},
 		"editorialDesignPolicy": map[string]any{
 			"appendixRelaxationAllowed": false,
 			"copyLimits": map[string]any{
@@ -353,7 +357,7 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 		},
 	}
 	findings := editorialSpecFindings(spec, "deck_spec.json")
-	for _, check := range []string{"ED-STRUCT-003", "ED-COPY-002", "ED-TYPE-004", "ED-CLAIM-001", "ED-CLAIM-002", "ED-CLAIM-003"} {
+	for _, check := range []string{"ED-STRUCT-003", "ED-COPY-002", "ED-COPY-003", "ED-TYPE-004", "ED-CLAIM-001", "ED-CLAIM-002", "ED-CLAIM-003"} {
 		if !hasFindingCheck(findings, check) {
 			t.Fatalf("expected %s finding, got %#v", check, findings)
 		}
@@ -413,6 +417,7 @@ func TestEditorialHTMLFindingsEnforceStructureTypeAndA11y(t *testing.T) {
 	html := `<!doctype html><html lang="ko"><head><style>
 body { font-family: Arial, sans-serif; text-align: justify; }
 .slide { padding: 8px; }
+h1 { font-size: 96px; }
 .body { display: grid; gap: 15px; }
 .message { color: #777777; background: #777777; font-size: 12px; }
 </style></head><body><main class="deck">
@@ -433,7 +438,7 @@ body { font-family: Arial, sans-serif; text-align: justify; }
 		},
 	}
 	findings := editorialHTMLFindings("final_deck.html", html, spec, slides)
-	for _, check := range []string{"ED-GRID-001", "ED-GRID-002", "ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-DATAVIZ-003", "ED-DATAVIZ-004", "ED-DATAVIZ-005", "ED-A11Y-002", "ED-A11Y-003"} {
+	for _, check := range []string{"ED-GRID-001", "ED-GRID-002", "ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-HIER-002", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-DATAVIZ-003", "ED-DATAVIZ-004", "ED-DATAVIZ-005", "ED-A11Y-002", "ED-A11Y-003"} {
 		if !hasFindingCheck(findings, check) {
 			t.Fatalf("expected %s finding, got %#v", check, findings)
 		}

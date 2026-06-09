@@ -553,6 +553,7 @@ func editorialSpecFindings(obj map[string]any, path string) []qaFinding {
 			appendixRelaxed = relaxed
 		}
 	}
+	findings = append(findings, editorialDecisionAskFindings(obj, path)...)
 	if slides, ok := obj["slides"].([]any); ok {
 		for i, rawSlide := range slides {
 			slide, _ := rawSlide.(map[string]any)
@@ -607,6 +608,54 @@ func editorialSpecFindings(obj map[string]any, path string) []qaFinding {
 		}
 	}
 	return findings
+}
+
+func editorialDecisionAskFindings(obj map[string]any, path string) []qaFinding {
+	profile, _ := obj["editorialProfile"].(map[string]any)
+	if profile == nil || strings.ToLower(stringValue(profile["decisionRequirement"])) != "decision" {
+		return nil
+	}
+	ask := stringValue(profile["requestedDecision"])
+	if ask == "" {
+		return nil
+	}
+	var missing []string
+	if !decisionAskHasActor(ask) {
+		missing = append(missing, "actor")
+	}
+	if !decisionAskHasAction(ask) {
+		missing = append(missing, "action")
+	}
+	if !decisionAskHasTarget(ask) {
+		missing = append(missing, "decision target")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return []qaFinding{{
+		Severity: "warn",
+		Check:    "ED-COPY-003",
+		Message:  "decision ask should include actor, action, and decision target; missing " + strings.Join(missing, ", "),
+		Path:     path,
+	}}
+}
+
+func decisionAskHasActor(ask string) bool {
+	return regexp.MustCompile(`(?i)\b(ceo|cfo|cro|board|executive|leadership|committee|owner|sponsor|client|customer|government|team)\b`).MatchString(ask) ||
+		regexp.MustCompile(`(?i)(임원진|경영진|이사회|위원회|리더십|승인권자|의사결정자|책임자|담당자|고객|정부|기관|조직|팀)\s*(이|가|은|는)`).MatchString(ask)
+}
+
+func decisionAskHasAction(ask string) bool {
+	return regexp.MustCompile(`(?i)(approve|decide|choose|select|accept|reject|prioriti[sz]e|align|confirm|direct|defer)`).MatchString(ask) ||
+		regexp.MustCompile(`(승인|결정|선택|채택|합의|확정|지시|보류|우선순위|착수)`).MatchString(ask)
+}
+
+func decisionAskHasTarget(ask string) bool {
+	if runeLen(ask) < 12 {
+		return false
+	}
+	return regexp.MustCompile(`(?i)(plan|proposal|priority|budget|scope|roadmap|target|kpi|investment|timeline|policy|program|launch|execution|recommendation)`).MatchString(ask) ||
+		regexp.MustCompile(`(계획|제안|우선순위|예산|범위|로드맵|목표|투자|일정|정책|프로그램|출시|실행|방향|판단|근거|행동|안건|KPI)`).MatchString(ask)
 }
 
 func editorialHTMLFindings(htmlPath, htmlString string, spec map[string]any, slides []slideInfo) []qaFinding {
@@ -829,6 +878,7 @@ type editorialCSSPolicy struct {
 	ContrastLarge    float64
 	MinBodyFontPx    float64
 	MinCaptionFontPx float64
+	MaxTypeSizePx    float64
 	SafeMarginPx     float64
 	GridGutterPx     float64
 	SpacingScalePx   float64
@@ -870,6 +920,9 @@ func editorialCSSFindings(htmlPath, htmlString string, spec map[string]any) []qa
 			minFont := minFontPxForSelector(rule.Selector, policy)
 			if fontSize < minFont {
 				findings = append(findings, fail("ED-TYPE-002", fmt.Sprintf("%s font-size %.1fpx is below %.1fpx minimum", strings.TrimSpace(rule.Selector), fontSize, minFont), htmlPath))
+			}
+			if policy.MaxTypeSizePx > 0 && fontSize > policy.MaxTypeSizePx {
+				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-HIER-002", Message: fmt.Sprintf("%s font-size %.1fpx exceeds %.1fpx policy type scale", strings.TrimSpace(rule.Selector), fontSize, policy.MaxTypeSizePx), Path: htmlPath})
 			}
 		}
 		textColor := inheritedText
@@ -989,7 +1042,7 @@ func editorialGridFindings(htmlPath string, rules []cssRule, vars map[string]str
 }
 
 func editorialCSSPolicyFromSpec(spec map[string]any) editorialCSSPolicy {
-	policy := editorialCSSPolicy{ContrastNormal: 4.5, ContrastLarge: 3.0, MinBodyFontPx: 24, MinCaptionFontPx: 18, SafeMarginPx: 96, GridGutterPx: 64, SpacingScalePx: 8}
+	policy := editorialCSSPolicy{ContrastNormal: 4.5, ContrastLarge: 3.0, MinBodyFontPx: 24, MinCaptionFontPx: 18, MaxTypeSizePx: 72, SafeMarginPx: 96, GridGutterPx: 64, SpacingScalePx: 8}
 	if spec == nil {
 		return policy
 	}
@@ -1005,6 +1058,9 @@ func editorialCSSPolicyFromSpec(spec map[string]any) editorialCSSPolicy {
 	}
 	if n, ok := numberAsFloat(rawPolicy["minCaptionFontPx"]); ok {
 		policy.MinCaptionFontPx = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["maxTypeSizePx"]); ok {
+		policy.MaxTypeSizePx = n
 	}
 	if n, ok := numberAsFloat(rawPolicy["safeMarginPx"]); ok {
 		policy.SafeMarginPx = n

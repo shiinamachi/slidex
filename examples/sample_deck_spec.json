@@ -30,7 +30,7 @@
     "primaryReader": "CEO",
     "decisionQuestion": "고객 유지율 개선을 위해 다음 90일 동안 어떤 투자 우선순위를 승인해야 하는가?",
     "decisionRequirement": "decision",
-    "requestedDecision": "90일 실행 계획과 운영 KPI 개선 방향 승인",
+    "requestedDecision": "CEO가 90일 실행 계획과 운영 KPI 개선 방향을 승인한다.",
     "keyConclusion": "이탈 방어는 다음 두 분기 성장 안정화를 위한 우선 실행 영역이다.",
     "evidenceMode": "mixed",
     "notes": "정량 효과는 source가 없으면 방향성 가정으로만 표현한다."
@@ -138,6 +138,7 @@
     "safeMarginPx": 96,
     "gridGutterPx": 64,
     "spacingScalePx": 8,
+    "maxTypeSizePx": 72,
     "minBodyFontPx": 24,
     "minCaptionFontPx": 18,
     "contrastNormal": 4.5,
