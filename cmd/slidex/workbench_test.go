@@ -855,6 +855,34 @@ func TestWorkbenchReadyValidatesSessionDeckAndPID(t *testing.T) {
 	}
 }
 
+func TestWorkbenchLoopbackContractRejectsNonCanonicalHosts(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	if manifest.Host != "127.0.0.1" || manifest.ServerBind != "127.0.0.1" || !strings.HasPrefix(manifest.URL, "http://127.0.0.1:") {
+		t.Fatalf("manifest must advertise exact 127.0.0.1 loopback contract: %#v", manifest)
+	}
+	for _, host := range []string{"localhost", "0.0.0.0", "::1"} {
+		candidate := manifest
+		candidate.Host = host
+		if isWorkbenchReady(candidate) {
+			t.Fatalf("isWorkbenchReady accepted non-canonical host %q", host)
+		}
+	}
+	badURL := manifest
+	badURL.URL = strings.Replace(manifest.URL, "127.0.0.1", "localhost", 1)
+	err := validateWorkbenchBrowserEvidenceInput(workbenchBrowserEvidenceInput{
+		Inspector:          "QA",
+		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
+		URL:                badURL.URL,
+		WorkbenchVisible:   true,
+		SavedInputVerified: true,
+	}, badURL)
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("localhost browser evidence URL should be rejected, got %v", err)
+	}
+}
+
 func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
