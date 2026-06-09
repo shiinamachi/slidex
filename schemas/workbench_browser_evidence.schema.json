@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.workbench_browser_evidence.schema.json",
+  "title": "slidex Workbench Browser Evidence",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "toolName",
+    "toolVersion",
+    "deckId",
+    "deckDir",
+    "status",
+    "recordedAt",
+    "inspector",
+    "surface",
+    "url",
+    "sessionId",
+    "serverBind",
+    "workbenchVisible",
+    "savedInputVerified",
+    "tokenRedacted",
+    "browserOpenStrategy",
+    "manifestPath",
+    "briefPath",
+    "draftPath",
+    "evidencePath",
+    "verifiedFiles"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "slidex.workbenchBrowserEvidence.v1"
+    },
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "toolVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deckId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deckDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "const": "verified"
+    },
+    "recordedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inspector": {
+      "type": "string",
+      "minLength": 1
+    },
+    "surface": {
+      "type": "string",
+      "enum": ["codex_app_in_app_browser", "codex_browser_plugin"]
+    },
+    "invocation": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^http://127\\.0\\.0\\.1:[0-9]+/workbench/[^/?#]+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "serverBind": {
+      "type": "string",
+      "const": "127.0.0.1"
+    },
+    "workbenchVisible": {
+      "type": "boolean",
+      "const": true
+    },
+    "savedInputVerified": {
+      "type": "boolean",
+      "const": true
+    },
+    "tokenRedacted": {
+      "type": "boolean",
+      "const": true
+    },
+    "browserOpenStrategy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notes": {
+      "type": "string"
+    },
+    "manifestPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "briefPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "draftPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidencePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedFiles": {
+      "type": "object",
+      "required": ["brief", "draft", "manifest"],
+      "additionalProperties": false,
+      "properties": {
+        "brief": {"$ref": "#/$defs/artifact"},
+        "draft": {"$ref": "#/$defs/artifact"},
+        "manifest": {"$ref": "#/$defs/artifact"}
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["path", "sha256", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

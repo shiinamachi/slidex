@@ -118,7 +118,7 @@ slidex package --deck decks/customer-retention
 제공 명령:
 
 - `workbench`: Codex Plugin에서 쓰는 deck creation workbench를 `127.0.0.1` loopback
-  서버로 시작, 상태 확인, 중지합니다.
+  서버로 시작, 상태 확인, 중지하고 Codex App browser evidence를 기록합니다.
 - `run`: 표준 workflow를 package gate까지 실행합니다.
 - `doctor`: Go, Chrome, Codex CLI, protocol schema, skill/plugin 경로를 점검합니다.
 - `intake`, `strategy`, `spec`, `build`, `finalize`: 표준 stage 산출물을 생성합니다.
@@ -157,6 +157,22 @@ loopback URL을 반환합니다. Workbench 저장은 `brief.md`와
 `out/workbench_draft.json`, `out/workbench_manifest.json`에만 기록됩니다. 저장 API는
 session-scoped URL 아래에서만 노출되며, mutating request는
 `X-Slidex-Workbench-Token`과 Origin/Referer 검증을 통과해야 합니다.
+
+Codex App browser/work-surface를 실제로 확인한 뒤에는 다음 명령으로 deck-local
+검증 증거를 남깁니다. 이 증거가 없으면 Codex App browser 표시가 검증됐다고 주장하지
+않습니다.
+
+```bash
+slidex workbench evidence --deck-id customer-retention \
+  --inspector "<name-or-role>" \
+  --surface codex_app_in_app_browser \
+  --invocation "@slidex create a deck called customer-retention" \
+  --url "<workbench.url>" \
+  --workbench-visible \
+  --saved-input-verified
+```
+
+증거는 `decks/customer-retention/out/workbench_browser_evidence.json`에 기록됩니다.
 
 plugin MCP 설정은 PATH의 `slidex` binary를 실행합니다. repo 소스 변경 후 Codex App에서
 plugin을 검증하려면 먼저 현재 소스를 설치합니다.

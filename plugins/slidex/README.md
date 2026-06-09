@@ -15,6 +15,22 @@ The Go CLI remains the implementation source of truth.
 6. Verify `decks/<deck_id>/brief.md` and
    `decks/<deck_id>/out/workbench_draft.json` plus
    `decks/<deck_id>/out/workbench_manifest.json`.
+7. After actually inspecting the Codex App browser surface, record deck-local
+   evidence:
+
+```bash
+slidex workbench evidence --deck-id <deck_id> \
+  --inspector "<name-or-role>" \
+  --surface codex_app_in_app_browser \
+  --invocation "@slidex create a deck called <deck_id>" \
+  --url "http://127.0.0.1:<port>/workbench/<session>" \
+  --workbench-visible \
+  --saved-input-verified
+```
+
+This writes `decks/<deck_id>/out/workbench_browser_evidence.json`. Do not claim
+the Codex App browser/work-surface path has passed until this evidence reflects
+an actual inspection.
 
 The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires
 `X-Slidex-Workbench-Token` for writes, and records only token hashes in

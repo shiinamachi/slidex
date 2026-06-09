@@ -278,6 +278,105 @@ func TestWorkbenchLogRejectsSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "evidence-token"
+	input := workbenchSaveInput{Title: "Demo", Audience: "Board", DecisionGoal: "Approve pilot"}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", token, 43210, 123, "running")
+	if _, err := writeWorkbenchDraft(deck, input, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkbenchBrief(deck, input); err != nil {
+		t.Fatal(err)
+	}
+	manifest.InputSavedAt = "2026-06-09T00:00:00Z"
+	manifest.BriefPath = filepath.ToSlash(filepath.Join(deck, "brief.md"))
+	manifest.DraftPath = filepath.ToSlash(filepath.Join(deck, "out", workbenchDraftName))
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	evidence, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
+		Inspector:          "QA",
+		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
+		URL:                manifest.URL,
+		WorkbenchVisible:   true,
+		SavedInputVerified: true,
+		Notes:              "Codex App browser showed the slidex workbench.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != "verified" || !evidence.WorkbenchVisible || !evidence.SavedInputVerified {
+		t.Fatalf("unexpected browser evidence: %#v", evidence)
+	}
+	evidencePath := filepath.Join(deck, "out", workbenchBrowserEvidenceName)
+	raw := readFileOrEmpty(evidencePath)
+	if !strings.Contains(raw, "codex_app_in_app_browser") {
+		t.Fatalf("evidence did not record surface: %s", raw)
+	}
+	if strings.Contains(raw, token) {
+		t.Fatalf("browser evidence leaked raw token: %s", raw)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join(repoRootForTest(t), "schemas", "workbench_browser_evidence.schema.json")); err != nil {
+		t.Fatal(err)
+	}
+	status, err := workbenchStatus(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := publicWorkbenchStatus(status)
+	if public["browserEvidence"] != filepath.ToSlash(evidencePath) {
+		t.Fatalf("status omitted browser evidence path: %#v", public)
+	}
+}
+
+func TestWorkbenchBrowserEvidenceRequiresCurrentSavedArtifacts(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 43210, 123, "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	_, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
+		Inspector:          "QA",
+		Surface:            "codex_app_in_app_browser",
+		URL:                manifest.URL,
+		WorkbenchVisible:   true,
+		SavedInputVerified: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "saved input") {
+		t.Fatalf("expected missing saved input error, got %v", err)
+	}
+
+	manifest.InputSavedAt = "2026-06-09T00:00:00Z"
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	_, err = recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
+		Inspector:          "QA",
+		Surface:            "codex_app_in_app_browser",
+		URL:                "http://127.0.0.1:9999/workbench/wrong",
+		WorkbenchVisible:   true,
+		SavedInputVerified: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected URL mismatch error, got %v", err)
+	}
+}
+
 func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	root := repoRootForTest(t)
 	workspace := t.TempDir()

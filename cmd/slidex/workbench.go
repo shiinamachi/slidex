@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	workbenchManifestName = "workbench_manifest.json"
-	workbenchDraftName    = "workbench_draft.json"
+	workbenchManifestName        = "workbench_manifest.json"
+	workbenchDraftName           = "workbench_draft.json"
+	workbenchBrowserEvidenceName = "workbench_browser_evidence.json"
 )
 
 var deckIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -81,6 +82,42 @@ type workbenchDraft struct {
 	Input         workbenchSaveInput `json:"input"`
 }
 
+type workbenchBrowserEvidence struct {
+	SchemaVersion       string              `json:"schemaVersion"`
+	ToolName            string              `json:"toolName"`
+	ToolVersion         string              `json:"toolVersion"`
+	DeckID              string              `json:"deckId"`
+	DeckDir             string              `json:"deckDir"`
+	Status              string              `json:"status"`
+	RecordedAt          string              `json:"recordedAt"`
+	Inspector           string              `json:"inspector"`
+	Surface             string              `json:"surface"`
+	Invocation          string              `json:"invocation,omitempty"`
+	URL                 string              `json:"url"`
+	SessionID           string              `json:"sessionId"`
+	ServerBind          string              `json:"serverBind"`
+	WorkbenchVisible    bool                `json:"workbenchVisible"`
+	SavedInputVerified  bool                `json:"savedInputVerified"`
+	TokenRedacted       bool                `json:"tokenRedacted"`
+	BrowserOpenStrategy string              `json:"browserOpenStrategy"`
+	Notes               string              `json:"notes,omitempty"`
+	ManifestPath        string              `json:"manifestPath"`
+	BriefPath           string              `json:"briefPath"`
+	DraftPath           string              `json:"draftPath"`
+	EvidencePath        string              `json:"evidencePath"`
+	VerifiedFiles       map[string]artifact `json:"verifiedFiles"`
+}
+
+type workbenchBrowserEvidenceInput struct {
+	Inspector          string
+	Surface            string
+	Invocation         string
+	URL                string
+	WorkbenchVisible   bool
+	SavedInputVerified bool
+	Notes              string
+}
+
 type workbenchSaveInput struct {
 	Title              string `json:"title"`
 	Audience           string `json:"audience"`
@@ -91,7 +128,7 @@ type workbenchSaveInput struct {
 
 func runWorkbench(args []string) error {
 	if len(args) == 0 {
-		return exitCodeError(2, "usage: slidex workbench start|serve|status|stop")
+		return exitCodeError(2, "usage: slidex workbench start|serve|status|stop|evidence")
 	}
 	switch args[0] {
 	case "start":
@@ -102,6 +139,8 @@ func runWorkbench(args []string) error {
 		return runWorkbenchStatus(args[1:])
 	case "stop":
 		return runWorkbenchStop(args[1:])
+	case "evidence":
+		return runWorkbenchEvidence(args[1:])
 	default:
 		return exitCodeError(2, "unknown workbench command: %s", args[0])
 	}
@@ -190,6 +229,36 @@ func runWorkbenchStop(args []string) error {
 		return err
 	}
 	return printJSON(map[string]any{"toolName": toolName, "workbench": publicWorkbenchStatus(manifest), "status": manifest.Status})
+}
+
+func runWorkbenchEvidence(args []string) error {
+	fs := flag.NewFlagSet("workbench evidence", flag.ContinueOnError)
+	workspace := fs.String("workspace", ".", "workspace root containing decks/")
+	deckID := fs.String("deck-id", "", "deck id")
+	deck := fs.String("deck", "", "existing deck workspace directory")
+	inspector := fs.String("inspector", "", "person or role that inspected the Codex App browser surface")
+	surface := fs.String("surface", "codex_app_in_app_browser", "browser surface: codex_app_in_app_browser or codex_browser_plugin")
+	invocation := fs.String("invocation", "", "plugin invocation used, for example @slidex create a deck")
+	observedURL := fs.String("url", "", "workbench URL observed in the Codex App browser")
+	workbenchVisible := fs.Bool("workbench-visible", false, "confirm the workbench UI was visible in the browser surface")
+	savedInputVerified := fs.Bool("saved-input-verified", false, "confirm saved deck creation input was verified")
+	notes := fs.String("notes", "", "short inspection notes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	evidence, err := recordWorkbenchBrowserEvidence(*workspace, *deckID, *deck, workbenchBrowserEvidenceInput{
+		Inspector:          *inspector,
+		Surface:            *surface,
+		Invocation:         *invocation,
+		URL:                *observedURL,
+		WorkbenchVisible:   *workbenchVisible,
+		SavedInputVerified: *savedInputVerified,
+		Notes:              *notes,
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"toolName": toolName, "status": evidence.Status, "evidence": evidence, "evidencePath": evidence.EvidencePath})
 }
 
 func callMCPDeckBootstrap(args map[string]any) (any, error) {
@@ -922,8 +991,109 @@ func writeWorkbenchDraft(deckAbs string, input workbenchSaveInput, status string
 	return draft, nil
 }
 
+func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbenchBrowserEvidenceInput) (workbenchBrowserEvidence, error) {
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	if err != nil {
+		return workbenchBrowserEvidence{}, err
+	}
+	manifest, ok := readWorkbenchManifest(deckAbs)
+	if !ok {
+		return workbenchBrowserEvidence{}, fmt.Errorf("workbench manifest is required before recording browser evidence: %s", filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName)))
+	}
+	if err := validateWorkbenchBrowserEvidenceInput(input, manifest); err != nil {
+		return workbenchBrowserEvidence{}, err
+	}
+	briefPath := filepath.Join(deckAbs, "brief.md")
+	draftPath := filepath.Join(deckAbs, "out", workbenchDraftName)
+	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
+	evidencePath := filepath.Join(deckAbs, "out", workbenchBrowserEvidenceName)
+	if strings.TrimSpace(manifest.InputSavedAt) == "" {
+		return workbenchBrowserEvidence{}, errors.New("workbench manifest does not show saved input; save the workbench form before recording browser evidence")
+	}
+	for _, path := range []string{briefPath, draftPath, manifestPath} {
+		if info, err := os.Stat(path); err != nil {
+			return workbenchBrowserEvidence{}, fmt.Errorf("required saved workbench artifact is missing: %s: %w", filepath.ToSlash(path), err)
+		} else if info.IsDir() {
+			return workbenchBrowserEvidence{}, fmt.Errorf("required saved workbench artifact is a directory: %s", filepath.ToSlash(path))
+		}
+	}
+	evidence := workbenchBrowserEvidence{
+		SchemaVersion:       "slidex.workbenchBrowserEvidence.v1",
+		ToolName:            toolName,
+		ToolVersion:         toolVersion,
+		DeckID:              manifest.DeckID,
+		DeckDir:             manifest.DeckDir,
+		Status:              "verified",
+		RecordedAt:          time.Now().UTC().Format(time.RFC3339),
+		Inspector:           strings.TrimSpace(input.Inspector),
+		Surface:             strings.TrimSpace(input.Surface),
+		Invocation:          strings.TrimSpace(input.Invocation),
+		URL:                 strings.TrimSpace(input.URL),
+		SessionID:           manifest.SessionID,
+		ServerBind:          manifest.ServerBind,
+		WorkbenchVisible:    input.WorkbenchVisible,
+		SavedInputVerified:  input.SavedInputVerified,
+		TokenRedacted:       manifest.TokenRedacted,
+		BrowserOpenStrategy: manifest.BrowserOpenStrategy,
+		Notes:               strings.TrimSpace(input.Notes),
+		ManifestPath:        filepath.ToSlash(manifestPath),
+		BriefPath:           filepath.ToSlash(briefPath),
+		DraftPath:           filepath.ToSlash(draftPath),
+		EvidencePath:        filepath.ToSlash(evidencePath),
+		VerifiedFiles: map[string]artifact{
+			"brief":    artifactFromPath(briefPath),
+			"draft":    artifactFromPath(draftPath),
+			"manifest": artifactFromPath(manifestPath),
+		},
+	}
+	if err := secureWriteJSON(evidencePath, evidence); err != nil {
+		return workbenchBrowserEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func validateWorkbenchBrowserEvidenceInput(input workbenchBrowserEvidenceInput, manifest workbenchManifest) error {
+	if strings.TrimSpace(input.Inspector) == "" {
+		return errors.New("--inspector is required")
+	}
+	surface := strings.TrimSpace(input.Surface)
+	if surface != "codex_app_in_app_browser" && surface != "codex_browser_plugin" {
+		return fmt.Errorf("--surface must be codex_app_in_app_browser or codex_browser_plugin, got %q", surface)
+	}
+	observedURL := strings.TrimSpace(input.URL)
+	if observedURL == "" {
+		return errors.New("--url is required")
+	}
+	if observedURL != manifest.URL {
+		return fmt.Errorf("observed URL does not match current workbench manifest URL: got %s want %s", observedURL, manifest.URL)
+	}
+	parsed, err := url.Parse(observedURL)
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" {
+		return fmt.Errorf("workbench browser evidence URL must be an http://127.0.0.1 loopback URL: %s", observedURL)
+	}
+	if !input.WorkbenchVisible {
+		return errors.New("--workbench-visible is required after inspecting the Codex App browser surface")
+	}
+	if !input.SavedInputVerified {
+		return errors.New("--saved-input-verified is required after checking saved deck-local artifacts")
+	}
+	if manifest.ServerBind != "127.0.0.1" || manifest.Host != "127.0.0.1" {
+		return errors.New("workbench manifest must bind and advertise 127.0.0.1 before browser evidence can be recorded")
+	}
+	if !manifest.TokenRedacted || manifest.TokenSHA256 == "" {
+		return errors.New("workbench manifest must redact the write token before browser evidence can be recorded")
+	}
+	if manifest.SessionID == "" {
+		return errors.New("workbench manifest is missing session id")
+	}
+	return nil
+}
+
 func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
-	return map[string]any{
+	status := map[string]any{
 		"status":              manifest.Status,
 		"deckId":              manifest.DeckID,
 		"deckDir":             manifest.DeckDir,
@@ -938,6 +1108,11 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"browserOpenStrategy": manifest.BrowserOpenStrategy,
 		"manifest":            filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
 	}
+	evidencePath := filepath.Join(manifest.OutDir, workbenchBrowserEvidenceName)
+	if _, err := os.Stat(evidencePath); err == nil {
+		status["browserEvidence"] = filepath.ToSlash(evidencePath)
+	}
+	return status
 }
 
 func chooseLoopbackPort() (int, error) {

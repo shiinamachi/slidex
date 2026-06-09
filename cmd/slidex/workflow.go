@@ -464,6 +464,38 @@ func doctorWorkbenchFindings() []qaFinding {
 			findings = append(findings, fail("doctor.workbench_paths", "generated workbench state must stay under deck out/: "+name, "cmd/slidex/workbench.go"))
 		}
 	}
+	schemaPath := filepath.Join("schemas", "workbench_browser_evidence.schema.json")
+	evidence := workbenchBrowserEvidence{
+		SchemaVersion:       "slidex.workbenchBrowserEvidence.v1",
+		ToolName:            toolName,
+		ToolVersion:         toolVersion,
+		DeckID:              manifest.DeckID,
+		DeckDir:             manifest.DeckDir,
+		Status:              "verified",
+		RecordedAt:          time.Now().UTC().Format(time.RFC3339),
+		Inspector:           "doctor",
+		Surface:             "codex_app_in_app_browser",
+		Invocation:          "@slidex create a deck called doctor-workbench-contract",
+		URL:                 manifest.URL,
+		SessionID:           manifest.SessionID,
+		ServerBind:          manifest.ServerBind,
+		WorkbenchVisible:    true,
+		SavedInputVerified:  true,
+		TokenRedacted:       manifest.TokenRedacted,
+		BrowserOpenStrategy: manifest.BrowserOpenStrategy,
+		ManifestPath:        filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName)),
+		BriefPath:           filepath.ToSlash(filepath.Join(deckAbs, "brief.md")),
+		DraftPath:           filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName)),
+		EvidencePath:        filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchBrowserEvidenceName)),
+		VerifiedFiles: map[string]artifact{
+			"brief":    {Path: filepath.ToSlash(filepath.Join(deckAbs, "brief.md")), SHA256: strings.Repeat("a", 64), Size: 1},
+			"draft":    {Path: filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName)), SHA256: strings.Repeat("b", 64), Size: 1},
+			"manifest": {Path: filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName)), SHA256: strings.Repeat("c", 64), Size: 1},
+		},
+	}
+	if err := validatePayloadAgainstSchema(evidence, schemaPath); err != nil {
+		findings = append(findings, fail("doctor.workbench_browser_evidence_schema", err.Error(), schemaPath))
+	}
 	return findings
 }
 
