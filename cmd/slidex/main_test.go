@@ -1066,6 +1066,25 @@ func TestAppServerPluginSmokeHelpers(t *testing.T) {
 	}
 }
 
+func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
+	snapshot := workbenchDoctorSnapshot()
+	if snapshot["browserOpenMechanism"] != "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin" {
+		t.Fatalf("unexpected browser open mechanism: %#v", snapshot)
+	}
+	if snapshot["directBrowserOpenRequestAPI"] != "not_found_in_codex_app_server_0.138.0" {
+		t.Fatalf("doctor snapshot should not claim a direct browser-open request API: %#v", snapshot)
+	}
+	if snapshot["schemaOpenPageActionScope"] != "web_search_action_only" {
+		t.Fatalf("doctor snapshot should scope openPage to web search actions: %#v", snapshot)
+	}
+	if snapshot["proprietaryCanvasMountAPI"] != "not_claimed" {
+		t.Fatalf("doctor snapshot must not claim proprietary canvas mount support: %#v", snapshot)
+	}
+	if snapshot["browserEvidenceRequired"] != true {
+		t.Fatalf("doctor snapshot must require actual browser evidence: %#v", snapshot)
+	}
+}
+
 func TestRepoConfigAllowsOnlyPluginSmokeMCPToolCall(t *testing.T) {
 	root := repoRootForTest(t)
 	path := filepath.Join(root, "slidex.toml")

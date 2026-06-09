@@ -432,9 +432,16 @@ func pluginDoctorSnapshot(pluginList string) map[string]any {
 
 func workbenchDoctorSnapshot() map[string]any {
 	return map[string]any{
-		"mode":    "loopback",
-		"status":  "available",
-		"command": "slidex workbench start --deck-id <deck_id>",
+		"mode":                         "loopback",
+		"status":                       "available",
+		"command":                      "slidex workbench start --deck-id <deck_id>",
+		"browserOpenMechanism":         "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin",
+		"directBrowserOpenRequestAPI":  "not_found_in_codex_app_server_0.138.0",
+		"schemaOpenPageActionScope":    "web_search_action_only",
+		"proprietaryCanvasMountAPI":    "not_claimed",
+		"browserEvidenceRequired":      true,
+		"browserEvidenceCommand":       "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --url <workbench.url> --workbench-visible --saved-input-verified",
+		"browserEvidenceVerifyCommand": "slidex workbench verify-evidence --deck-id <deck_id>",
 	}
 }
 

@@ -77,7 +77,8 @@ Official Codex docs confirm plugins, bundled skills, bundled MCP servers, and
 the Codex App in-app browser for local development URLs. The generated Codex
 App Server `0.138.0` schema does not expose a documented plugin-owned arbitrary
 Canvas mount API or a client request method that directly opens the Codex App
-browser from a plugin.
+browser from a plugin. The schema's `openPage` / `open_page` entries are Web
+Search actions, not a plugin workbench browser-open request contract.
 
 Therefore slidex uses a Canvas-style local workbench: the plugin starts a
 loopback frontend server and returns a local URL for the supported Codex App

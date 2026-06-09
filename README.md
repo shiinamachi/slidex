@@ -196,9 +196,10 @@ slidex codex app-server plugin-smoke --workspace /tmp/slidex-plugin-smoke --deck
 ```
 
 Codex 0.138.0 공개 문서와 생성 App Server schema에는 plugin-owned arbitrary Canvas
-mount 또는 직접 browser-open request API가 확인되지 않았습니다. 따라서 slidex는
-proprietary Canvas API를 주장하지 않고, 공식 in-app browser 경로인 URL 클릭, 수동
-navigation, 또는 Browser plugin navigation을 사용합니다.
+mount 또는 plugin이 Codex App browser를 직접 여는 request API가 확인되지 않았습니다.
+schema의 `openPage`/`open_page` 항목은 Web Search action 범위로 해석됩니다. 따라서
+slidex는 proprietary Canvas API를 주장하지 않고, 공식 in-app browser 경로인 URL 클릭,
+수동 navigation, 또는 Browser plugin navigation을 사용합니다.
 
 ## Desktop Tombstone
 
