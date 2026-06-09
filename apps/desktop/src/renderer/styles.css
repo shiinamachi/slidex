@@ -1,11 +1,51 @@
 @import "tailwindcss";
 
+@theme static {
+  --font-sans:
+    Inter, Pretendard, "Noto Sans KR", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --color-canvas: #f7f8fb;
+  --color-canvas-soft: #eef1f6;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-surface-raised: #ffffff;
+  --color-border: #e4e7ec;
+  --color-border-strong: #c9d0dc;
+
+  --color-ink: #171a21;
+  --color-ink-muted: #5d6676;
+  --color-ink-subtle: #8992a3;
+  --color-ink-inverse: #ffffff;
+
+  --color-accent: #fd79a8;
+  --color-accent-soft: #fff0f6;
+  --color-accent-muted: #ffd3e3;
+  --color-accent-strong: #c82363;
+  --color-accent-ink: #300817;
+
+  --color-state-info: #2563eb;
+  --color-state-info-soft: #eff6ff;
+  --color-state-success: #12805c;
+  --color-state-success-soft: #ecfdf5;
+  --color-state-warning: #b45309;
+  --color-state-warning-soft: #fffbeb;
+  --color-state-danger: #dc2626;
+  --color-state-danger-soft: #fef2f2;
+
+  --radius-ui: 8px;
+  --radius-panel: 8px;
+  --radius-control: 6px;
+
+  --shadow-panel: 0 14px 44px rgb(21 27 38 / 8%);
+  --shadow-control: 0 1px 2px rgb(21 27 38 / 10%);
+}
+
 :root {
-  color: #172026;
-  background: #f4f1ea;
-  font-family:
-    Inter, Pretendard, "Noto Sans KR", system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  color-scheme: light;
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   word-break: keep-all;
@@ -20,12 +60,28 @@
 
 body {
   margin: 0;
-  min-width: 960px;
   min-height: 100vh;
+  background: var(--color-canvas);
 }
 
 button {
+  border: 0;
   font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+#root {
+  min-height: 100vh;
 }
 
 .desktop-root {
