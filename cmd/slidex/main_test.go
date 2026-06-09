@@ -1066,6 +1066,78 @@ func TestAppServerPluginSmokeHelpers(t *testing.T) {
 	}
 }
 
+func TestAppServerSkillSmokeHelpers(t *testing.T) {
+	skills := map[string]any{
+		"skills": []any{
+			map[string]any{"name": "other:skill", "path": "/tmp/other/SKILL.md"},
+			map[string]any{
+				"name": "slidex:slidex-start",
+				"metadata": map[string]any{
+					"path": "/home/me/.codex/plugins/cache/slidex/skills/slidex-start/SKILL.md",
+				},
+			},
+		},
+	}
+	path, ok := findSkillPathInSkillsList(skills, "slidex:slidex-start")
+	if !ok {
+		t.Fatal("expected slidex skill path to be found")
+	}
+	if !strings.HasSuffix(path, "skills/slidex-start/SKILL.md") {
+		t.Fatalf("unexpected skill path: %q", path)
+	}
+	if _, ok := findSkillPathInSkillsList(skills, "slidex:missing"); ok {
+		t.Fatal("missing skill should not be found")
+	}
+
+	command := appServerSkillSmokeWorkbenchCommand("/tmp/slidex workspace", "demo", "/repo/decks/_template")
+	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
+		t.Fatalf("command was not shell quoted as expected: %s", command)
+	}
+	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
+	if !strings.Contains(prompt, "Do not run render, QA, package") {
+		t.Fatalf("prompt must keep skill smoke scoped: %s", prompt)
+	}
+	if !isLoopbackWorkbenchURL("http://127.0.0.1:49152/workbench/session") {
+		t.Fatal("expected loopback workbench URL to pass")
+	}
+	if isLoopbackWorkbenchURL("http://localhost:49152/workbench/session") {
+		t.Fatal("localhost should not satisfy the 127.0.0.1 bind contract")
+	}
+
+	result := appServerSkillSmokeResult{
+		PluginReadOK:                    true,
+		SkillFound:                      true,
+		TurnSandboxPolicy:               "dangerFullAccess",
+		TurnStatus:                      "completed",
+		DeckCreated:                     true,
+		ManifestExists:                  true,
+		StartStatus:                     "running",
+		StopStatus:                      "stopped",
+		ServerBind:                      "127.0.0.1",
+		TokenRedacted:                   true,
+		ProprietaryCanvasAPI:            "not_used",
+		IsActualCodexAppBrowserEvidence: false,
+		WorkbenchURL:                    "http://127.0.0.1:49152/workbench/session",
+	}
+	if status := appServerSkillSmokeStatus(result); status != "pass" {
+		t.Fatalf("status = %q, want pass", status)
+	}
+	result.IsActualCodexAppBrowserEvidence = true
+	if status := appServerSkillSmokeStatus(result); status != "fail" {
+		t.Fatalf("actual browser evidence flag must not pass skill smoke: %q", status)
+	}
+	events := summarizeAppServerEventsForEvidence([]map[string]any{
+		{"method": "turn/started", "params": map[string]any{"token": "secret-value"}},
+		{"method": "turn/completed"},
+	})
+	if events["count"] != 2 {
+		t.Fatalf("unexpected event count summary: %#v", events)
+	}
+	if raw, _ := json.Marshal(events); strings.Contains(string(raw), "secret-value") {
+		t.Fatalf("event summary leaked secret: %s", raw)
+	}
+}
+
 func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	snapshot := workbenchDoctorSnapshot()
 	if snapshot["browserOpenMechanism"] != "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin" {

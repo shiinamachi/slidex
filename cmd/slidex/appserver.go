@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +15,10 @@ import (
 	"time"
 )
 
-const appServerPluginSmokeName = "app_server_plugin_smoke.json"
+const (
+	appServerPluginSmokeName = "app_server_plugin_smoke.json"
+	appServerSkillSmokeName  = "app_server_skill_smoke.json"
+)
 
 type appServerClient struct {
 	cmd    *exec.Cmd
@@ -79,6 +83,45 @@ type appServerPluginSmokeResult struct {
 	BrowserOpenStrategy  string         `json:"browserOpenStrategy,omitempty"`
 	ProprietaryCanvasAPI string         `json:"proprietaryCanvasApi,omitempty"`
 	Checks               map[string]any `json:"checks"`
+}
+
+type appServerSkillSmokeResult struct {
+	SchemaVersion                   string         `json:"schemaVersion"`
+	ToolName                        string         `json:"toolName"`
+	ToolVersion                     string         `json:"toolVersion"`
+	Status                          string         `json:"status"`
+	Error                           string         `json:"error,omitempty"`
+	GeneratedAt                     string         `json:"generatedAt"`
+	CodexVersion                    string         `json:"codexVersion"`
+	Workspace                       string         `json:"workspace"`
+	DeckID                          string         `json:"deckId"`
+	DeckDir                         string         `json:"deckDir"`
+	ThreadID                        string         `json:"threadId,omitempty"`
+	TurnID                          string         `json:"turnId,omitempty"`
+	TurnStatus                      string         `json:"turnStatus,omitempty"`
+	SkillName                       string         `json:"skillName"`
+	SkillPath                       string         `json:"skillPath,omitempty"`
+	SkillFound                      bool           `json:"skillFound"`
+	PluginReadOK                    bool           `json:"pluginReadOk"`
+	TurnSandboxPolicy               string         `json:"turnSandboxPolicy"`
+	WorkbenchCommand                string         `json:"workbenchCommand"`
+	PromptSha256                    string         `json:"promptSha256"`
+	FinalMessage                    string         `json:"finalMessage,omitempty"`
+	EventCount                      int            `json:"eventCount"`
+	DeckCreated                     bool           `json:"deckCreated"`
+	ManifestExists                  bool           `json:"manifestExists"`
+	ManifestPath                    string         `json:"manifestPath"`
+	EvidencePath                    string         `json:"evidencePath"`
+	WorkbenchURL                    string         `json:"workbenchUrl,omitempty"`
+	ServerBind                      string         `json:"serverBind,omitempty"`
+	SessionID                       string         `json:"sessionId,omitempty"`
+	StartStatus                     string         `json:"startStatus,omitempty"`
+	StopStatus                      string         `json:"stopStatus,omitempty"`
+	TokenRedacted                   bool           `json:"tokenRedacted"`
+	BrowserOpenStrategy             string         `json:"browserOpenStrategy,omitempty"`
+	ProprietaryCanvasAPI            string         `json:"proprietaryCanvasApi"`
+	IsActualCodexAppBrowserEvidence bool           `json:"isActualCodexAppBrowserEvidence"`
+	Checks                          map[string]any `json:"checks"`
 }
 
 func newAppServerClient() (*appServerClient, error) {
@@ -726,6 +769,313 @@ func appServerWorkbenchPluginSmoke(workspace, deckID string) (appServerPluginSmo
 	return result, nil
 }
 
+func appServerWorkbenchSkillSmoke(workspace, deckID string) (result appServerSkillSmokeResult, err error) {
+	workspace = workspaceRoot(workspace)
+	if err := validateDeckID(deckID); err != nil {
+		return appServerSkillSmokeResult{}, err
+	}
+	if err := ensureSmokeWorkspaceTemplate(workspace); err != nil {
+		return appServerSkillSmokeResult{}, err
+	}
+	deckAbs := filepath.Join(workspace, "decks", deckID)
+	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
+	evidencePath := filepath.Join(deckAbs, "out", appServerSkillSmokeName)
+	repoTemplate := mustAbs(filepath.Join("decks", "_template"))
+	command := appServerSkillSmokeWorkbenchCommand(workspace, deckID, repoTemplate)
+	prompt := appServerSkillSmokePrompt(workspace, deckID, command)
+	result = appServerSkillSmokeResult{
+		SchemaVersion:                   "slidex.appServerSkillSmoke.v1",
+		ToolName:                        toolName,
+		ToolVersion:                     toolVersion,
+		Status:                          "fail",
+		GeneratedAt:                     time.Now().UTC().Format(time.RFC3339),
+		CodexVersion:                    installedCodexVersion(),
+		Workspace:                       filepath.ToSlash(workspace),
+		DeckID:                          deckID,
+		DeckDir:                         filepath.ToSlash(deckAbs),
+		SkillName:                       "slidex:slidex-start",
+		TurnSandboxPolicy:               "dangerFullAccess",
+		WorkbenchCommand:                command,
+		PromptSha256:                    sha256Bytes([]byte(prompt)),
+		ManifestPath:                    filepath.ToSlash(manifestPath),
+		EvidencePath:                    filepath.ToSlash(evidencePath),
+		ProprietaryCanvasAPI:            "not_used",
+		IsActualCodexAppBrowserEvidence: false,
+		Checks:                          map[string]any{"actualCodexAppBrowserEvidence": false, "turnSandboxPolicy": "dangerFullAccess"},
+	}
+	defer func() {
+		if stopErr := finalizeAppServerSkillSmoke(workspace, deckID, deckAbs, &result); stopErr != nil {
+			result.Checks["workbenchStopError"] = stopErr.Error()
+			if err == nil {
+				err = stopErr
+			}
+		}
+		if err != nil {
+			result.Error = err.Error()
+		}
+		result.Status = appServerSkillSmokeStatus(result)
+		if writeErr := secureWriteJSON(evidencePath, result); writeErr != nil && err == nil {
+			err = writeErr
+		}
+	}()
+
+	client, err := newAppServerClient()
+	if err != nil {
+		return result, err
+	}
+	defer client.close()
+	if _, _, err := client.request("initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "slidex", "title": "slidex CLI", "version": toolVersion},
+		"capabilities": map[string]any{"experimentalApi": true},
+	}, 10*time.Second); err != nil {
+		return result, err
+	}
+	if err := client.notify("initialized", nil); err != nil {
+		return result, err
+	}
+	pluginResp, _, err := client.request("plugin/read", map[string]any{
+		"pluginName":      "slidex",
+		"marketplacePath": mustAbs(filepath.Join(".agents", "plugins", "marketplace.json")),
+	}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	result.PluginReadOK = pluginResp["result"] != nil
+	result.Checks["pluginRead"] = summarizeJSONForEvidence(pluginResp["result"])
+
+	skillsResp, _, err := client.request("skills/list", map[string]any{"cwds": []string{mustAbs(".")}, "forceReload": true}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	skillPath, found := findSkillPathInSkillsList(skillsResp["result"], result.SkillName)
+	if found && !filepath.IsAbs(skillPath) {
+		skillPath = mustAbs(skillPath)
+	}
+	result.SkillFound = found
+	result.SkillPath = filepath.ToSlash(skillPath)
+	result.Checks["skillsList"] = map[string]any{
+		"containsSkill": result.SkillFound,
+		"skillName":     result.SkillName,
+		"skillPath":     result.SkillPath,
+	}
+	if !result.SkillFound {
+		return result, fmt.Errorf("installed Codex skill %q was not found in skills/list", result.SkillName)
+	}
+
+	threadResp, _, err := client.request("thread/start", map[string]any{
+		"cwd":                   mustAbs("."),
+		"approvalPolicy":        "never",
+		"sandbox":               "workspace-write",
+		"serviceName":           "slidex-skill-smoke",
+		"model":                 defaultCodexModel(),
+		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), workspace}),
+	}, 20*time.Second)
+	if err != nil {
+		return result, err
+	}
+	result.ThreadID = extractThreadID(threadResp["result"])
+	if result.ThreadID == "" {
+		return result, errors.New("app-server thread/start did not return a thread id")
+	}
+
+	input := []map[string]any{
+		{"type": "skill", "name": result.SkillName, "path": skillPath},
+		{"type": "text", "text": prompt},
+	}
+	turnResp, events, err := client.request("turn/start", map[string]any{
+		"threadId":              result.ThreadID,
+		"cwd":                   mustAbs("."),
+		"approvalPolicy":        "never",
+		"sandboxPolicy":         map[string]any{"type": result.TurnSandboxPolicy},
+		"model":                 defaultCodexModel(),
+		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), workspace}),
+		"input":                 input,
+	}, 30*time.Second)
+	result.EventCount += len(events)
+	result.Checks["turnStartEvents"] = summarizeAppServerEventsForEvidence(events)
+	if err != nil {
+		return result, err
+	}
+	result.TurnID = extractTurnID(turnResp["result"])
+	result.Checks["turnStart"] = summarizeJSONForEvidence(turnResp["result"])
+	if result.TurnID == "" {
+		return result, errors.New("app-server turn/start did not return a turn id")
+	}
+	events, completion, err := client.waitForTurnCompletion(result.ThreadID, result.TurnID, 6*time.Minute)
+	result.EventCount += len(events)
+	result.Checks["turnEvents"] = summarizeAppServerEventsForEvidence(events)
+	result.Checks["turnCompletion"] = summarizeJSONForEvidence(completion)
+	if err != nil {
+		return result, err
+	}
+	if actualTurnID := turnIDFromCompletion(completion); actualTurnID != "" {
+		result.TurnID = actualTurnID
+	}
+	result.TurnStatus = turnStatus(completion)
+	if result.TurnStatus != "completed" {
+		return result, fmt.Errorf("app-server skill smoke turn %s did not complete successfully: status=%s error=%v", result.TurnID, result.TurnStatus, turnError(completion))
+	}
+
+	readResp, readEvents, readErr := client.request("thread/read", map[string]any{"threadId": result.ThreadID, "includeTurns": true}, 20*time.Second)
+	result.EventCount += len(readEvents)
+	if readErr != nil {
+		result.Checks["threadReadError"] = readErr.Error()
+	} else {
+		result.FinalMessage = limitEvidenceString(extractFinalAgentTextFromThreadRead(readResp["result"], result.TurnID), 1200)
+		result.Checks["threadRead"] = map[string]any{"available": true, "finalMessageFound": result.FinalMessage != ""}
+	}
+	turnsResp, turnsEvents, turnsErr := client.request("thread/turns/list", map[string]any{"threadId": result.ThreadID, "itemsView": "full", "limit": 20, "sortDirection": "desc"}, 20*time.Second)
+	result.EventCount += len(turnsEvents)
+	if turnsErr != nil {
+		result.Checks["turnsListError"] = turnsErr.Error()
+	} else {
+		if result.FinalMessage == "" {
+			result.FinalMessage = limitEvidenceString(extractFinalAgentTextFromTurnsList(turnsResp["result"], result.TurnID), 1200)
+		}
+		result.Checks["turnsList"] = map[string]any{"available": true, "finalMessageFound": result.FinalMessage != ""}
+	}
+
+	if info, statErr := os.Stat(deckAbs); statErr == nil && info.IsDir() {
+		result.DeckCreated = true
+	}
+	manifest, statusErr := workbenchStatus(workspace, deckID, "")
+	if statusErr != nil {
+		return result, statusErr
+	}
+	result.ManifestExists = manifest.URL != ""
+	result.StartStatus = manifest.Status
+	result.WorkbenchURL = manifest.URL
+	result.ServerBind = manifest.ServerBind
+	result.SessionID = manifest.SessionID
+	result.TokenRedacted = manifest.TokenRedacted
+	result.BrowserOpenStrategy = manifest.BrowserOpenStrategy
+	result.Checks["workbenchManifestBeforeStop"] = summarizeJSONForEvidence(manifest)
+	return result, nil
+}
+
+func finalizeAppServerSkillSmoke(workspace, deckID, deckAbs string, result *appServerSkillSmokeResult) error {
+	manifest, ok := readWorkbenchManifest(deckAbs)
+	if !ok {
+		return nil
+	}
+	result.ManifestExists = true
+	if result.WorkbenchURL == "" {
+		result.WorkbenchURL = manifest.URL
+	}
+	if result.ServerBind == "" {
+		result.ServerBind = manifest.ServerBind
+	}
+	if result.SessionID == "" {
+		result.SessionID = manifest.SessionID
+	}
+	if !result.TokenRedacted {
+		result.TokenRedacted = manifest.TokenRedacted
+	}
+	if result.BrowserOpenStrategy == "" {
+		result.BrowserOpenStrategy = manifest.BrowserOpenStrategy
+	}
+	stopped, err := stopWorkbench(workspace, deckID, "")
+	if err != nil {
+		return err
+	}
+	result.StopStatus = stopped.Status
+	result.Checks["workbenchStop"] = summarizeJSONForEvidence(stopped)
+	return nil
+}
+
+func appServerSkillSmokeStatus(result appServerSkillSmokeResult) string {
+	if result.PluginReadOK &&
+		result.SkillFound &&
+		result.TurnSandboxPolicy == "dangerFullAccess" &&
+		result.TurnStatus == "completed" &&
+		result.DeckCreated &&
+		result.ManifestExists &&
+		result.StartStatus == "running" &&
+		result.StopStatus == "stopped" &&
+		result.ServerBind == "127.0.0.1" &&
+		result.TokenRedacted &&
+		result.ProprietaryCanvasAPI == "not_used" &&
+		!result.IsActualCodexAppBrowserEvidence &&
+		isLoopbackWorkbenchURL(result.WorkbenchURL) {
+		return "pass"
+	}
+	return "fail"
+}
+
+func appServerSkillSmokeWorkbenchCommand(workspace, deckID, fromTemplate string) string {
+	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s --from-template %s", shellQuote(workspace), shellQuote(deckID), shellQuote(fromTemplate))
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.IndexFunc(s, func(r rune) bool {
+		return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && !strings.ContainsRune("@%_+=:,./-", r)
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func appServerSkillSmokePrompt(workspace, deckID, command string) string {
+	return fmt.Sprintf("Use the installed slidex-start skill. Create or select deck %q in workspace %q. Run exactly this command and no other slidex workflow commands: %s. Do not run render, QA, package, workbench evidence, or browser inspection. When the command completes, reply with the workbench URL and deck path only.", deckID, workspace, command)
+}
+
+func findSkillPathInSkillsList(v any, skillName string) (string, bool) {
+	if obj, ok := v.(map[string]any); ok {
+		if name, _ := obj["name"].(string); name == skillName {
+			if path := skillPathFromObject(obj); path != "" {
+				return path, true
+			}
+		}
+		for _, value := range obj {
+			if path, ok := findSkillPathInSkillsList(value, skillName); ok {
+				return path, true
+			}
+		}
+	}
+	if items, ok := v.([]any); ok {
+		for _, item := range items {
+			if path, ok := findSkillPathInSkillsList(item, skillName); ok {
+				return path, true
+			}
+		}
+	}
+	return "", false
+}
+
+func skillPathFromObject(obj map[string]any) string {
+	for _, key := range []string{"path", "skillPath", "sourcePath", "file"} {
+		if value, _ := obj[key].(string); strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	for _, value := range obj {
+		if nested, ok := value.(map[string]any); ok {
+			if path := skillPathFromObject(nested); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+func isLoopbackWorkbenchURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "http" && parsed.Hostname() == "127.0.0.1" && strings.HasPrefix(parsed.Path, "/workbench/")
+}
+
+func limitEvidenceString(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "..."
+}
+
 func ensureSmokeWorkspaceTemplate(workspace string) error {
 	template := filepath.Join(workspace, "decks", "_template")
 	if _, err := os.Stat(template); err == nil {
@@ -804,6 +1154,24 @@ func summarizeJSONForEvidence(v any) any {
 		return map[string]any{"sha256": sha256Bytes(raw), "bytes": len(raw), "redacted": true}
 	}
 	return out
+}
+
+func summarizeAppServerEventsForEvidence(events []map[string]any) map[string]any {
+	methods := map[string]int{}
+	for _, event := range events {
+		method, _ := event["method"].(string)
+		if method == "" {
+			method = "unknown"
+		}
+		methods[method]++
+	}
+	raw, _ := json.Marshal(redactSecretsInAny(events))
+	return map[string]any{
+		"count":   len(events),
+		"methods": methods,
+		"bytes":   len(raw),
+		"sha256":  sha256Bytes(raw),
+	}
 }
 
 func extractThreadID(v any) string {

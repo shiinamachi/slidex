@@ -1667,7 +1667,7 @@ func runCodexExec(args []string) error {
 
 func runCodexAppServer(args []string) error {
 	if len(args) == 0 {
-		return exitCodeError(2, "usage: slidex codex app-server <start|status|stop|probe|plugin-smoke>")
+		return exitCodeError(2, "usage: slidex codex app-server <start|status|stop|probe|plugin-smoke|skill-smoke>")
 	}
 	switch args[0] {
 	case "probe":
@@ -1709,6 +1709,28 @@ func runCodexAppServer(args []string) error {
 		if result.Status != "pass" {
 			_ = printJSON(payload)
 			return exitCodeError(4, "App Server plugin smoke did not pass")
+		}
+		return printJSON(payload)
+	case "skill-smoke":
+		if err := enforceDirectCodexRuntime("app-server"); err != nil {
+			return err
+		}
+		fs := flag.NewFlagSet("codex app-server skill-smoke", flag.ContinueOnError)
+		workspace := fs.String("workspace", ".", "workspace root containing decks/")
+		deckID := fs.String("deck-id", "appserver-skill-smoke", "deck id to create for the smoke run")
+		jsonOut := fs.Bool("json", false, "emit JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		_ = jsonOut
+		result, err := appServerWorkbenchSkillSmoke(*workspace, *deckID)
+		if err != nil {
+			return err
+		}
+		payload := map[string]any{"toolName": toolName, "status": result.Status, "smoke": result, "evidencePath": result.EvidencePath}
+		if result.Status != "pass" {
+			_ = printJSON(payload)
+			return exitCodeError(4, "App Server skill smoke did not pass")
 		}
 		return printJSON(payload)
 	case "start":
