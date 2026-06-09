@@ -11,12 +11,14 @@
     "objective",
     "desiredOutcome",
     "tone",
+    "editorialProfile",
     "sourceInventory",
     "intakeStatus",
     "outputContract",
     "renderConfig",
     "pdfConfig",
     "designSystem",
+    "editorialDesignPolicy",
     "storyArc",
     "slides",
     "claimProvenance",
@@ -63,6 +65,29 @@
     "objective": {"type": "string", "minLength": 1},
     "desiredOutcome": {"type": "string", "minLength": 1},
     "tone": {"type": "string", "minLength": 1},
+    "editorialProfile": {
+      "type": "object",
+      "required": [
+        "locale",
+        "primaryReader",
+        "decisionQuestion",
+        "decisionRequirement",
+        "requestedDecision",
+        "keyConclusion",
+        "evidenceMode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "locale": {"type": "string", "minLength": 2},
+        "primaryReader": {"type": "string", "minLength": 1},
+        "decisionQuestion": {"type": "string", "minLength": 1},
+        "decisionRequirement": {"type": "string", "enum": ["decision", "discussion", "alignment", "information", "custom"]},
+        "requestedDecision": {"type": "string", "minLength": 1},
+        "keyConclusion": {"type": "string", "minLength": 1},
+        "evidenceMode": {"type": "string", "enum": ["sourced", "user_confirmed", "assumption_labeled", "mixed", "blocked_until_sourced"]},
+        "notes": {"type": "string"}
+      }
+    },
     "sourceInventory": {
       "type": "array",
       "items": {"$ref": "#/$defs/sourceRef"}
@@ -153,6 +178,68 @@
         "htmlCssNotes": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "editorialDesignPolicy": {
+      "type": "object",
+      "required": [
+        "aspectRatio",
+        "staticHtmlCss",
+        "slideSelector",
+        "fontPreset",
+        "safeMarginPx",
+        "gridGutterPx",
+        "spacingScalePx",
+        "minBodyFontPx",
+        "minCaptionFontPx",
+        "contrastNormal",
+        "contrastLarge",
+        "koreanWrapping",
+        "copyLimits",
+        "evidencePolicy",
+        "sourceFooterPolicy",
+        "appendixRelaxationAllowed",
+        "accessibilityChecks"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "aspectRatio": {"type": "string", "const": "16:9"},
+        "staticHtmlCss": {"type": "boolean", "const": true},
+        "slideSelector": {"type": "string", "const": ".slide"},
+        "fontPreset": {"$ref": "#/$defs/fontPreset"},
+        "safeMarginPx": {"type": "integer", "minimum": 0},
+        "gridGutterPx": {"type": "integer", "minimum": 0},
+        "spacingScalePx": {"type": "integer", "minimum": 1},
+        "minBodyFontPx": {"type": "integer", "minimum": 1},
+        "minCaptionFontPx": {"type": "integer", "minimum": 1},
+        "contrastNormal": {"type": "number", "minimum": 1},
+        "contrastLarge": {"type": "number", "minimum": 1},
+        "koreanWrapping": {
+          "type": "object",
+          "required": ["wordBreak", "lineBreak", "hyphenation"],
+          "additionalProperties": false,
+          "properties": {
+            "wordBreak": {"type": "string"},
+            "lineBreak": {"type": "string"},
+            "hyphenation": {"type": "string"}
+          }
+        },
+        "copyLimits": {
+          "type": "object",
+          "required": ["headlineChars", "takeawayChars", "maxBullets", "bulletChars"],
+          "additionalProperties": false,
+          "properties": {
+            "headlineChars": {"type": "integer", "minimum": 1},
+            "takeawayChars": {"type": "integer", "minimum": 1},
+            "maxBullets": {"type": "integer", "minimum": 1},
+            "bulletChars": {"type": "integer", "minimum": 1}
+          }
+        },
+        "evidencePolicy": {"type": "string", "enum": ["source_or_user_confirmation_or_assumption", "source_required"]},
+        "sourceFooterPolicy": {"type": "string", "enum": ["required_when_claims_or_visuals_present", "always_required", "documented_exception"]},
+        "appendixRelaxationAllowed": {"type": "boolean"},
+        "accessibilityChecks": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
     "storyArc": {"type": "array", "minItems": 1, "items": {"type": "string"}},
     "slides": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/slide"}},
     "claimProvenance": {
@@ -220,9 +307,27 @@
         "id": {"type": "string"},
         "text": {"type": "string"},
         "status": {"type": "string", "enum": ["sourced", "user_confirmed", "assumption", "unsupported", "removed"]},
+        "material": {"type": "boolean"},
+        "claimType": {"type": "string", "enum": ["metric", "outcome", "market", "customer", "security", "compliance", "certification", "comparison", "risk", "qualitative", "other"]},
+        "metricMetadata": {"$ref": "#/$defs/metricMetadata"},
         "sourceRefs": {"type": "array", "items": {"type": "string"}},
         "slideIds": {"type": "array", "items": {"type": "string"}},
+        "htmlAnchors": {"type": "array", "items": {"type": "string"}},
+        "confirmedBy": {"type": "string"},
+        "confirmationDate": {"type": "string"},
+        "sourceConfidence": {"type": "string", "enum": ["high", "medium", "low", "unknown"]},
         "notes": {"type": "string"}
+      }
+    },
+    "metricMetadata": {
+      "type": "object",
+      "required": ["unit", "period"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": {"type": "string", "minLength": 1},
+        "period": {"type": "string", "minLength": 1},
+        "formula": {"type": "string"},
+        "sourceRef": {"type": "string"}
       }
     },
     "slide": {
@@ -231,13 +336,18 @@
         "id",
         "htmlId",
         "sectionRole",
+        "slideType",
         "headline",
         "keyMessage",
+        "readerQuestion",
+        "takeaway",
         "bodyContent",
         "layoutIntent",
         "visualIntent",
         "evidenceRefs",
+        "requiredSources",
         "claims",
+        "appendix",
         "renderRisks",
         "qaChecks"
       ],
@@ -246,13 +356,18 @@
         "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
         "htmlId": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
         "sectionRole": {"type": "string"},
+        "slideType": {"type": "string", "enum": ["cover", "executive_summary", "decision", "evidence", "chart", "table", "risk", "next_steps", "appendix", "custom"]},
         "headline": {"type": "string", "minLength": 1},
         "keyMessage": {"type": "string", "minLength": 1},
+        "readerQuestion": {"type": "string", "minLength": 1},
+        "takeaway": {"type": "string", "minLength": 1},
         "bodyContent": {"type": "array", "items": {"type": "string"}},
         "layoutIntent": {"type": "string"},
         "visualIntent": {"type": "string"},
         "evidenceRefs": {"type": "array", "items": {"type": "string"}},
+        "requiredSources": {"type": "array", "items": {"type": "string"}},
         "claims": {"type": "array", "items": {"type": "string"}},
+        "appendix": {"type": "boolean"},
         "renderRisks": {"type": "array", "items": {"type": "string"}},
         "qaChecks": {"type": "array", "items": {"type": "string"}},
         "speakerNotes": {"type": "string"},

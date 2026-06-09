@@ -28,6 +28,16 @@
 
 -
 
+## Editorial Profile
+
+- Locale: ko-KR
+- Primary reader:
+- Decision question:
+- Decision requirement: decision | discussion | alignment | information | custom
+- Requested decision:
+- Key conclusion:
+- Evidence mode: sourced | user_confirmed | assumption_labeled | mixed | blocked_until_sourced
+
 ## Tone
 
 -
@@ -63,6 +73,14 @@
 ## Font Preset
 
 - pretendard
+
+## Editorial Design Policy Overrides
+
+- Safe margin:
+- Grid gutter:
+- Copy density:
+- Appendix relaxation:
+- Source/footer policy:
 
 ## Constraints And Exclusions
 

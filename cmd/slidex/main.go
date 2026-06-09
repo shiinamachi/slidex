@@ -450,7 +450,8 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 	required := []string{
 		"metadata", "documentType", "audience", "objective", "desiredOutcome", "tone",
 		"sourceInventory", "intakeStatus", "outputContract", "renderConfig", "pdfConfig",
-		"designSystem", "storyArc", "slides", "claimProvenance", "businessQa", "userEditPolicy",
+		"editorialProfile", "designSystem", "editorialDesignPolicy", "storyArc", "slides",
+		"claimProvenance", "businessQa", "userEditPolicy",
 	}
 	for _, key := range required {
 		if _, ok := obj[key]; !ok {
@@ -469,7 +470,7 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 				findings = append(findings, fail("schema.slide", fmt.Sprintf("slide %d must be an object", i+1), path))
 				continue
 			}
-			for _, key := range []string{"id", "htmlId", "sectionRole", "headline", "keyMessage", "bodyContent", "layoutIntent", "visualIntent", "evidenceRefs", "claims", "renderRisks", "qaChecks"} {
+			for _, key := range []string{"id", "htmlId", "sectionRole", "slideType", "headline", "keyMessage", "readerQuestion", "takeaway", "bodyContent", "layoutIntent", "visualIntent", "evidenceRefs", "requiredSources", "claims", "appendix", "renderRisks", "qaChecks"} {
 				if _, ok := slide[key]; !ok {
 					findings = append(findings, fail("schema.slide.required", fmt.Sprintf("slide %d missing %s", i+1, key), path))
 				}
@@ -519,6 +520,7 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 			}
 		}
 	}
+	findings = append(findings, editorialSpecFindings(obj, path)...)
 	return findings, nil
 }
 
@@ -531,6 +533,374 @@ func numberAsInt(v any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+type editorialCopyLimits struct {
+	HeadlineChars int
+	TakeawayChars int
+	MaxBullets    int
+	BulletChars   int
+}
+
+func editorialSpecFindings(obj map[string]any, path string) []qaFinding {
+	var findings []qaFinding
+	limits := copyLimitsFromSpec(obj)
+	appendixRelaxed := true
+	if policy, ok := obj["editorialDesignPolicy"].(map[string]any); ok {
+		if relaxed, ok := policy["appendixRelaxationAllowed"].(bool); ok {
+			appendixRelaxed = relaxed
+		}
+	}
+	if slides, ok := obj["slides"].([]any); ok {
+		for i, rawSlide := range slides {
+			slide, _ := rawSlide.(map[string]any)
+			if slide == nil {
+				continue
+			}
+			slideID := firstNonEmpty(stringValue(slide["id"]), fmt.Sprintf("slide_%02d", i+1))
+			appendix := isAppendixSpecSlide(slide)
+			if !appendix && stringValue(slide["takeaway"]) == "" && stringValue(slide["readerQuestion"]) == "" {
+				findings = append(findings, fail("ED-STRUCT-003", slideID+" requires a takeaway or reader question", path))
+			}
+			if appendix && appendixRelaxed {
+				continue
+			}
+			headline := stringValue(slide["headline"])
+			if limits.HeadlineChars > 0 && runeLen(headline) > limits.HeadlineChars {
+				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-COPY-001", Message: fmt.Sprintf("%s headline is %d chars; policy limit is %d", slideID, runeLen(headline), limits.HeadlineChars), Path: path})
+			}
+			takeaway := stringValue(slide["takeaway"])
+			if limits.TakeawayChars > 0 && runeLen(takeaway) > limits.TakeawayChars {
+				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-COPY-001", Message: fmt.Sprintf("%s takeaway is %d chars; policy limit is %d", slideID, runeLen(takeaway), limits.TakeawayChars), Path: path})
+			}
+			body := stringArrayValue(slide["bodyContent"])
+			if limits.MaxBullets > 0 && len(body) > limits.MaxBullets {
+				findings = append(findings, fail("ED-COPY-002", fmt.Sprintf("%s has %d body bullets; policy limit is %d", slideID, len(body), limits.MaxBullets), path))
+			}
+			for j, bullet := range body {
+				if limits.BulletChars > 0 && runeLen(bullet) > limits.BulletChars {
+					findings = append(findings, qaFinding{Severity: "warn", Check: "ED-COPY-001", Message: fmt.Sprintf("%s bullet %d is %d chars; policy limit is %d", slideID, j+1, runeLen(bullet), limits.BulletChars), Path: path})
+				}
+			}
+		}
+	}
+	if cp, ok := obj["claimProvenance"].(map[string]any); ok {
+		if claims, ok := cp["claims"].([]any); ok {
+			for _, rawClaim := range claims {
+				claim, _ := rawClaim.(map[string]any)
+				if claim == nil {
+					continue
+				}
+				findings = append(findings, editorialClaimFindings(claim, path)...)
+			}
+		}
+	}
+	return findings
+}
+
+func editorialHTMLFindings(htmlPath, htmlString string, spec map[string]any, slides []slideInfo) []qaFinding {
+	var findings []qaFinding
+	if isKoreanEditorialProfile(spec, htmlString) && !hasKoreanCapableFontStack(htmlString) {
+		findings = append(findings, fail("ED-TYPE-001", "Korean editorial profile requires a Korean-capable font stack", htmlPath))
+	}
+	if regexp.MustCompile(`(?is)text-align\s*:\s*justify\b`).MatchString(htmlString) && !strings.Contains(htmlString, `data-ed-exception="ED-TYPE-003"`) {
+		findings = append(findings, fail("ED-TYPE-003", "full justification is not allowed without an explicit ED-TYPE-003 exception", htmlPath))
+	}
+	specSlides := specSlidesByHTMLID(spec)
+	for i, slide := range slides {
+		slideID := firstNonEmpty(slide.ID, fmt.Sprintf("slide_%02d", i+1))
+		specSlide := specSlides[slideID]
+		appendix := isAppendixHTMLSlide(slide) || isAppendixSpecSlide(specSlide)
+		primaryHeadlines := countPrimaryHeadings(slide.FullHTML)
+		if !appendix && primaryHeadlines == 0 && stringValue(specSlide["headline"]) == "" {
+			findings = append(findings, fail("ED-STRUCT-002", slideID+" requires one primary headline or explicit headline metadata", htmlPath))
+		}
+		if !appendix && primaryHeadlines > 1 {
+			findings = append(findings, fail("ED-HIER-001", fmt.Sprintf("%s has %d competing primary headlines", slideID, primaryHeadlines), htmlPath))
+		}
+		if !appendix && stringValue(specSlide["takeaway"]) == "" && stringValue(specSlide["readerQuestion"]) == "" {
+			findings = append(findings, fail("ED-STRUCT-003", slideID+" requires a takeaway or reader question in slide metadata", htmlPath))
+		}
+		if containsChartOrTable(slide.FullHTML) {
+			if !hasVisualTitle(slide.FullHTML) {
+				findings = append(findings, fail("ED-DATAVIZ-001", slideID+" chart or table requires a title or caption", htmlPath))
+			}
+			if !hasSourceNote(slide.FullHTML) {
+				findings = append(findings, fail("ED-DATAVIZ-002", slideID+" chart or table requires a source line", htmlPath))
+			}
+		}
+	}
+	findings = append(findings, imageAltFindings(htmlPath, htmlString)...)
+	return findings
+}
+
+func isKoreanEditorialProfile(spec map[string]any, htmlString string) bool {
+	if spec != nil {
+		profile, _ := spec["editorialProfile"].(map[string]any)
+		if strings.HasPrefix(strings.ToLower(stringValue(profile["locale"])), "ko") {
+			return true
+		}
+	}
+	return regexp.MustCompile(`[가-힣]`).MatchString(htmlString)
+}
+
+func hasKoreanCapableFontStack(htmlString string) bool {
+	normalized := strings.ToLower(htmlString)
+	for _, font := range []string{"pretendard", "noto sans kr", "noto sans cjk kr", "ibm plex sans kr", "suit"} {
+		if strings.Contains(normalized, font) {
+			return true
+		}
+	}
+	return false
+}
+
+func specSlidesByHTMLID(spec map[string]any) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	if spec == nil {
+		return out
+	}
+	slides, _ := spec["slides"].([]any)
+	for _, rawSlide := range slides {
+		slide, _ := rawSlide.(map[string]any)
+		if slide == nil {
+			continue
+		}
+		id := firstNonEmpty(stringValue(slide["htmlId"]), stringValue(slide["id"]))
+		if id != "" {
+			out[id] = slide
+		}
+	}
+	return out
+}
+
+func isAppendixHTMLSlide(slide slideInfo) bool {
+	attrs := strings.ToLower(slide.Attrs + " " + slide.FullHTML)
+	return strings.Contains(attrs, `data-appendix="true"`) || regexp.MustCompile(`(?is)\bclass\s*=\s*["'][^"']*\bappendix\b`).MatchString(attrs)
+}
+
+func countPrimaryHeadings(htmlString string) int {
+	return len(regexp.MustCompile(`(?is)<h[12]\b`).FindAllString(htmlString, -1))
+}
+
+func containsChartOrTable(htmlString string) bool {
+	return regexp.MustCompile(`(?is)(<table\b|\brole\s*=\s*["']table["']|\bclass\s*=\s*["'][^"']*(chart|data-viz|visualization)[^"']*["'])`).MatchString(htmlString)
+}
+
+func hasVisualTitle(htmlString string) bool {
+	return regexp.MustCompile(`(?is)(<caption\b|data-title\s*=|aria-label\s*=|<h[2-4]\b)`).MatchString(htmlString)
+}
+
+func hasSourceNote(htmlString string) bool {
+	return regexp.MustCompile(`(?is)(\bsource\b|출처|자료\s*:|\bclass\s*=\s*["'][^"']*(source|footnote)[^"']*["'])`).MatchString(htmlString)
+}
+
+func imageAltFindings(htmlPath, htmlString string) []qaFinding {
+	var findings []qaFinding
+	imgRe := regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	for i, tag := range imgRe.FindAllString(htmlString, -1) {
+		lower := strings.ToLower(tag)
+		decorative := strings.Contains(lower, `role="presentation"`) || strings.Contains(lower, `aria-hidden="true"`) || regexp.MustCompile(`(?is)\balt\s*=\s*["']\s*["']`).MatchString(tag)
+		hasAlt := regexp.MustCompile(`(?is)\balt\s*=\s*["'][^"']+["']`).MatchString(tag) || regexp.MustCompile(`(?is)\baria-label\s*=\s*["'][^"']+["']`).MatchString(tag)
+		if !decorative && !hasAlt {
+			findings = append(findings, fail("ED-A11Y-002", fmt.Sprintf("meaningful image %d requires alt text, aria-label, or decorative marking", i+1), htmlPath))
+		}
+	}
+	return findings
+}
+
+func editorialRenderFindings(htmlSlides []slideInfo, pngs []string, manifest renderManifest, pdfPages int, manifestPath, renderedDir, pdfPath string) []qaFinding {
+	var findings []qaFinding
+	counts := map[string]int{
+		"htmlSlides": len(htmlSlides),
+		"pngFiles":   len(pngs),
+	}
+	if len(manifest.OrderedSlideIDs) > 0 {
+		counts["manifestSlides"] = len(manifest.OrderedSlideIDs)
+	}
+	if len(manifest.PNGFiles) > 0 {
+		counts["manifestPngs"] = len(manifest.PNGFiles)
+	}
+	if manifest.PDFPageCount > 0 {
+		counts["manifestPdfPages"] = manifest.PDFPageCount
+	}
+	if pdfPages > 0 {
+		counts["pdfPages"] = pdfPages
+	}
+	if !reconciledCounts(counts) {
+		findings = append(findings, fail("ED-STRUCT-001", "slide, PNG, PDF, and manifest counts do not reconcile: "+formatCountMap(counts), manifestPath))
+	}
+	for _, img := range manifest.PNGFiles {
+		if hash, err := sha256File(img.Path); err != nil {
+			findings = append(findings, fail("ED-RENDER-001", "manifest PNG is missing: "+err.Error(), img.Path))
+		} else if hash != img.SHA256 {
+			findings = append(findings, fail("ED-RENDER-001", "manifest PNG hash does not match current file", img.Path))
+		}
+	}
+	if len(manifest.PNGFiles) != 0 && len(manifest.PNGFiles) != len(pngs) {
+		findings = append(findings, fail("ED-RENDER-001", fmt.Sprintf("manifest PNG count %d does not match rendered slide files %d", len(manifest.PNGFiles), len(pngs)), renderedDir))
+	}
+	if manifest.PDF.Path != "" {
+		if hash, err := sha256File(manifest.PDF.Path); err != nil {
+			findings = append(findings, fail("ED-RENDER-002", "manifest PDF is missing: "+err.Error(), manifest.PDF.Path))
+		} else if hash != manifest.PDF.SHA256 {
+			findings = append(findings, fail("ED-RENDER-002", "manifest PDF hash does not match current file", manifest.PDF.Path))
+		}
+	}
+	if pdfPages > 0 && manifest.PDFPageCount > 0 && pdfPages != manifest.PDFPageCount {
+		findings = append(findings, fail("ED-RENDER-002", fmt.Sprintf("current PDF page count %d does not match manifest %d", pdfPages, manifest.PDFPageCount), pdfPath))
+	}
+	return findings
+}
+
+func reconciledCounts(counts map[string]int) bool {
+	expected := -1
+	for _, count := range counts {
+		if count <= 0 {
+			continue
+		}
+		if expected < 0 {
+			expected = count
+			continue
+		}
+		if count != expected {
+			return false
+		}
+	}
+	return true
+}
+
+func formatCountMap(counts map[string]int) string {
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func verifyHTMLEditSync(htmlPath, baselinePath string) []qaFinding {
+	htmlHash, htmlErr := sha256File(htmlPath)
+	if htmlErr != nil {
+		return nil
+	}
+	baselineHash, baselineErr := sha256File(baselinePath)
+	if baselineErr != nil {
+		return nil
+	}
+	if htmlHash != baselineHash {
+		return []qaFinding{fail("ED-RENDER-003", "final_deck.html differs from final_deck.generated_baseline.html; run slidex sync-html-edits before delivery", htmlPath)}
+	}
+	return nil
+}
+
+func copyLimitsFromSpec(obj map[string]any) editorialCopyLimits {
+	limits := editorialCopyLimits{HeadlineChars: 56, TakeawayChars: 90, MaxBullets: 5, BulletChars: 42}
+	policy, _ := obj["editorialDesignPolicy"].(map[string]any)
+	copyLimits, _ := policy["copyLimits"].(map[string]any)
+	if n, ok := numberAsInt(copyLimits["headlineChars"]); ok {
+		limits.HeadlineChars = n
+	}
+	if n, ok := numberAsInt(copyLimits["takeawayChars"]); ok {
+		limits.TakeawayChars = n
+	}
+	if n, ok := numberAsInt(copyLimits["maxBullets"]); ok {
+		limits.MaxBullets = n
+	}
+	if n, ok := numberAsInt(copyLimits["bulletChars"]); ok {
+		limits.BulletChars = n
+	}
+	return limits
+}
+
+func editorialClaimFindings(claim map[string]any, path string) []qaFinding {
+	claimID := firstNonEmpty(stringValue(claim["id"]), "claim")
+	text := stringValue(claim["text"])
+	status := stringValue(claim["status"])
+	claimType := stringValue(claim["claimType"])
+	material := isMaterialClaim(claim, text)
+	sourceRefs := stringArrayValue(claim["sourceRefs"])
+	var findings []qaFinding
+	if material {
+		switch status {
+		case "sourced":
+			if len(sourceRefs) == 0 {
+				findings = append(findings, fail("ED-CLAIM-001", claimID+" is sourced but has no sourceRefs", path))
+			}
+		case "user_confirmed", "assumption", "removed":
+		case "unsupported", "":
+			findings = append(findings, fail("ED-CLAIM-001", claimID+" is material but is not sourced, user-confirmed, or labeled as an assumption", path))
+		default:
+			findings = append(findings, fail("ED-CLAIM-001", claimID+" has unsupported claim status "+status, path))
+		}
+	}
+	if status != "removed" && (claimType == "metric" || metricClaimCandidate(text)) {
+		metric, _ := claim["metricMetadata"].(map[string]any)
+		if stringValue(metric["unit"]) == "" || stringValue(metric["period"]) == "" {
+			findings = append(findings, fail("ED-CLAIM-002", claimID+" metric claim requires unit and period metadata", path))
+		}
+		if status == "sourced" && len(sourceRefs) == 0 {
+			findings = append(findings, fail("ED-CLAIM-002", claimID+" metric claim requires source metadata", path))
+		}
+	}
+	if status != "removed" && unsupportedSuperlativeCandidate(text) && status != "sourced" && status != "user_confirmed" {
+		findings = append(findings, fail("ED-CLAIM-003", claimID+" uses superlative or guarantee language without support", path))
+	}
+	return findings
+}
+
+func isMaterialClaim(claim map[string]any, text string) bool {
+	if material, ok := claim["material"].(bool); ok {
+		return material
+	}
+	if stringValue(claim["claimType"]) != "" {
+		return true
+	}
+	return metricClaimCandidate(text) || unsupportedSuperlativeCandidate(text)
+}
+
+func metricClaimCandidate(text string) bool {
+	return regexp.MustCompile(`(?i)(\d|%|\$|원|달러|억원|조원|만명|users?|customers?|revenue|roi|growth|retention|conversion)`).MatchString(text)
+}
+
+func unsupportedSuperlativeCandidate(text string) bool {
+	return regexp.MustCompile(`(?i)(최고|최대|최초|유일|독보|1위|보장|완벽|무결|best|leading|leader|only|guarantee|guaranteed|no\.?\s*1|number\s*one)`).MatchString(text)
+}
+
+func isAppendixSpecSlide(slide map[string]any) bool {
+	if appendix, ok := slide["appendix"].(bool); ok && appendix {
+		return true
+	}
+	return isAppendixSectionRole(stringValue(slide["sectionRole"])) || strings.EqualFold(stringValue(slide["slideType"]), "appendix")
+}
+
+func stringArrayValue(value any) []string {
+	arr, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		text := strings.TrimSpace(fmt.Sprint(item))
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func runeLen(text string) int {
+	return len([]rune(strings.TrimSpace(text)))
 }
 
 func loadSpecSchema() (map[string]any, error) {
@@ -1686,6 +2056,10 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 			result.FilesChecked = append(result.FilesChecked, p)
 		}
 	}
+	var specObj map[string]any
+	if raw, err := os.ReadFile(specPath); err == nil {
+		_ = json.Unmarshal(raw, &specObj)
+	}
 	if findings, err := validateSpecFile(specPath); err == nil {
 		result.Findings = append(result.Findings, findings...)
 	} else {
@@ -1693,8 +2067,9 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	}
 
 	var htmlSlides []slideInfo
+	htmlString := ""
 	if raw, err := os.ReadFile(htmlPath); err == nil {
-		htmlString := string(raw)
+		htmlString = string(raw)
 		htmlLower := strings.ToLower(htmlString)
 		if !strings.Contains(htmlLower, "<!doctype html") {
 			result.Findings = append(result.Findings, fail("html.doctype", "HTML must include <!doctype html>", htmlPath))
@@ -1720,6 +2095,7 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 		if !strings.Contains(htmlString, "word-break: keep-all") {
 			result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.korean_wrapping", Message: "CSS does not explicitly include word-break: keep-all", Path: htmlPath})
 		}
+		result.Findings = append(result.Findings, editorialHTMLFindings(htmlPath, htmlString, specObj, htmlSlides)...)
 	} else {
 		result.Findings = append(result.Findings, fail("html.read", err.Error(), htmlPath))
 	}
@@ -1734,13 +2110,16 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	}
 	expected := dimension{}
 	var manifest renderManifest
+	manifestLoaded := false
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		if err := json.Unmarshal(raw, &manifest); err != nil {
 			result.Findings = append(result.Findings, fail("manifest.parse", err.Error(), manifestPath))
 		} else {
+			manifestLoaded = true
 			expected = manifest.ExpectedDimensions
 			if currentHash, err := sha256File(htmlPath); err == nil && currentHash != manifest.SourceHTML.SHA256 {
 				result.Findings = append(result.Findings, fail("manifest.freshness", "current HTML hash does not match render manifest", htmlPath))
+				result.Findings = append(result.Findings, fail("ED-RENDER-001", "rendered PNG lineage is stale because current HTML hash does not match render manifest", htmlPath))
 			}
 			result.RenderMethod = manifest.RenderMethod
 			if !hasExactVersionToken(manifest.ChromeVersion) {
@@ -1785,6 +2164,10 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	} else {
 		result.Findings = append(result.Findings, fail("pdf.read", err.Error(), pdfPath))
 	}
+	if manifestLoaded {
+		result.Findings = append(result.Findings, editorialRenderFindings(htmlSlides, pngs, manifest, result.PDFPageCount, manifestPath, renderedDir, pdfPath)...)
+	}
+	result.Findings = append(result.Findings, verifyHTMLEditSync(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "final_deck.generated_baseline.html"))...)
 
 	if hasFailures(result.Findings) {
 		result.Status = "fail"
@@ -1879,12 +2262,14 @@ func writeQAReport(path string, result qaResult) error {
 	writeFindingsForPrefix(&b, result.Findings, []string{"schema.", "claimProvenance.", "business"})
 	b.WriteString("\n## Claim Provenance Findings\n\n")
 	writeFindingsForPrefix(&b, result.Findings, []string{"claimProvenance.", "schema.claim"})
+	b.WriteString("\n## Editorial Design Findings\n\n")
+	writeFindingsForPrefix(&b, result.Findings, []string{"ED-"})
 	b.WriteString("\n## Visual And Accessibility Findings\n\n")
-	writeFindingsForPrefix(&b, result.Findings, []string{"html.", "png.", "font.", "manifest.", "parity.html_png"})
+	writeFindingsForPrefix(&b, result.Findings, []string{"html.", "png.", "font.", "manifest.", "parity.html_png", "ED-A11Y", "ED-TYPE", "ED-DATAVIZ"})
 	b.WriteString("\n## PDF Findings\n\n")
-	writeFindingsForPrefix(&b, result.Findings, []string{"pdf.", "parity.html_pdf"})
+	writeFindingsForPrefix(&b, result.Findings, []string{"pdf.", "parity.html_pdf", "ED-RENDER-002"})
 	b.WriteString("\n## User-Edit Sync Findings\n\n")
-	writeFindingsForPrefix(&b, result.Findings, []string{"sync.", "package.manifest_freshness"})
+	writeFindingsForPrefix(&b, result.Findings, []string{"sync.", "package.manifest_freshness", "ED-RENDER-003"})
 	b.WriteString("\n## Required Revisions\n\n")
 	if hasFailures(result.Findings) {
 		b.WriteString("- Resolve all `fail` findings above, re-render from current HTML, rebuild PDF and montage, and rerun QA.\n")
@@ -2307,11 +2692,21 @@ func updateSpecFromHTML(specPath string, slides []slideInfo) error {
 		if slide["sectionRole"] == nil || slide["sectionRole"] == "" {
 			slide["sectionRole"] = "content"
 		}
+		role := strings.TrimSpace(fmt.Sprint(slide["sectionRole"]))
+		if slide["slideType"] == nil || slide["slideType"] == "" {
+			slide["slideType"] = slideTypeForSectionRole(role)
+		}
 		if htmlSlide.Headline != "" {
 			slide["headline"] = htmlSlide.Headline
 			if slide["keyMessage"] == nil || slide["keyMessage"] == "" {
 				slide["keyMessage"] = htmlSlide.Headline
 			}
+		}
+		if slide["readerQuestion"] == nil || slide["readerQuestion"] == "" {
+			slide["readerQuestion"] = "이 슬라이드가 답해야 할 핵심 질문은 무엇인가?"
+		}
+		if slide["takeaway"] == nil || slide["takeaway"] == "" {
+			slide["takeaway"] = firstNonEmpty(strings.TrimSpace(fmt.Sprint(slide["keyMessage"])), htmlSlide.Headline)
 		}
 		slide["bodyContent"] = splitBodyContent(htmlSlide.Text, htmlSlide.Headline)
 		for _, key := range []string{"layoutIntent", "visualIntent"} {
@@ -2319,10 +2714,16 @@ func updateSpecFromHTML(specPath string, slides []slideInfo) error {
 				slide[key] = "Updated from approved HTML during sync."
 			}
 		}
+		if slide["appendix"] == nil {
+			slide["appendix"] = isAppendixSectionRole(role)
+		}
 		for _, key := range []string{"evidenceRefs", "claims", "renderRisks", "qaChecks"} {
 			if slide[key] == nil {
 				slide[key] = []any{}
 			}
+		}
+		if slide["requiredSources"] == nil {
+			slide["requiredSources"] = slide["evidenceRefs"]
 		}
 		newSlides = append(newSlides, slide)
 	}
@@ -2515,17 +2916,18 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	for _, rel := range required {
 		path := filepath.Join(outDir, rel)
 		if _, err := os.Stat(path); err != nil {
-			findings = append(findings, fail("package.required_file", "missing required delivery file", path))
+			findings = append(findings, fail("ED-PACKAGE-001", "missing required delivery file", path))
 		}
 	}
 	pngs, _ := filepath.Glob(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
 	sort.Strings(pngs)
 	if len(pngs) == 0 {
-		findings = append(findings, fail("package.rendered_slides", "missing rendered slide images", filepath.Join(outDir, "rendered_slides")))
+		findings = append(findings, fail("ED-PACKAGE-001", "missing rendered slide images", filepath.Join(outDir, "rendered_slides")))
 	}
 	manifestPath := filepath.Join(outDir, "render_manifest.json")
 	specPath := filepath.Join(outDir, "deck_spec.json")
 	htmlPath := filepath.Join(outDir, "final_deck.html")
+	baselinePath := filepath.Join(outDir, "final_deck.generated_baseline.html")
 	qaReportPath := filepath.Join(outDir, "qa_report.md")
 	deliverySummaryPath := filepath.Join(outDir, "delivery_summary.md")
 	visualImageSetPath := filepath.Join(outDir, "visual_reviews", "image_set.json")
@@ -2612,6 +3014,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			}
 		}
 	}
+	findings = append(findings, verifyHTMLEditSync(htmlPath, baselinePath)...)
 	if includeLogs {
 		findings = append(findings, verifySanitizedLogs(outDir)...)
 	}

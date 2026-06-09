@@ -309,6 +309,95 @@ func hasFindingCheck(findings []qaFinding, needle string) bool {
 	return false
 }
 
+func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
+	spec := map[string]any{
+		"editorialDesignPolicy": map[string]any{
+			"appendixRelaxationAllowed": false,
+			"copyLimits": map[string]any{
+				"headlineChars": 80,
+				"takeawayChars": 80,
+				"maxBullets":    2,
+				"bulletChars":   80,
+			},
+		},
+		"slides": []any{
+			map[string]any{
+				"id":             "slide_01",
+				"appendix":       false,
+				"headline":       "출처 없는 수치 주장을 점검합니다",
+				"readerQuestion": "",
+				"takeaway":       "",
+				"bodyContent":    []any{"첫 번째 근거", "두 번째 근거", "세 번째 근거"},
+			},
+		},
+		"claimProvenance": map[string]any{
+			"claims": []any{
+				map[string]any{
+					"id":        "claim_metric",
+					"text":      "전환율은 35% 개선된다.",
+					"status":    "sourced",
+					"material":  true,
+					"claimType": "metric",
+				},
+				map[string]any{
+					"id":       "claim_best",
+					"text":     "시장 최고 성과를 보장한다.",
+					"status":   "assumption",
+					"material": true,
+				},
+			},
+		},
+	}
+	findings := editorialSpecFindings(spec, "deck_spec.json")
+	for _, check := range []string{"ED-STRUCT-003", "ED-COPY-002", "ED-CLAIM-001", "ED-CLAIM-002", "ED-CLAIM-003"} {
+		if !hasFindingCheck(findings, check) {
+			t.Fatalf("expected %s finding, got %#v", check, findings)
+		}
+	}
+}
+
+func TestEditorialHTMLFindingsEnforceStructureTypeAndA11y(t *testing.T) {
+	html := `<!doctype html><html lang="ko"><head><style>
+body { font-family: Arial, sans-serif; text-align: justify; }
+</style></head><body><main class="deck">
+<section class="slide" id="slide_01" data-slide-id="slide_01">
+  <h2>첫 번째 제목</h2>
+  <h2>두 번째 제목</h2>
+  <table><tr><td>35%</td></tr></table>
+  <img src="chart.png">
+</section>
+</main></body></html>`
+	slides := extractSlides(html)
+	spec := map[string]any{
+		"editorialProfile": map[string]any{"locale": "ko-KR"},
+		"slides": []any{
+			map[string]any{"id": "slide_01", "htmlId": "slide_01", "appendix": false},
+		},
+	}
+	findings := editorialHTMLFindings("final_deck.html", html, spec, slides)
+	for _, check := range []string{"ED-TYPE-001", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-A11Y-002"} {
+		if !hasFindingCheck(findings, check) {
+			t.Fatalf("expected %s finding, got %#v", check, findings)
+		}
+	}
+}
+
+func TestVerifyHTMLEditSyncFailsWhenBaselineDiffers(t *testing.T) {
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "final_deck.html")
+	baselinePath := filepath.Join(dir, "final_deck.generated_baseline.html")
+	if err := os.WriteFile(htmlPath, []byte("<html>edited</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baselinePath, []byte("<html>baseline</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings := verifyHTMLEditSync(htmlPath, baselinePath)
+	if !hasFindingCheck(findings, "ED-RENDER-003") {
+		t.Fatalf("expected ED-RENDER-003 finding, got %#v", findings)
+	}
+}
+
 func TestRunIntakeInteractiveAppliesAnswers(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

@@ -3156,21 +3156,90 @@ func specSlidesFromAuthoring(authoring map[string]any) []map[string]any {
 			claims = []string{"claim_001"}
 		}
 		slides = append(slides, map[string]any{
-			"id":           id,
-			"htmlId":       id,
-			"sectionRole":  role,
-			"headline":     headline,
-			"keyMessage":   key,
-			"bodyContent":  body,
-			"layoutIntent": "Codex-authored single-purpose slide with clear hierarchy",
-			"visualIntent": "Evidence-aware HTML layout generated from Codex slide blueprint",
-			"evidenceRefs": evidence,
-			"claims":       claims,
-			"renderRisks":  []string{"Korean wrapping and text density must be checked after render."},
-			"qaChecks":     []string{"slide purpose clear", "no unsupported metric"},
+			"id":              id,
+			"htmlId":          id,
+			"sectionRole":     role,
+			"slideType":       slideTypeForSectionRole(role),
+			"headline":        headline,
+			"keyMessage":      key,
+			"readerQuestion":  firstNonEmpty(strings.TrimSpace(fmt.Sprint(blueprint["readerQuestion"])), "이 슬라이드가 답해야 할 핵심 질문은 무엇인가?"),
+			"takeaway":        firstNonEmpty(strings.TrimSpace(fmt.Sprint(blueprint["takeaway"])), key),
+			"bodyContent":     body,
+			"layoutIntent":    "Codex-authored single-purpose slide with clear hierarchy",
+			"visualIntent":    "Evidence-aware HTML layout generated from Codex slide blueprint",
+			"evidenceRefs":    evidence,
+			"requiredSources": evidence,
+			"claims":          claims,
+			"appendix":        isAppendixSectionRole(role),
+			"renderRisks":     []string{"Korean wrapping and text density must be checked after render."},
+			"qaChecks":        []string{"slide purpose clear", "no unsupported metric"},
 		})
 	}
 	return slides
+}
+
+func slideTypeForSectionRole(role string) string {
+	normalized := strings.ToLower(strings.TrimSpace(role))
+	switch {
+	case strings.Contains(normalized, "cover"):
+		return "cover"
+	case strings.Contains(normalized, "executive"):
+		return "executive_summary"
+	case strings.Contains(normalized, "decision"):
+		return "decision"
+	case strings.Contains(normalized, "chart"):
+		return "chart"
+	case strings.Contains(normalized, "table"):
+		return "table"
+	case strings.Contains(normalized, "risk"):
+		return "risk"
+	case strings.Contains(normalized, "next"):
+		return "next_steps"
+	case strings.Contains(normalized, "appendix"):
+		return "appendix"
+	default:
+		return "custom"
+	}
+}
+
+func isAppendixSectionRole(role string) bool {
+	return slideTypeForSectionRole(role) == "appendix"
+}
+
+func defaultEditorialProfile(title string) map[string]any {
+	return map[string]any{
+		"locale":              "ko-KR",
+		"primaryReader":       "확정된 사용자 지정 청중",
+		"decisionQuestion":    "이 문서가 지원해야 하는 핵심 의사결정은 무엇인가?",
+		"decisionRequirement": "decision",
+		"requestedDecision":   "핵심 판단, 근거, 다음 행동에 대한 승인 또는 수정 지시",
+		"keyConclusion":       firstNonEmpty(strings.TrimSpace(title), "현재 입력과 승인된 가정에 근거해 판단한다."),
+		"evidenceMode":        "assumption_labeled",
+		"notes":               "정량 성과, 보증, 인증, 컴플라이언스 주장은 source 없이는 생성하지 않는다.",
+	}
+}
+
+func defaultEditorialDesignPolicy() map[string]any {
+	return map[string]any{
+		"aspectRatio":               "16:9",
+		"staticHtmlCss":             true,
+		"slideSelector":             ".slide",
+		"fontPreset":                "pretendard",
+		"safeMarginPx":              96,
+		"gridGutterPx":              64,
+		"spacingScalePx":            8,
+		"minBodyFontPx":             24,
+		"minCaptionFontPx":          18,
+		"contrastNormal":            4.5,
+		"contrastLarge":             3.0,
+		"koreanWrapping":            map[string]any{"wordBreak": "keep-all", "lineBreak": "strict", "hyphenation": "none"},
+		"copyLimits":                map[string]any{"headlineChars": 56, "takeawayChars": 90, "maxBullets": 5, "bulletChars": 42},
+		"evidencePolicy":            "source_or_user_confirmation_or_assumption",
+		"sourceFooterPolicy":        "required_when_claims_or_visuals_present",
+		"appendixRelaxationAllowed": true,
+		"accessibilityChecks":       []string{"contrast", "text equivalents", "Korean-safe wrapping"},
+		"notes":                     []string{"Appendix slides may relax density but not evidence, contrast, clipping, or freshness gates."},
+	}
 }
 
 func ensureStrategy(deck string, force bool) (string, error) {
@@ -3257,15 +3326,17 @@ func ensureSpec(deck string, force bool) (string, error) {
 		"objective":               "현재 입력과 승인된 가정에 근거한 HTML-first 비즈니스 문서를 완성한다.",
 		"desiredOutcome":          "검토자가 핵심 판단, 근거, 다음 행동을 이해하고 승인 여부를 결정한다.",
 		"tone":                    "concrete, restrained, evidence-aware",
+		"editorialProfile":        defaultEditorialProfile(title),
 		"sourceInventory":         sourceRefs,
 		"intakeStatus":            map[string]any{"status": "assumptions_approved", "questionsAsked": []string{}, "openQuestions": []string{}, "approvedAssumptions": []string{"자동 spec 생성 시 정량 주장 없이 구조와 검증 흐름만 사용한다."}},
 		"outputContract":          map[string]any{"sourceHtml": "out/final_deck.html", "generatedBaselineHtml": "out/final_deck.generated_baseline.html", "renderedSlidesDir": "out/rendered_slides", "primaryPdf": "out/final_deck.pdf", "renderManifest": "out/render_manifest.json", "pdfMode": "paginated", "qaMontage": "out/qa_montage.png", "notes": "out/notes.md", "qaReport": "out/qa_report.md", "deliverySummary": "out/delivery_summary.md"},
 		"renderConfig":            map[string]any{"engine": "slidex-cli", "preset": "wide-1080p", "slideSelector": ".slide", "widthPx": 1920, "heightPx": 1080, "deviceScaleFactor": 1, "waitForFonts": true, "captureElementOnly": true, "fontPreset": "pretendard"},
 		"pdfConfig":               map[string]any{"source": "rendered_images", "mode": "paginated", "pageAspectRatio": "16:9", "pageSizeInches": map[string]any{"width": 13.333, "height": 7.5}, "imageFit": "exact", "background": "#ffffff"},
 		"designSystem":            map[string]any{"fontPreset": "pretendard", "colors": map[string]string{"primary": "#1F6FEB", "accent": "#F59E0B", "text": "#111827", "background": "#FFFFFF"}, "typography": map[string]string{"headline": "action headline", "body": "concise Korean business copy"}, "layout": map[string]string{"aspectRatio": "16:9", "safeMargin": "96px"}, "cssVariables": map[string]string{"--slide-width": "1920px", "--slide-height": "1080px"}, "styleGuidanceSummary": "deterministic fallback design", "styleGuidanceDirectives": []string{"Use concise text and clear hierarchy."}, "styleGuidanceAvoid": []string{"Unsupported metrics and invented assets."}, "styleGuidanceConflicts": []string{}, "htmlCssNotes": []string{"word-break: keep-all", "overflow-wrap: normal", "line-break: strict"}},
+		"editorialDesignPolicy":   defaultEditorialDesignPolicy(),
 		"storyArc":                []string{"문서 목적을 제시한다", "근거와 가정을 분리한다", "다음 실행과 검증 gate를 제시한다"},
 		"slides":                  slides,
-		"claimProvenance":         map[string]any{"required": true, "unsupportedClaimsPolicy": "remove_or_rewrite", "claims": []map[string]any{{"id": "claim_001", "text": "문서는 현재 입력과 승인된 가정에 근거해 작성된다.", "status": "assumption", "sourceRefs": []string{"brief.md"}, "slideIds": []string{"slide_01", "slide_02"}, "notes": "정량 성과 주장은 생성하지 않는다."}}},
+		"claimProvenance":         map[string]any{"required": true, "unsupportedClaimsPolicy": "remove_or_rewrite", "claims": []map[string]any{{"id": "claim_001", "text": "문서는 현재 입력과 승인된 가정에 근거해 작성된다.", "status": "assumption", "material": true, "claimType": "qualitative", "sourceRefs": []string{"brief.md"}, "slideIds": []string{"slide_01", "slide_02"}, "notes": "정량 성과 주장은 생성하지 않는다."}}},
 		"businessQa":              map[string]any{"documentTypeChecklist": []string{"Document type is explicit."}, "copyRisks": []string{"자동 생성 문안은 사용자가 최종 확인해야 한다."}, "evidenceRisks": []string{"입력에 없는 정량 주장은 사용하지 않는다."}, "legalRisks": []string{"보증, 인증, 컴플라이언스 주장은 source 없이는 금지한다."}, "visualRisks": []string{"렌더된 PNG와 montage를 검사해야 한다."}},
 		"accessibilityNotes":      []string{"Maintain contrast and readable font sizes."},
 		"htmlImplementationNotes": []string{"Static HTML/CSS only."},
@@ -3926,7 +3997,7 @@ func findingsForStrictSchema(findings []qaFinding) []map[string]any {
 }
 
 func makeSpecSlide(id, role, headline, key string, body []string) map[string]any {
-	return map[string]any{"id": id, "htmlId": id, "sectionRole": role, "headline": headline, "keyMessage": key, "bodyContent": body, "layoutIntent": "single-purpose slide with clear hierarchy", "visualIntent": "simple evidence-aware layout", "evidenceRefs": []string{"brief.md"}, "claims": []string{"claim_001"}, "renderRisks": []string{"Korean wrapping and text density must be checked after render."}, "qaChecks": []string{"slide purpose clear", "no unsupported metric"}}
+	return map[string]any{"id": id, "htmlId": id, "sectionRole": role, "slideType": slideTypeForSectionRole(role), "headline": headline, "keyMessage": key, "readerQuestion": "이 슬라이드가 답해야 할 핵심 질문은 무엇인가?", "takeaway": key, "bodyContent": body, "layoutIntent": "single-purpose slide with clear hierarchy", "visualIntent": "simple evidence-aware layout", "evidenceRefs": []string{"brief.md"}, "requiredSources": []string{"brief.md"}, "claims": []string{"claim_001"}, "appendix": isAppendixSectionRole(role), "renderRisks": []string{"Korean wrapping and text density must be checked after render."}, "qaChecks": []string{"slide purpose clear", "no unsupported metric"}}
 }
 
 func applyIntakeAnswers(deckAbs, answersPath string, questions []string) error {

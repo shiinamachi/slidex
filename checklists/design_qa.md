@@ -30,6 +30,39 @@
 - No text overflow, clipping, overlap, or unintended scrollbars are visible.
 - Charts and tables are readable and have source notes where useful.
 
+## Automated Editorial Gates
+
+`slidex qa` and `slidex package` emit `ED-*` rule IDs for the automated subset
+of the editorial policy:
+
+- `ED-STRUCT-001`: HTML slide count, rendered PNG count, PDF page count, and
+  render manifest slide count must reconcile.
+- `ED-STRUCT-002`: each non-appendix slide needs one primary headline or
+  explicit headline metadata.
+- `ED-STRUCT-003`: each non-appendix slide needs a takeaway or reader question.
+- `ED-HIER-001`: competing primary headlines on one non-appendix slide fail.
+- `ED-TYPE-001`: Korean documents must use a Korean-capable font stack.
+- `ED-TYPE-003`: full justification fails without an explicit exception.
+- `ED-COPY-001` and `ED-COPY-002`: copy length and bullet density are checked
+  against `editorialDesignPolicy.copyLimits`; appendix relaxation is allowed
+  only when the policy says so.
+- `ED-CLAIM-001`, `ED-CLAIM-002`, and `ED-CLAIM-003`: material claims require
+  source, user confirmation, or assumption labeling; metric claims require unit
+  and period metadata; unsupported superlative or guarantee language fails.
+- `ED-DATAVIZ-001` and `ED-DATAVIZ-002`: charts and tables require a title or
+  caption and a source line.
+- `ED-A11Y-002`: meaningful images require alt text, `aria-label`, or
+  decorative marking.
+- `ED-RENDER-001`, `ED-RENDER-002`, and `ED-RENDER-003`: rendered PNG/PDF
+  hashes must trace to the current HTML, and direct HTML edits must be synced
+  against `final_deck.generated_baseline.html`.
+- `ED-PACKAGE-001`: required delivery files and rendered slide PNGs must exist
+  before package handoff.
+
+Manual visual inspection is still required for alignment drift, clipping,
+contrast nuance, chart semantics, and final PDF review until those checks have
+dedicated automated evidence.
+
 ## Typography And Korean Copy
 
 - Font preset is documented in spec and reflected in CSS.
