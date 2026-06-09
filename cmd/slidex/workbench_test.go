@@ -846,3 +846,58 @@ func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testin
 		t.Fatalf("recorded status = %q, want stopped", recorded.Status)
 	}
 }
+
+func TestWorkbenchStatusAndStopNormalizeCorruptManifestPaths(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 1, 999999, "running")
+	manifest.DeckID = "wrong"
+	manifest.DeckDir = filepath.ToSlash(outside)
+	manifest.OutDir = filepath.ToSlash(filepath.Join(outside, "out"))
+	manifest.Paths = map[string]string{
+		"brief":    filepath.ToSlash(filepath.Join(outside, "brief.md")),
+		"draft":    filepath.ToSlash(filepath.Join(outside, "out", workbenchDraftName)),
+		"manifest": filepath.ToSlash(filepath.Join(outside, "out", workbenchManifestName)),
+	}
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := workbenchStatus(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.DeckID != "demo" || status.DeckDir != filepath.ToSlash(deck) || status.OutDir != filepath.ToSlash(filepath.Join(deck, "out")) {
+		t.Fatalf("status did not normalize paths: %#v", status)
+	}
+	for name, path := range status.Paths {
+		if !pathWithin(deck, filepath.FromSlash(path)) {
+			t.Fatalf("status path %s escaped deck: %s", name, path)
+		}
+	}
+
+	stopped, err := stopWorkbench(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.DeckDir != filepath.ToSlash(deck) || stopped.Status != "stopped" {
+		t.Fatalf("stop did not normalize deck-local status: %#v", stopped)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "out", workbenchManifestName)); !os.IsNotExist(err) {
+		t.Fatalf("stop wrote outside deck, stat err=%v", err)
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("deck-local manifest missing after stop")
+	}
+	if recorded.DeckDir != filepath.ToSlash(deck) || recorded.Status != "stopped" {
+		t.Fatalf("deck-local manifest was not normalized: %#v", recorded)
+	}
+}

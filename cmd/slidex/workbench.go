@@ -1317,32 +1317,49 @@ func workbenchStatus(workspace, deckID, deck string) (workbenchManifest, error) 
 	if err != nil {
 		return workbenchManifest{}, err
 	}
+	return workbenchStatusForDeck(deckAbs), nil
+}
+
+func workbenchStatusForDeck(deckAbs string) workbenchManifest {
 	manifest, ok := readWorkbenchManifest(deckAbs)
 	if !ok {
-		return workbenchManifest{Status: "not_started", DeckID: filepath.Base(deckAbs), DeckDir: filepath.ToSlash(deckAbs), OutDir: filepath.ToSlash(filepath.Join(deckAbs, "out"))}, nil
+		return canonicalWorkbenchManifestPaths(deckAbs, workbenchManifest{Status: "not_started"})
 	}
+	manifest = canonicalWorkbenchManifestPaths(deckAbs, manifest)
 	if isWorkbenchReady(manifest) {
 		manifest.Status = "running"
 	} else if manifest.Status == "running" || manifest.Status == "starting" {
 		manifest.Status = "stale"
 	}
-	return manifest, nil
+	return manifest
 }
 
 func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
-	manifest, err := workbenchStatus(workspace, deckID, deck)
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
 	if err != nil {
-		return manifest, err
+		return workbenchManifest{}, err
 	}
+	manifest := workbenchStatusForDeck(deckAbs)
 	if manifest.PID > 0 && manifest.Status == "running" {
 		stopWorkbenchProcess(manifest)
 	}
 	manifest.Status = "stopped"
 	manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if manifest.DeckDir != "" {
-		_ = writeWorkbenchManifest(manifest.DeckDir, manifest)
-	}
+	_ = writeWorkbenchManifest(deckAbs, manifest)
 	return manifest, nil
+}
+
+func canonicalWorkbenchManifestPaths(deckAbs string, manifest workbenchManifest) workbenchManifest {
+	manifest.DeckID = filepath.Base(deckAbs)
+	manifest.DeckDir = filepath.ToSlash(deckAbs)
+	manifest.OutDir = filepath.ToSlash(filepath.Join(deckAbs, "out"))
+	if manifest.Paths == nil {
+		manifest.Paths = map[string]string{}
+	}
+	manifest.Paths["brief"] = filepath.ToSlash(filepath.Join(deckAbs, "brief.md"))
+	manifest.Paths["draft"] = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName))
+	manifest.Paths["manifest"] = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName))
+	return manifest
 }
 
 func stopWorkbenchProcess(manifest workbenchManifest) {
