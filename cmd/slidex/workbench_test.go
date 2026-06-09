@@ -86,6 +86,25 @@ func TestWorkbenchSaveRequiresTokenAndSameOrigin(t *testing.T) {
 		t.Fatalf("bad origin status = %d, want %d", badOriginRecorder.Code, http.StatusForbidden)
 	}
 
+	badReferer := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", bytes.NewReader(payload))
+	badReferer.Header.Set("Origin", "http://127.0.0.1:43210")
+	badReferer.Header.Set("Referer", "http://evil.example/form")
+	badReferer.Header.Set("X-Slidex-Workbench-Token", token)
+	badRefererRecorder := httptest.NewRecorder()
+	server.handleSave(badRefererRecorder, badReferer)
+	if badRefererRecorder.Code != http.StatusForbidden {
+		t.Fatalf("bad referer status = %d, want %d", badRefererRecorder.Code, http.StatusForbidden)
+	}
+
+	goodReferer := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", bytes.NewReader(payload))
+	goodReferer.Header.Set("Referer", "http://127.0.0.1:43210/workbench/session-1")
+	goodReferer.Header.Set("X-Slidex-Workbench-Token", token)
+	goodRefererRecorder := httptest.NewRecorder()
+	server.handleSave(goodRefererRecorder, goodReferer)
+	if goodRefererRecorder.Code != http.StatusOK {
+		t.Fatalf("good referer status = %d body=%s", goodRefererRecorder.Code, goodRefererRecorder.Body.String())
+	}
+
 	good := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", bytes.NewReader(payload))
 	good.Header.Set("Origin", "http://127.0.0.1:43210")
 	good.Header.Set("X-Slidex-Workbench-Token", token)

@@ -1910,14 +1910,18 @@ func sameOriginOrNoOrigin(r *http.Request, expectedURL string) bool {
 	}
 	expectedOrigin := expected.Scheme + "://" + expected.Host
 	if origin := r.Header.Get("Origin"); origin != "" {
-		return origin == expectedOrigin
+		if origin != expectedOrigin {
+			return false
+		}
 	}
 	if referer := r.Header.Get("Referer"); referer != "" {
 		parsed, err := url.Parse(referer)
 		if err != nil {
 			return false
 		}
-		return parsed.Scheme+"://"+parsed.Host == expectedOrigin
+		if parsed.Scheme+"://"+parsed.Host != expectedOrigin {
+			return false
+		}
 	}
 	return true
 }
