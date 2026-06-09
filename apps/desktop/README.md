@@ -20,10 +20,15 @@ pnpm install
 
 ```bash
 pnpm run dev
+pnpm run dev:wsl
 pnpm run typecheck
 pnpm run build
 pnpm run pack
 ```
+
+`pnpm run dev:wsl`은 WSL에서 renderer/dev main watch를 실행하고 Windows host의
+`pnpm.cmd dlx electron@<pinned version>`로 Electron dev 앱을 띄웁니다. Windows
+host에 Node.js와 pnpm이 설치되어 있어야 합니다.
 
 ## Structure
 

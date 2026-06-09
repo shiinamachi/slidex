@@ -12,9 +12,12 @@
   "scripts": {
     "clean": "node scripts/clean.cjs",
     "dev": "concurrently -k -n renderer,main,electron -c blue,green,magenta \"pnpm run dev:renderer\" \"pnpm run dev:main\" \"pnpm run dev:electron\"",
+    "dev:wsl": "concurrently -k -n renderer,main,windows -c blue,green,magenta \"pnpm run dev:renderer:wsl\" \"pnpm run dev:main\" \"pnpm run dev:electron:wsl\"",
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:renderer:wsl": "vite --host 0.0.0.0 --port 5173 --strictPort",
     "dev:main": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "dev:electron": "wait-on tcp:127.0.0.1:5173 dist/main/index.js dist/preload/index.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "dev:electron:wsl": "wait-on tcp:127.0.0.1:5173 dist/main/index.js dist/preload/index.js && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/dev-windows-host.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "build": "pnpm run clean && pnpm run typecheck && pnpm run build:main && pnpm run build:renderer",
     "build:main": "tsc -p tsconfig.electron.json",
