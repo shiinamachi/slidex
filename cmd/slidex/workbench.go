@@ -118,17 +118,18 @@ type workbenchBrowserEvidence struct {
 }
 
 type workbenchBrowserEvidenceVerification struct {
-	SchemaVersion string              `json:"schemaVersion"`
-	ToolName      string              `json:"toolName"`
-	ToolVersion   string              `json:"toolVersion"`
-	Status        string              `json:"status"`
-	CheckedAt     string              `json:"checkedAt"`
-	DeckID        string              `json:"deckId"`
-	DeckDir       string              `json:"deckDir"`
-	EvidencePath  string              `json:"evidencePath"`
-	ManifestPath  string              `json:"manifestPath"`
-	Findings      []string            `json:"findings"`
-	VerifiedFiles map[string]artifact `json:"verifiedFiles"`
+	SchemaVersion     string              `json:"schemaVersion"`
+	ToolName          string              `json:"toolName"`
+	ToolVersion       string              `json:"toolVersion"`
+	Status            string              `json:"status"`
+	CheckedAt         string              `json:"checkedAt"`
+	RequireScreenshot bool                `json:"requireScreenshot"`
+	DeckID            string              `json:"deckId"`
+	DeckDir           string              `json:"deckDir"`
+	EvidencePath      string              `json:"evidencePath"`
+	ManifestPath      string              `json:"manifestPath"`
+	Findings          []string            `json:"findings"`
+	VerifiedFiles     map[string]artifact `json:"verifiedFiles"`
 }
 
 type workbenchSaveSmokeResult struct {
@@ -364,10 +365,11 @@ func runWorkbenchVerifyEvidence(args []string) error {
 	workspace := fs.String("workspace", ".", "workspace root containing decks/")
 	deckID := fs.String("deck-id", "", "deck id")
 	deck := fs.String("deck", "", "existing deck workspace directory")
+	requireScreenshot := fs.Bool("require-screenshot", false, "fail unless browser evidence includes a copied browser screenshot artifact")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	result, err := verifyWorkbenchBrowserEvidence(*workspace, *deckID, *deck)
+	result, err := verifyWorkbenchBrowserEvidence(*workspace, *deckID, *deck, *requireScreenshot)
 	if err != nil {
 		return err
 	}
@@ -1567,7 +1569,7 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 	return &artifact, nil
 }
 
-func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBrowserEvidenceVerification, error) {
+func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (workbenchBrowserEvidenceVerification, error) {
 	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
 	if err != nil {
 		return workbenchBrowserEvidenceVerification{}, err
@@ -1575,17 +1577,18 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBr
 	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
 	evidencePath := filepath.Join(deckAbs, "out", workbenchBrowserEvidenceName)
 	result := workbenchBrowserEvidenceVerification{
-		SchemaVersion: "slidex.workbenchBrowserEvidenceVerification.v1",
-		ToolName:      toolName,
-		ToolVersion:   toolVersion,
-		Status:        "fail",
-		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
-		DeckID:        filepath.Base(deckAbs),
-		DeckDir:       filepath.ToSlash(deckAbs),
-		EvidencePath:  filepath.ToSlash(evidencePath),
-		ManifestPath:  filepath.ToSlash(manifestPath),
-		Findings:      []string{},
-		VerifiedFiles: map[string]artifact{},
+		SchemaVersion:     "slidex.workbenchBrowserEvidenceVerification.v1",
+		ToolName:          toolName,
+		ToolVersion:       toolVersion,
+		Status:            "fail",
+		CheckedAt:         time.Now().UTC().Format(time.RFC3339),
+		RequireScreenshot: requireScreenshot,
+		DeckID:            filepath.Base(deckAbs),
+		DeckDir:           filepath.ToSlash(deckAbs),
+		EvidencePath:      filepath.ToSlash(evidencePath),
+		ManifestPath:      filepath.ToSlash(manifestPath),
+		Findings:          []string{},
+		VerifiedFiles:     map[string]artifact{},
 	}
 	addFinding := func(format string, args ...any) {
 		result.Findings = append(result.Findings, fmt.Sprintf(format, args...))
@@ -1655,6 +1658,9 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBr
 	}
 	if !evidence.TokenRedacted {
 		addFinding("browser evidence does not confirm token redaction")
+	}
+	if requireScreenshot && evidence.BrowserScreenshot == nil {
+		addFinding("browser evidence must include a browser screenshot artifact when --require-screenshot is set")
 	}
 	if evidence.ServerBind != "127.0.0.1" {
 		addFinding("browser evidence serverBind is %q", evidence.ServerBind)

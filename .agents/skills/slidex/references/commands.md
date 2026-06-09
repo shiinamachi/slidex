@@ -7,7 +7,7 @@ mise exec -- go install ./cmd/slidex
 slidex workbench start --deck-id <deck_id>
 slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id <deck_id>
 slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified
-slidex workbench verify-evidence --deck-id <deck_id>
+slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
 slidex run --deck decks/<deck_id>
 ```
 

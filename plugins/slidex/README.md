@@ -54,7 +54,7 @@ After recording the evidence, verify it still matches the current deck-local
 artifacts:
 
 ```bash
-slidex workbench verify-evidence --deck-id <deck_id>
+slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
 ```
 
 The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires

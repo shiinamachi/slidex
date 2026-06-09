@@ -438,7 +438,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "")
+	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +449,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("changed after evidence\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err = verifyWorkbenchBrowserEvidence(workspace, "demo", "")
+	result, err = verifyWorkbenchBrowserEvidence(workspace, "demo", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,12 +496,50 @@ func TestWorkbenchVerifyEvidenceDetectsStaleBrowserScreenshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "")
+	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Status != "fail" || !strings.Contains(strings.Join(result.Findings, "\n"), "browser screenshot evidence is stale") {
 		t.Fatalf("stale browser screenshot should fail verification: %#v", result.Findings)
+	}
+}
+
+func TestWorkbenchVerifyEvidenceCanRequireBrowserScreenshot(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	input := workbenchSaveInput{Title: "Demo", Audience: "Board", DecisionGoal: "Approve pilot"}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 43210, 123, "running")
+	if _, err := writeWorkbenchDraft(deck, input, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkbenchBrief(deck, input); err != nil {
+		t.Fatal(err)
+	}
+	manifest.InputSavedAt = "2026-06-09T00:00:00Z"
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
+		Inspector:          "QA",
+		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
+		URL:                manifest.URL,
+		WorkbenchVisible:   true,
+		SavedInputVerified: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "fail" || !strings.Contains(strings.Join(result.Findings, "\n"), "must include a browser screenshot") {
+		t.Fatalf("require-screenshot should fail without screenshot artifact: %#v", result.Findings)
 	}
 }
 

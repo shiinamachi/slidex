@@ -19,7 +19,7 @@ Use this as the default slidex plugin entry point.
 7. Verify `decks/<deck_id>/brief.md`, `decks/<deck_id>/out/workbench_draft.json`, and `decks/<deck_id>/out/workbench_manifest.json` are written.
 8. Use `slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>` only as a local HTTP pre-GUI save check when needed; it verifies workbench HTML bootstrap, draft/save persistence, token redaction, and `out/workbench_save_smoke.json`, but it is not Codex App GUI/browser evidence.
 9. After the Codex App browser surface has actually been inspected, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified` to write `decks/<deck_id>/out/workbench_browser_evidence.json` and, when provided, `decks/<deck_id>/out/workbench_browser_screenshot.<ext>`.
-10. Run `slidex workbench verify-evidence --deck-id <deck_id>` before treating the browser evidence as current.
+10. Run `slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot` before treating the browser evidence as current.
 
 Do not run the full render, QA, or package workflow during startup unless the user asks for it.
 

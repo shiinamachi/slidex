@@ -194,7 +194,7 @@ slidex workbench evidence --deck-id customer-retention \
 명령으로 재검증합니다.
 
 ```bash
-slidex workbench verify-evidence --deck-id customer-retention
+slidex workbench verify-evidence --deck-id customer-retention --require-screenshot
 ```
 
 plugin MCP 설정은 PATH의 `slidex` binary를 실행합니다. repo 소스 변경 후 Codex App에서
