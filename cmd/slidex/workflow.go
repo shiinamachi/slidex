@@ -285,8 +285,8 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	protocol := map[string]any{}
 	if checkCodex {
 		codexVersion = installedCodexVersion()
-		if codexVersion != requiredCodexVersion {
-			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.codex_version", Message: "Codex CLI version must be " + requiredCodexVersion + ", got " + firstNonEmpty(codexVersion, "missing"), Path: "codex"})
+		if !codexVersionAtLeast(codexVersion, requiredCodexVersion) {
+			findings = append(findings, qaFinding{Severity: "fail", Check: "doctor.codex_version", Message: "Codex CLI version must be at least " + requiredCodexVersion + ", got " + firstNonEmpty(codexVersion, "missing"), Path: "codex"})
 		}
 		codexDoctor = commandOutput(30*time.Second, "codex", "doctor", "--json")
 		featureList = commandOutput(8*time.Second, "codex", "features", "list")
@@ -311,6 +311,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"miseGoVersion":               miseGoVersion,
 		"codexVersion":                codexVersion,
 		"requiredCodex":               requiredCodexVersion,
+		"minimumRequiredCodex":        requiredCodexVersion,
 		"chromeVersion":               chrome,
 		"protocolSchema":              protocol,
 		"dangerousAppServerApiPolicy": dangerousAppServerPolicySnapshot(),
@@ -1421,8 +1422,8 @@ func runCodexSchema(args []string) error {
 	if *version != requiredCodexVersion {
 		return exitCodeError(4, "unsupported Codex protocol version: %s", *version)
 	}
-	if installed := installedCodexVersion(); installed != requiredCodexVersion {
-		return exitCodeError(4, "Codex CLI version mismatch: need %s, got %s", requiredCodexVersion, firstNonEmpty(installed, "missing"))
+	if installed := installedCodexVersion(); !codexVersionAtLeast(installed, requiredCodexVersion) {
+		return exitCodeError(4, "Codex CLI version mismatch: need at least %s, got %s", requiredCodexVersion, firstNonEmpty(installed, "missing"))
 	}
 	outDir := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion, "schema")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -4417,6 +4418,57 @@ func installedCodexVersion() string {
 	return fields[len(fields)-1]
 }
 
+func codexVersionAtLeast(installed, minimum string) bool {
+	cmp, ok := compareDottedVersion(installed, minimum)
+	return ok && cmp >= 0
+}
+
+func compareDottedVersion(a, b string) (int, bool) {
+	aParts, okA := dottedVersionParts(a)
+	bParts, okB := dottedVersionParts(b)
+	if !okA || !okB {
+		return 0, false
+	}
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+	for i := 0; i < maxLen; i++ {
+		av := 0
+		if i < len(aParts) {
+			av = aParts[i]
+		}
+		bv := 0
+		if i < len(bParts) {
+			bv = bParts[i]
+		}
+		if av > bv {
+			return 1, true
+		}
+		if av < bv {
+			return -1, true
+		}
+	}
+	return 0, true
+}
+
+func dottedVersionParts(value string) ([]int, bool) {
+	token := regexp.MustCompile(`[0-9]+(?:\.[0-9]+)+`).FindString(value)
+	if token == "" {
+		return nil, false
+	}
+	fields := strings.Split(token, ".")
+	parts := make([]int, 0, len(fields))
+	for _, field := range fields {
+		n, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, n)
+	}
+	return parts, true
+}
+
 func commandOutput(timeout time.Duration, name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -4691,11 +4743,11 @@ func enforceCodexRuntimeGate(state slidexState) error {
 	if state.CodexRuntime.Mode != "app-server" && state.CodexRuntime.Mode != "exec" && state.CodexRuntime.Mode != "exec_fallback" {
 		return exitCodeError(4, "unsupported Codex runtime mode: %s", state.CodexRuntime.Mode)
 	}
-	if state.CodexRuntime.InstalledVersion != requiredCodexVersion {
+	if !codexVersionAtLeast(state.CodexRuntime.InstalledVersion, requiredCodexVersion) {
 		if state.CodexRuntime.AllowMismatch {
 			return nil
 		}
-		return exitCodeError(4, "Codex CLI version mismatch: need %s, got %s", requiredCodexVersion, firstNonEmpty(state.CodexRuntime.InstalledVersion, "missing"))
+		return exitCodeError(4, "Codex CLI version mismatch: need at least %s, got %s", requiredCodexVersion, firstNonEmpty(state.CodexRuntime.InstalledVersion, "missing"))
 	}
 	expectedBundle := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
 	expectedHash := hashPathSet(expectedBundle)
@@ -4713,8 +4765,8 @@ func protocolMismatchAcceptedRisk(state slidexState) *acceptedRisk {
 		return nil
 	}
 	reasons := []string{}
-	if state.CodexRuntime.InstalledVersion != requiredCodexVersion {
-		reasons = append(reasons, fmt.Sprintf("Codex CLI version mismatch allowed: need %s, got %s", requiredCodexVersion, firstNonEmpty(state.CodexRuntime.InstalledVersion, "missing")))
+	if !codexVersionAtLeast(state.CodexRuntime.InstalledVersion, requiredCodexVersion) {
+		reasons = append(reasons, fmt.Sprintf("Codex CLI version mismatch allowed: need at least %s, got %s", requiredCodexVersion, firstNonEmpty(state.CodexRuntime.InstalledVersion, "missing")))
 	}
 	expectedBundle := filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion)
 	expectedHash := hashPathSet(expectedBundle)

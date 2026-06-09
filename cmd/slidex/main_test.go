@@ -1068,14 +1068,52 @@ func TestGoalStatusEnumIsReadFromGeneratedSchema(t *testing.T) {
 }
 
 func TestRuntimeGateBlocksProtocolMismatchByDefault(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
 	state := newState(filepath.Join(t.TempDir(), "deck"), "app-server", false)
 	state.CodexRuntime.InstalledVersion = "0.0.0"
 	if err := enforceCodexRuntimeGate(state); err == nil {
-		t.Fatal("expected version mismatch to fail")
+		t.Fatal("expected below-minimum version to fail")
 	}
+	state.CodexRuntime.InstalledVersion = requiredCodexVersion
+	if err := enforceCodexRuntimeGate(state); err != nil {
+		t.Fatalf("exact minimum version should pass: %v", err)
+	}
+	state.CodexRuntime.InstalledVersion = "0.137.0"
+	if err := enforceCodexRuntimeGate(state); err != nil {
+		t.Fatalf("higher Codex CLI version should pass minimum gate: %v", err)
+	}
+	state.CodexRuntime.InstalledVersion = "0.0.0"
 	state.CodexRuntime.AllowMismatch = true
 	if err := enforceCodexRuntimeGate(state); err != nil {
 		t.Fatalf("allow mismatch should bypass version gate: %v", err)
+	}
+}
+
+func TestCodexVersionAtLeast(t *testing.T) {
+	tests := []struct {
+		installed string
+		minimum   string
+		want      bool
+	}{
+		{"codex-cli 0.132.0", "0.132.0", true},
+		{"0.137.0", "0.132.0", true},
+		{"0.131.9", "0.132.0", false},
+		{"missing", "0.132.0", false},
+		{"0.132", "0.132.0", true},
+	}
+	for _, tc := range tests {
+		if got := codexVersionAtLeast(tc.installed, tc.minimum); got != tc.want {
+			t.Fatalf("codexVersionAtLeast(%q, %q) = %v, want %v", tc.installed, tc.minimum, got, tc.want)
+		}
 	}
 }
 
@@ -1178,6 +1216,16 @@ func TestStageAuditNormalizationUsesDeterministicBaseline(t *testing.T) {
 }
 
 func TestProtocolMismatchAllowRecordsAcceptedRisk(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
 	state := newState(filepath.Join(t.TempDir(), "deck"), "app-server", true)
 	state.CodexRuntime.InstalledVersion = "0.0.0"
 	risk := protocolMismatchAcceptedRisk(state)
@@ -1189,6 +1237,10 @@ func TestProtocolMismatchAllowRecordsAcceptedRisk(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, risk.Expiration); err != nil {
 		t.Fatalf("risk expiration is not RFC3339: %v", err)
+	}
+	state.CodexRuntime.InstalledVersion = "0.137.0"
+	if risk := protocolMismatchAcceptedRisk(state); risk != nil {
+		t.Fatalf("higher Codex CLI version should not record an accepted risk: %#v", risk)
 	}
 }
 
