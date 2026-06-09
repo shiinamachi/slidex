@@ -831,6 +831,45 @@ func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
 	}
 }
 
+func TestWorkbenchServeMarksManifestStaleOnPortCollision(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := workbenchListenAddr(port); got != "127.0.0.1:"+portRaw {
+		t.Fatalf("listen addr = %q, want 127.0.0.1:%s", got, portRaw)
+	}
+	if strings.Contains(workbenchListenAddr(port), "0.0.0.0") {
+		t.Fatalf("workbench must not bind to all interfaces by default: %s", workbenchListenAddr(port))
+	}
+
+	err = serveWorkbench(deck, workspace, "session-1", "token", port)
+	if err == nil {
+		t.Fatal("expected occupied port to fail")
+	}
+	manifest, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after serve collision")
+	}
+	if manifest.Status != "stale" || manifest.ServerBind != "127.0.0.1" || manifest.Host != "127.0.0.1" {
+		t.Fatalf("serve collision did not record stale loopback manifest: %#v", manifest)
+	}
+}
+
 func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")

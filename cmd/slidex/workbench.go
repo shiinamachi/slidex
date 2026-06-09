@@ -841,13 +841,18 @@ func serveWorkbench(deckAbs, workspace, sessionID, token string, port int) error
 	mux.HandleFunc("/workbench/"+sessionID+"/api/session", server.handleSession)
 	mux.HandleFunc("/workbench/"+sessionID+"/api/draft", server.handleDraft)
 	mux.HandleFunc("/workbench/"+sessionID+"/api/save", server.handleSave)
-	addr := "127.0.0.1:" + strconv.Itoa(port)
 	httpServer := &http.Server{
-		Addr:              addr,
+		Addr:              workbenchListenAddr(port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return httpServer.ListenAndServe()
+	err := httpServer.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		manifest.Status = "stale"
+		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		_ = writeWorkbenchManifest(deckAbs, manifest)
+	}
+	return err
 }
 
 type workbenchHTTPServer struct {
@@ -1936,6 +1941,10 @@ func chooseLoopbackPort() (int, error) {
 		return 0, errors.New("loopback listener did not return TCP address")
 	}
 	return addr.Port, nil
+}
+
+func workbenchListenAddr(port int) string {
+	return "127.0.0.1:" + strconv.Itoa(port)
 }
 
 func waitForWorkbenchReady(manifest workbenchManifest, timeout time.Duration) error {
