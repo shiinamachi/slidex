@@ -567,6 +567,30 @@ func doctorWorkbenchFindings() []qaFinding {
 	if !manifest.TokenRedacted || manifest.TokenSHA256 == "" || strings.Contains(manifest.URL, "doctor-token") {
 		findings = append(findings, fail("doctor.workbench_token", "workbench must redact raw write tokens from public URL/manifest fields", "cmd/slidex/workbench.go"))
 	}
+	if workbenchListenAddr(manifest.Port) != "127.0.0.1:49152" {
+		findings = append(findings, fail("doctor.workbench_loopback", "workbench listener must use exact 127.0.0.1 host", "cmd/slidex/workbench.go"))
+	}
+	if validWorkbenchToken("", "doctor-token") || validWorkbenchToken("wrong", "doctor-token") || !validWorkbenchToken("doctor-token", "doctor-token") {
+		findings = append(findings, fail("doctor.workbench_token", "workbench token validation must reject missing/wrong tokens and accept the exact token", "cmd/slidex/workbench.go"))
+	}
+	origin := "http://127.0.0.1:49152"
+	if sameOriginRequired(&http.Request{Header: http.Header{}}, manifest.URL) ||
+		sameOriginRequired(&http.Request{Header: http.Header{"Origin": []string{"http://evil.example"}}}, manifest.URL) ||
+		!sameOriginRequired(&http.Request{Header: http.Header{"Origin": []string{origin}}}, manifest.URL) {
+		findings = append(findings, fail("doctor.workbench_origin", "mutating workbench routes must require the expected loopback Origin or Referer", "cmd/slidex/workbench.go"))
+	}
+	if !workbenchSessionPathMatches("/workbench/doctor-session/api/save", manifest.SessionID, "/api/save") ||
+		workbenchSessionPathMatches("/workbench/wrong-session/api/save", manifest.SessionID, "/api/save") {
+		findings = append(findings, fail("doctor.workbench_session", "workbench routes must be scoped to the active session path", "cmd/slidex/workbench.go"))
+	}
+	if redacted, _ := publicWorkbenchStatus(manifest)["tokenRedacted"].(bool); !redacted {
+		findings = append(findings, fail("doctor.workbench_token", "public workbench status must report true token redaction only when token hash exists", "cmd/slidex/workbench.go"))
+	}
+	withoutHash := manifest
+	withoutHash.TokenSHA256 = ""
+	if redacted, _ := publicWorkbenchStatus(withoutHash)["tokenRedacted"].(bool); redacted {
+		findings = append(findings, fail("doctor.workbench_token", "public workbench status must not claim token redaction when token hash is missing", "cmd/slidex/workbench.go"))
+	}
 	for name, rawPath := range manifest.Paths {
 		path := filepath.Clean(filepath.FromSlash(rawPath))
 		if !filepath.IsAbs(path) {

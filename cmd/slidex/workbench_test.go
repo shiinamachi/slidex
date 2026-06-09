@@ -444,6 +444,21 @@ func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
 	}
 }
 
+func TestDoctorWorkbenchFindingsCoverSecurityContract(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if findings := doctorWorkbenchFindings(); len(findings) != 0 {
+		t.Fatalf("doctor workbench security contract findings = %#v", findings)
+	}
+}
+
 func TestResolveDeckDirRejectsSymlinkEscape(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, "decks"), 0o755); err != nil {
