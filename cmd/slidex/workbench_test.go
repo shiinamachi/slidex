@@ -44,6 +44,20 @@ func TestBootstrapDeckRejectsTraversalAndCreatesUnderDecks(t *testing.T) {
 	}
 }
 
+func TestBootstrapDeckUsesRepoTemplateForExternalWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	result, err := bootstrapDeckWorkspace(workspace, "external-template", "decks/_template", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "created" {
+		t.Fatalf("status = %q, want created", result.Status)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "decks", "external-template", "brief.md")); err != nil {
+		t.Fatalf("template brief was not copied from repo fallback: %v", err)
+	}
+}
+
 func TestWorkbenchSaveRequiresTokenAndSameOrigin(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
@@ -140,6 +154,44 @@ func TestWorkbenchDraftRequiresTokenAndPersistsRecovery(t *testing.T) {
 	}
 	if !strings.Contains(getRecorder.Body.String(), "Recovered draft") {
 		t.Fatalf("draft reload omitted saved input: %s", getRecorder.Body.String())
+	}
+}
+
+func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
+	html := `<script>const boot = {"deckId":"demo","sessionId":"session-1","apiBase":"/workbench/session-1/api","token":"secret-token"};</script>`
+	boot, token, err := extractWorkbenchBoot(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "secret-token" || boot["apiBase"] != "/workbench/session-1/api" {
+		t.Fatalf("unexpected boot parse: boot=%#v token=%q", boot, token)
+	}
+	apiURL := absoluteWorkbenchAPIURL("http://127.0.0.1:49152/workbench/session-1", "/workbench/session-1/api/save")
+	if apiURL != "http://127.0.0.1:49152/workbench/session-1/api/save" {
+		t.Fatalf("unexpected api URL: %s", apiURL)
+	}
+	result := workbenchSaveSmokeResult{
+		StartStatus:                     "running",
+		DraftStatus:                     "draft_saved",
+		SaveStatus:                      "saved",
+		StopStatus:                      "stopped",
+		ServerBind:                      "127.0.0.1",
+		TokenRedacted:                   true,
+		HTMLBootstrapTokenFound:         true,
+		RawTokenAbsentFromArtifacts:     true,
+		IsActualCodexAppBrowserEvidence: false,
+		VerifiedFiles: map[string]artifact{
+			"brief":    {Path: "brief.md", SHA256: strings.Repeat("a", 64), Size: 1},
+			"draft":    {Path: "workbench_draft.json", SHA256: strings.Repeat("b", 64), Size: 1},
+			"manifest": {Path: "workbench_manifest.json", SHA256: strings.Repeat("c", 64), Size: 1},
+		},
+	}
+	if status := workbenchSaveSmokeStatus(result); status != "pass" {
+		t.Fatalf("status = %q, want pass", status)
+	}
+	result.IsActualCodexAppBrowserEvidence = true
+	if status := workbenchSaveSmokeStatus(result); status != "fail" {
+		t.Fatalf("save smoke must not pass as actual browser evidence: %q", status)
 	}
 }
 

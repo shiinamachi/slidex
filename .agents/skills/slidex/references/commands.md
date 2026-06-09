@@ -5,6 +5,7 @@ Primary workflow:
 ```bash
 mise exec -- go install ./cmd/slidex
 slidex workbench start --deck-id <deck_id>
+slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id <deck_id>
 slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --workbench-visible --saved-input-verified
 slidex workbench verify-evidence --deck-id <deck_id>
 slidex run --deck decks/<deck_id>
@@ -36,6 +37,10 @@ slidex codex schema refresh --codex-version 0.138.0
 slidex codex app-server probe
 slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke
 ```
+
+`slidex workbench save-smoke` is a local HTTP pre-GUI check. It verifies
+workbench HTML bootstrap, draft/save persistence, token redaction, and
+deck-local artifact hashes, but it is not Codex App GUI/browser evidence.
 
 Goal mirror:
 

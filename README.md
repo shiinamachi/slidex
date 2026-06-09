@@ -158,6 +158,17 @@ loopback URL을 반환합니다. Workbench 저장은 `brief.md`와
 session-scoped URL 아래에서만 노출되며, mutating request는
 `X-Slidex-Workbench-Token`과 Origin/Referer 검증을 통과해야 합니다.
 
+Codex App GUI 검증 전에는 local HTTP 저장 smoke를 실행해 workbench HTML bootstrap과
+draft/save persistence를 확인할 수 있습니다. 이 명령은 loopback workbench HTML을
+fetch하고 session token으로 `/draft`와 `/save` API를 호출한 뒤, `brief.md`,
+`out/workbench_draft.json`, `out/workbench_manifest.json` 해시와 token redaction을
+검증해 `out/workbench_save_smoke.json`을 씁니다. 이 증거는 Codex App GUI/browser 표시
+증거를 대체하지 않습니다.
+
+```bash
+slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id save-smoke
+```
+
 Codex App browser/work-surface를 실제로 확인한 뒤에는 다음 명령으로 deck-local
 검증 증거를 남깁니다. 이 증거가 없으면 Codex App browser 표시가 검증됐다고 주장하지
 않습니다.

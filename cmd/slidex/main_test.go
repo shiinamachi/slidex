@@ -1161,6 +1161,12 @@ func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	if snapshot["proprietaryCanvasMountAPI"] != "not_claimed" {
 		t.Fatalf("doctor snapshot must not claim proprietary canvas mount support: %#v", snapshot)
 	}
+	if snapshot["saveSmokeCommand"] != "slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>" {
+		t.Fatalf("doctor snapshot should expose the pre-GUI save smoke command: %#v", snapshot)
+	}
+	if snapshot["saveSmokeIsBrowserEvidence"] != false {
+		t.Fatalf("save smoke must not be reported as browser evidence: %#v", snapshot)
+	}
 	if snapshot["browserEvidenceRequired"] != true {
 		t.Fatalf("doctor snapshot must require actual browser evidence: %#v", snapshot)
 	}
