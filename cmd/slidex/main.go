@@ -248,7 +248,7 @@ Commands:
   clean --deck decks/<deck_id> [--logs] [--older-than DURATION]
   run --deck decks/<deck_id> [--until package|qa|render] [--non-interactive]
   codex doctor|app-server|schema|exec|models|features|mcp|plugins|threads|turn|review|remote-control
-  workbench start|status|stop|evidence --deck-id <deck_id>
+  workbench start|status|stop|evidence|verify-evidence --deck-id <deck_id>
   goal set|status|pause|resume|complete|clear --deck decks/<deck_id>
   mcp-server --stdio
   migrate --deck decks/<deck_id> [--from html-pdf] [--write]

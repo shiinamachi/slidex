@@ -32,6 +32,13 @@ This writes `decks/<deck_id>/out/workbench_browser_evidence.json`. Do not claim
 the Codex App browser/work-surface path has passed until this evidence reflects
 an actual inspection.
 
+After recording the evidence, verify it still matches the current deck-local
+artifacts:
+
+```bash
+slidex workbench verify-evidence --deck-id <deck_id>
+```
+
 The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires
 `X-Slidex-Workbench-Token` for writes, and records only token hashes in
 manifests.

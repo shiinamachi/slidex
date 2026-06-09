@@ -173,6 +173,12 @@ slidex workbench evidence --deck-id customer-retention \
 ```
 
 증거는 `decks/customer-retention/out/workbench_browser_evidence.json`에 기록됩니다.
+기록된 증거가 현재 `brief.md`, draft, manifest 해시와 계속 일치하는지는 다음
+명령으로 재검증합니다.
+
+```bash
+slidex workbench verify-evidence --deck-id customer-retention
+```
 
 plugin MCP 설정은 PATH의 `slidex` binary를 실행합니다. repo 소스 변경 후 Codex App에서
 plugin을 검증하려면 먼저 현재 소스를 설치합니다.

@@ -108,6 +108,20 @@ type workbenchBrowserEvidence struct {
 	VerifiedFiles       map[string]artifact `json:"verifiedFiles"`
 }
 
+type workbenchBrowserEvidenceVerification struct {
+	SchemaVersion string              `json:"schemaVersion"`
+	ToolName      string              `json:"toolName"`
+	ToolVersion   string              `json:"toolVersion"`
+	Status        string              `json:"status"`
+	CheckedAt     string              `json:"checkedAt"`
+	DeckID        string              `json:"deckId"`
+	DeckDir       string              `json:"deckDir"`
+	EvidencePath  string              `json:"evidencePath"`
+	ManifestPath  string              `json:"manifestPath"`
+	Findings      []string            `json:"findings"`
+	VerifiedFiles map[string]artifact `json:"verifiedFiles"`
+}
+
 type workbenchBrowserEvidenceInput struct {
 	Inspector          string
 	Surface            string
@@ -128,7 +142,7 @@ type workbenchSaveInput struct {
 
 func runWorkbench(args []string) error {
 	if len(args) == 0 {
-		return exitCodeError(2, "usage: slidex workbench start|serve|status|stop|evidence")
+		return exitCodeError(2, "usage: slidex workbench start|serve|status|stop|evidence|verify-evidence")
 	}
 	switch args[0] {
 	case "start":
@@ -141,6 +155,8 @@ func runWorkbench(args []string) error {
 		return runWorkbenchStop(args[1:])
 	case "evidence":
 		return runWorkbenchEvidence(args[1:])
+	case "verify-evidence":
+		return runWorkbenchVerifyEvidence(args[1:])
 	default:
 		return exitCodeError(2, "unknown workbench command: %s", args[0])
 	}
@@ -259,6 +275,26 @@ func runWorkbenchEvidence(args []string) error {
 		return err
 	}
 	return printJSON(map[string]any{"toolName": toolName, "status": evidence.Status, "evidence": evidence, "evidencePath": evidence.EvidencePath})
+}
+
+func runWorkbenchVerifyEvidence(args []string) error {
+	fs := flag.NewFlagSet("workbench verify-evidence", flag.ContinueOnError)
+	workspace := fs.String("workspace", ".", "workspace root containing decks/")
+	deckID := fs.String("deck-id", "", "deck id")
+	deck := fs.String("deck", "", "existing deck workspace directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	result, err := verifyWorkbenchBrowserEvidence(*workspace, *deckID, *deck)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{"toolName": toolName, "status": result.Status, "verification": result}
+	if result.Status != "pass" {
+		_ = printJSON(payload)
+		return exitCodeError(4, "workbench browser evidence verification failed")
+	}
+	return printJSON(payload)
 }
 
 func callMCPDeckBootstrap(args map[string]any) (any, error) {
@@ -1050,6 +1086,155 @@ func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbe
 		return workbenchBrowserEvidence{}, err
 	}
 	return evidence, nil
+}
+
+func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBrowserEvidenceVerification, error) {
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	if err != nil {
+		return workbenchBrowserEvidenceVerification{}, err
+	}
+	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
+	evidencePath := filepath.Join(deckAbs, "out", workbenchBrowserEvidenceName)
+	result := workbenchBrowserEvidenceVerification{
+		SchemaVersion: "slidex.workbenchBrowserEvidenceVerification.v1",
+		ToolName:      toolName,
+		ToolVersion:   toolVersion,
+		Status:        "fail",
+		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
+		DeckID:        filepath.Base(deckAbs),
+		DeckDir:       filepath.ToSlash(deckAbs),
+		EvidencePath:  filepath.ToSlash(evidencePath),
+		ManifestPath:  filepath.ToSlash(manifestPath),
+		Findings:      []string{},
+		VerifiedFiles: map[string]artifact{},
+	}
+	addFinding := func(format string, args ...any) {
+		result.Findings = append(result.Findings, fmt.Sprintf(format, args...))
+	}
+
+	if err := rejectSymlinkAncestors(evidencePath); err != nil {
+		addFinding("browser evidence path contains a symlink: %v", err)
+		return result, nil
+	}
+	if err := rejectSecureWriteTarget(evidencePath); err != nil {
+		addFinding("browser evidence path is not a regular secure target: %v", err)
+		return result, nil
+	}
+	raw, err := os.ReadFile(evidencePath)
+	if err != nil {
+		addFinding("browser evidence is missing or unreadable: %s: %v", filepath.ToSlash(evidencePath), err)
+		return result, nil
+	}
+	var evidence workbenchBrowserEvidence
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		addFinding("browser evidence is not valid JSON: %v", err)
+		return result, nil
+	}
+	manifest, ok := readWorkbenchManifest(deckAbs)
+	if !ok {
+		addFinding("workbench manifest is missing or unreadable: %s", filepath.ToSlash(manifestPath))
+	}
+
+	if evidence.SchemaVersion != "slidex.workbenchBrowserEvidence.v1" {
+		addFinding("browser evidence schemaVersion is %q", evidence.SchemaVersion)
+	}
+	if evidence.Status != "verified" {
+		addFinding("browser evidence status is %q", evidence.Status)
+	}
+	if evidence.DeckID != filepath.Base(deckAbs) {
+		addFinding("browser evidence deckId is %q, want %q", evidence.DeckID, filepath.Base(deckAbs))
+	}
+	if evidence.DeckDir != filepath.ToSlash(deckAbs) {
+		addFinding("browser evidence deckDir is %q, want %q", evidence.DeckDir, filepath.ToSlash(deckAbs))
+	}
+	if evidence.EvidencePath != filepath.ToSlash(evidencePath) {
+		addFinding("browser evidence path is %q, want %q", evidence.EvidencePath, filepath.ToSlash(evidencePath))
+	}
+	if evidence.ManifestPath != filepath.ToSlash(manifestPath) {
+		addFinding("browser evidence manifestPath is %q, want %q", evidence.ManifestPath, filepath.ToSlash(manifestPath))
+	}
+	if evidence.Surface != "codex_app_in_app_browser" && evidence.Surface != "codex_browser_plugin" {
+		addFinding("browser evidence surface is %q", evidence.Surface)
+	}
+	if !evidence.WorkbenchVisible {
+		addFinding("browser evidence does not confirm visible workbench")
+	}
+	if !evidence.SavedInputVerified {
+		addFinding("browser evidence does not confirm saved input verification")
+	}
+	if !evidence.TokenRedacted {
+		addFinding("browser evidence does not confirm token redaction")
+	}
+	if evidence.ServerBind != "127.0.0.1" {
+		addFinding("browser evidence serverBind is %q", evidence.ServerBind)
+	}
+	parsed, err := url.Parse(evidence.URL)
+	if err != nil {
+		addFinding("browser evidence URL is invalid: %v", err)
+	} else if parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" {
+		addFinding("browser evidence URL must be an http://127.0.0.1 loopback URL: %s", evidence.URL)
+	}
+
+	if ok {
+		if strings.TrimSpace(manifest.InputSavedAt) == "" {
+			addFinding("workbench manifest does not record saved input")
+		}
+		if manifest.URL != evidence.URL {
+			addFinding("browser evidence URL is %q, current manifest URL is %q", evidence.URL, manifest.URL)
+		}
+		if manifest.SessionID != evidence.SessionID {
+			addFinding("browser evidence sessionId is %q, current manifest sessionId is %q", evidence.SessionID, manifest.SessionID)
+		}
+		if manifest.ServerBind != "127.0.0.1" || manifest.Host != "127.0.0.1" {
+			addFinding("workbench manifest must bind and advertise 127.0.0.1")
+		}
+		if !manifest.TokenRedacted || manifest.TokenSHA256 == "" {
+			addFinding("workbench manifest must redact the write token")
+		}
+	}
+
+	expectedFiles := map[string]string{
+		"brief":    filepath.Join(deckAbs, "brief.md"),
+		"draft":    filepath.Join(deckAbs, "out", workbenchDraftName),
+		"manifest": manifestPath,
+	}
+	expectedEvidencePaths := map[string]string{
+		"brief":    evidence.BriefPath,
+		"draft":    evidence.DraftPath,
+		"manifest": evidence.ManifestPath,
+	}
+	for name, path := range expectedFiles {
+		if err := rejectSymlinkAncestors(path); err != nil {
+			addFinding("%s path contains a symlink: %v", name, err)
+			continue
+		}
+		if err := rejectSecureWriteTarget(path); err != nil {
+			addFinding("%s path is not a regular secure target: %v", name, err)
+			continue
+		}
+		actual := artifactFromPath(path)
+		result.VerifiedFiles[name] = actual
+		if actual.SHA256 == "" || actual.Size <= 0 {
+			addFinding("%s artifact is missing or empty: %s", name, filepath.ToSlash(path))
+			continue
+		}
+		if expectedEvidencePaths[name] != filepath.ToSlash(path) {
+			addFinding("browser evidence %s path is %q, want %q", name, expectedEvidencePaths[name], filepath.ToSlash(path))
+		}
+		recorded, exists := evidence.VerifiedFiles[name]
+		if !exists {
+			addFinding("browser evidence is missing verifiedFiles.%s", name)
+			continue
+		}
+		if recorded.Path != actual.Path || recorded.SHA256 != actual.SHA256 || recorded.Size != actual.Size {
+			addFinding("browser evidence verifiedFiles.%s is stale", name)
+		}
+	}
+
+	if len(result.Findings) == 0 {
+		result.Status = "pass"
+	}
+	return result, nil
 }
 
 func validateWorkbenchBrowserEvidenceInput(input workbenchBrowserEvidenceInput, manifest workbenchManifest) error {
