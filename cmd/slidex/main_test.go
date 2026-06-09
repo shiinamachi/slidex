@@ -303,6 +303,62 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	}
 }
 
+func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	pngPath := filepath.Join(outDir, "rendered_slides", "slide_01.png")
+	if err := os.MkdirAll(filepath.Dir(pngPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSolidPNGForTest(t, pngPath, color.RGBA{R: 12, G: 34, B: 56, A: 255})
+	htmlPath := filepath.Join(outDir, "final_deck.html")
+	if err := os.WriteFile(htmlPath, []byte("<!doctype html><section class=\"slide\">OK</section>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := renderManifest{
+		SourceHTML:         artifact{Path: htmlPath, SHA256: mustSHA256(htmlPath)},
+		ExpectedDimensions: dimension{Width: 2, Height: 2},
+		PNGFiles: []renderedImage{{
+			SlideID:    "slide_01",
+			Path:       pngPath,
+			SHA256:     mustSHA256(pngPath),
+			Dimensions: dimension{Width: 2, Height: 2},
+			Blank:      false,
+		}},
+	}
+	if err := secureWriteJSON(filepath.Join(outDir, "render_manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runVisualReviewRecord([]string{"--deck", deck, "--inspector", "QA", "--notes", "montage and PDF inspected"}); err != nil {
+		t.Fatal(err)
+	}
+
+	reviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
+	if !visualReviewArtifactFresh(reviewPath, manifest) {
+		t.Fatalf("manual visual review should be fresh: %s", readFileOrEmpty(reviewPath))
+	}
+	if findings := verifyVisualReviewImageSet(filepath.Join(outDir, "visual_reviews", "image_set.json"), manifest); len(findings) > 0 {
+		t.Fatalf("image set should verify, got %#v", findings)
+	}
+	if findings := verifyVisualReviewEvidence(reviewPath, manifest); len(findings) > 0 {
+		t.Fatalf("visual review evidence should verify, got %#v", findings)
+	}
+	if !strings.Contains(readFileOrEmpty(reviewPath), "montage and PDF inspected") {
+		t.Fatalf("manual notes were not recorded: %s", readFileOrEmpty(reviewPath))
+	}
+}
+
 func hasFindingCheck(findings []qaFinding, needle string) bool {
 	for _, finding := range findings {
 		if strings.Contains(finding.Check, needle) || strings.Contains(finding.Message, needle) {

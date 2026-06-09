@@ -179,6 +179,8 @@ func main() {
 		err = runRender(os.Args[2:])
 	case "qa":
 		err = runQA(os.Args[2:])
+	case "visual-review":
+		err = runVisualReviewCommand(os.Args[2:])
 	case "revise":
 		err = runRevise(os.Args[2:])
 	case "sync-html-edits":
@@ -233,6 +235,7 @@ Commands:
   render --deck decks/<deck_id>
   render --html decks/<deck_id>/out/final_deck.html --pdf decks/<deck_id>/out/final_deck.pdf
   qa --deck decks/<deck_id> [--visual-review codex|manual|none]
+  visual-review record --deck decks/<deck_id> [--status pass|pass_with_risks|fail]
   revise --deck decks/<deck_id>
   sync-html-edits --deck decks/<deck_id>
   finalize --deck decks/<deck_id>

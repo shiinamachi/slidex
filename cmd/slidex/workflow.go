@@ -707,6 +707,90 @@ func runFinalize(args []string) error {
 	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "deliverySummary": path})
 }
 
+func runVisualReviewCommand(args []string) error {
+	if len(args) == 0 {
+		return exitCodeError(2, "usage: slidex visual-review record --deck decks/<deck_id>")
+	}
+	switch args[0] {
+	case "record":
+		return runVisualReviewRecord(args[1:])
+	default:
+		return exitCodeError(2, "unknown visual-review command: %s", args[0])
+	}
+}
+
+func runVisualReviewRecord(args []string) error {
+	fs := flag.NewFlagSet("visual-review record", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	status := fs.String("status", "pass", "pass, pass_with_risks, or fail")
+	inspector := fs.String("inspector", "", "manual inspector name or role")
+	notes := fs.String("notes", "", "manual visual inspection notes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	if !in(*status, []string{"pass", "pass_with_risks", "fail"}) {
+		return exitCodeError(2, "--status must be pass, pass_with_risks, or fail")
+	}
+	deckAbs := mustAbs(*deck)
+	outDir := filepath.Join(deckAbs, "out")
+	manifestPath := filepath.Join(outDir, "render_manifest.json")
+	manifest, ok := readRenderManifest(manifestPath)
+	if !ok {
+		return fmt.Errorf("render manifest is missing or invalid: %s", manifestPath)
+	}
+	if len(manifest.PNGFiles) == 0 {
+		return fmt.Errorf("render manifest has no rendered PNG evidence: %s", manifestPath)
+	}
+	imageSetPath := filepath.Join(outDir, "visual_reviews", "image_set.json")
+	if err := writeVisualReviewImageSet(imageSetPath, manifest); err != nil {
+		return err
+	}
+	reviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
+	findings := []qaFinding{{
+		Severity: "info",
+		Check:    "manual_visual_review.recorded",
+		Message:  "Manual visual review recorded" + manualInspectorSuffix(*inspector) + ".",
+		Path:     reviewPath,
+	}}
+	if strings.TrimSpace(*notes) != "" {
+		findings = append(findings, qaFinding{Severity: "info", Check: "manual_visual_review.notes", Message: strings.TrimSpace(*notes), Path: reviewPath})
+	}
+	if *status == "pass_with_risks" {
+		findings = append(findings, qaFinding{Severity: "warn", Check: "manual_visual_review.status", Message: "Manual visual review recorded pass_with_risks.", Path: reviewPath})
+	} else if *status == "fail" {
+		findings = append(findings, fail("manual_visual_review.status", "Manual visual review recorded fail.", reviewPath))
+	}
+	payload := map[string]any{
+		"schemaVersion":  "slidex.reviewFindings.v1",
+		"stage":          "visual_qa",
+		"round":          1,
+		"mode":           "manual",
+		"status":         *status,
+		"imageEvidence":  visualReviewEvidence(deckAbs, manifest),
+		"artifactHashes": structuredReviewArtifactHashes(deckAbs),
+		"findings":       findingsForStrictSchema(findings),
+	}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		return err
+	}
+	if err := secureWriteJSON(reviewPath, payload); err != nil {
+		return err
+	}
+	_ = appendRunLog(outDir, map[string]any{"event": "manual_visual_review_recorded", "status": *status, "review": reviewPath, "imageSet": imageSetPath, "imageCount": len(manifest.PNGFiles)})
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": *status, "review": reviewPath, "imageSet": imageSetPath, "imageCount": len(manifest.PNGFiles)})
+}
+
+func manualInspectorSuffix(inspector string) string {
+	inspector = strings.TrimSpace(inspector)
+	if inspector == "" {
+		return ""
+	}
+	return " by " + inspector
+}
+
 func runPipeline(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
