@@ -791,6 +791,40 @@ func manualInspectorSuffix(inspector string) string {
 	return " by " + inspector
 }
 
+func runReview(args []string) error {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	deck := fs.String("deck", "", "deck workspace directory")
+	stage := fs.String("stage", "all", "all, design, html, qa, or delivery")
+	round := fs.Int("round", 1, "review round")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *deck == "" {
+		return exitCodeError(2, "--deck is required")
+	}
+	if *round < 1 {
+		return exitCodeError(2, "--round must be at least 1")
+	}
+	deckAbs := mustAbs(*deck)
+	stages := []string{}
+	if *stage == "all" {
+		stages = structuredReviewStages()
+	} else if in(*stage, structuredReviewStages()) {
+		stages = []string{*stage}
+	} else {
+		return exitCodeError(2, "--stage must be all, design, html, qa, or delivery")
+	}
+	paths := []string{}
+	for _, reviewStage := range stages {
+		path, err := writeStructuredReview(deckAbs, reviewStage, *round)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, path)
+	}
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "stage": *stage, "round": *round, "reviews": paths})
+}
+
 func runPipeline(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")

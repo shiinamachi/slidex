@@ -359,6 +359,40 @@ func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {
 	}
 }
 
+func TestRunReviewWritesDeterministicStructuredReview(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "strategy.md"), []byte("# Strategy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "deck_spec.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runReview([]string{"--deck", deck, "--stage", "design"}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_design.json")
+	raw := readFileOrEmpty(path)
+	if !strings.Contains(raw, `"status": "pass"`) || !strings.Contains(raw, `"mode": "parallel_reviewer_threads"`) {
+		t.Fatalf("unexpected deterministic review payload: %s", raw)
+	}
+}
+
 func hasFindingCheck(findings []qaFinding, needle string) bool {
 	for _, finding := range findings {
 		if strings.Contains(finding.Check, needle) || strings.Contains(finding.Message, needle) {
