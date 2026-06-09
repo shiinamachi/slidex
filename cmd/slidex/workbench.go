@@ -1359,7 +1359,19 @@ func workbenchStatus(workspace, deckID, deck string) (workbenchManifest, error) 
 	if err != nil {
 		return workbenchManifest{}, err
 	}
-	return workbenchStatusForDeck(deckAbs), nil
+	if _, ok := readWorkbenchManifest(deckAbs); !ok {
+		return workbenchStatusForDeck(deckAbs), nil
+	}
+	unlock, err := acquireWorkbenchLock(filepath.Join(deckAbs, "out"))
+	if err != nil {
+		return workbenchManifest{}, err
+	}
+	defer unlock()
+	manifest := workbenchStatusForDeck(deckAbs)
+	if manifest.Status == "stale" || manifest.Status == "running" {
+		_ = writeWorkbenchManifest(deckAbs, manifest)
+	}
+	return manifest, nil
 }
 
 func workbenchStatusForDeck(deckAbs string) workbenchManifest {
@@ -1372,6 +1384,7 @@ func workbenchStatusForDeck(deckAbs string) workbenchManifest {
 		manifest.Status = "running"
 	} else if manifest.Status == "running" || manifest.Status == "starting" {
 		manifest.Status = "stale"
+		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 	return manifest
 }

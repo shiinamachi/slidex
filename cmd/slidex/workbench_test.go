@@ -888,6 +888,13 @@ func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testin
 	if status.Status != "stale" {
 		t.Fatalf("status = %q, want stale", status.Status)
 	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after stale status")
+	}
+	if recorded.Status != "stale" {
+		t.Fatalf("recorded status after status = %q, want stale", recorded.Status)
+	}
 	stopped, err := stopWorkbench(workspace, "demo", "")
 	if err != nil {
 		t.Fatal(err)
@@ -895,7 +902,7 @@ func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testin
 	if stopped.Status != "stopped" {
 		t.Fatalf("stop status = %q, want stopped", stopped.Status)
 	}
-	recorded, ok := readWorkbenchManifest(deck)
+	recorded, ok = readWorkbenchManifest(deck)
 	if !ok {
 		t.Fatal("manifest missing after stop")
 	}
