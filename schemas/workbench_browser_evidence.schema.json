@@ -135,6 +135,9 @@
       "type": "string",
       "minLength": 1
     },
+    "browserScreenshot": {
+      "$ref": "#/$defs/artifact"
+    },
     "verifiedFiles": {
       "type": "object",
       "required": ["brief", "draft", "manifest"],

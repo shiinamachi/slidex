@@ -32,6 +32,8 @@ const (
 	workbenchDraftName           = "workbench_draft.json"
 	workbenchBrowserEvidenceName = "workbench_browser_evidence.json"
 	workbenchSaveSmokeName       = "workbench_save_smoke.json"
+	workbenchBrowserScreenshot   = "workbench_browser_screenshot"
+	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
 )
 
 var deckIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -111,6 +113,7 @@ type workbenchBrowserEvidence struct {
 	BriefPath           string              `json:"briefPath"`
 	DraftPath           string              `json:"draftPath"`
 	EvidencePath        string              `json:"evidencePath"`
+	BrowserScreenshot   *artifact           `json:"browserScreenshot,omitempty"`
 	VerifiedFiles       map[string]artifact `json:"verifiedFiles"`
 }
 
@@ -168,6 +171,7 @@ type workbenchBrowserEvidenceInput struct {
 	WorkbenchVisible   bool
 	SavedInputVerified bool
 	Notes              string
+	ScreenshotPath     string
 }
 
 type workbenchSaveInput struct {
@@ -334,6 +338,7 @@ func runWorkbenchEvidence(args []string) error {
 	workbenchVisible := fs.Bool("workbench-visible", false, "confirm the workbench UI was visible in the browser surface")
 	savedInputVerified := fs.Bool("saved-input-verified", false, "confirm saved deck creation input was verified")
 	notes := fs.String("notes", "", "short inspection notes")
+	screenshot := fs.String("screenshot", "", "optional screenshot image captured from the Codex App browser surface")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -346,6 +351,7 @@ func runWorkbenchEvidence(args []string) error {
 		WorkbenchVisible:   *workbenchVisible,
 		SavedInputVerified: *savedInputVerified,
 		Notes:              *notes,
+		ScreenshotPath:     *screenshot,
 	})
 	if err != nil {
 		return err
@@ -1468,6 +1474,10 @@ func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbe
 			return workbenchBrowserEvidence{}, fmt.Errorf("required saved workbench artifact is a directory: %s", filepath.ToSlash(path))
 		}
 	}
+	screenshot, err := copyWorkbenchBrowserScreenshot(deckAbs, input.ScreenshotPath)
+	if err != nil {
+		return workbenchBrowserEvidence{}, err
+	}
 	evidence := workbenchBrowserEvidence{
 		SchemaVersion:       "slidex.workbenchBrowserEvidence.v1",
 		ToolName:            toolName,
@@ -1495,6 +1505,7 @@ func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbe
 		BriefPath:           filepath.ToSlash(briefPath),
 		DraftPath:           filepath.ToSlash(draftPath),
 		EvidencePath:        filepath.ToSlash(evidencePath),
+		BrowserScreenshot:   screenshot,
 		VerifiedFiles: map[string]artifact{
 			"brief":    artifactFromPath(briefPath),
 			"draft":    artifactFromPath(draftPath),
@@ -1505,6 +1516,55 @@ func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbe
 		return workbenchBrowserEvidence{}, err
 	}
 	return evidence, nil
+}
+
+func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, error) {
+	sourcePath = strings.TrimSpace(sourcePath)
+	if sourcePath == "" {
+		return nil, nil
+	}
+	sourceAbs, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectSymlinkAncestors(sourceAbs); err != nil {
+		return nil, fmt.Errorf("browser screenshot path contains a symlink: %w", err)
+	}
+	info, err := os.Stat(sourceAbs)
+	if err != nil {
+		return nil, fmt.Errorf("browser screenshot is missing or unreadable: %s: %w", filepath.ToSlash(sourceAbs), err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("browser screenshot is a directory: %s", filepath.ToSlash(sourceAbs))
+	}
+	ext := strings.ToLower(filepath.Ext(sourceAbs))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp":
+	default:
+		return nil, fmt.Errorf("browser screenshot must be .png, .jpg, .jpeg, or .webp: %s", filepath.ToSlash(sourceAbs))
+	}
+	f, err := os.Open(sourceAbs)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, workbenchScreenshotMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("browser screenshot is empty: %s", filepath.ToSlash(sourceAbs))
+	}
+	if len(raw) > workbenchScreenshotMaxBytes {
+		return nil, fmt.Errorf("browser screenshot exceeds %d bytes: %s", workbenchScreenshotMaxBytes, filepath.ToSlash(sourceAbs))
+	}
+	target := filepath.Join(deckAbs, "out", workbenchBrowserScreenshot+ext)
+	if err := secureWriteFile(target, raw, 0o600); err != nil {
+		return nil, err
+	}
+	artifact := artifactFromPath(target)
+	artifact.Path = filepath.ToSlash(target)
+	return &artifact, nil
 }
 
 func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBrowserEvidenceVerification, error) {
@@ -1659,6 +1719,30 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string) (workbenchBr
 		}
 		if recorded.Path != actual.Path || recorded.SHA256 != actual.SHA256 || recorded.Size != actual.Size {
 			addFinding("browser evidence verifiedFiles.%s is stale", name)
+		}
+	}
+	if evidence.BrowserScreenshot != nil {
+		screenshotPath := filepath.FromSlash(evidence.BrowserScreenshot.Path)
+		outDir := filepath.Join(deckAbs, "out")
+		if !filepath.IsAbs(screenshotPath) {
+			screenshotPath = filepath.Join(outDir, screenshotPath)
+		}
+		if !pathWithin(outDir, screenshotPath) {
+			addFinding("browser screenshot evidence must stay under deck out/: %s", filepath.ToSlash(screenshotPath))
+		} else if err := rejectSymlinkAncestors(screenshotPath); err != nil {
+			addFinding("browser screenshot path contains a symlink: %v", err)
+		} else if err := rejectSecureWriteTarget(screenshotPath); err != nil {
+			addFinding("browser screenshot path is not a regular secure target: %v", err)
+		} else {
+			actual := artifactFromPath(screenshotPath)
+			result.VerifiedFiles["browserScreenshot"] = actual
+			if actual.SHA256 == "" || actual.Size <= 0 {
+				addFinding("browser screenshot artifact is missing or empty: %s", filepath.ToSlash(screenshotPath))
+			} else if evidence.BrowserScreenshot.Path != actual.Path ||
+				evidence.BrowserScreenshot.SHA256 != actual.SHA256 ||
+				evidence.BrowserScreenshot.Size != actual.Size {
+				addFinding("browser screenshot evidence is stale")
+			}
 		}
 	}
 

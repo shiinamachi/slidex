@@ -450,7 +450,7 @@ func workbenchDoctorSnapshot() map[string]any {
 		"saveSmokeCommand":                    "slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>",
 		"saveSmokeIsBrowserEvidence":          false,
 		"browserEvidenceRequired":             true,
-		"browserEvidenceCommand":              "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --workbench-visible --saved-input-verified",
+		"browserEvidenceCommand":              "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --screenshot <path-to-codex-browser-screenshot.png> --workbench-visible --saved-input-verified",
 		"browserEvidenceVerifyCommand":        "slidex workbench verify-evidence --deck-id <deck_id>",
 	}
 }

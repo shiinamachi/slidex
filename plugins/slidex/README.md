@@ -36,6 +36,7 @@ slidex workbench evidence --deck-id <deck_id> \
   --invocation "@slidex create a deck called <deck_id>" \
   --thread-id "<codex-app-thread-id-if-visible>" \
   --url "http://127.0.0.1:<port>/workbench/<session>" \
+  --screenshot "<path-to-codex-browser-screenshot.png>" \
   --workbench-visible \
   --saved-input-verified
 ```
@@ -45,7 +46,9 @@ slidex workbench evidence --deck-id <deck_id> \
 thread id is visible. This writes
 `decks/<deck_id>/out/workbench_browser_evidence.json`. Do not claim the Codex
 App browser/work-surface path has passed until this evidence reflects an actual
-inspection.
+inspection. `--screenshot` is optional but recommended; it copies the inspected
+Codex App browser capture under `out/workbench_browser_screenshot.<ext>` and
+records its hash in the evidence.
 
 After recording the evidence, verify it still matches the current deck-local
 artifacts:

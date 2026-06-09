@@ -13,7 +13,7 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 2. Verify `brief.md`, `out/workbench_draft.json`, and `out/workbench_manifest.json` after the user saves the workbench form.
 3. Use `slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>` as a headless pre-GUI check that starts an App Server turn with installed `slidex:slidex-start` skill input, verifies the loopback workbench starts, and writes smoke evidence JSON.
 4. Use `slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>` as a local HTTP pre-GUI check that fetches the workbench HTML, posts draft/save input through the session API, verifies deck-local persistence, and writes `out/workbench_save_smoke.json`.
-5. After actual Codex App browser/work-surface inspection, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --workbench-visible --saved-input-verified` to record `out/workbench_browser_evidence.json`.
+5. After actual Codex App browser/work-surface inspection, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified` to record `out/workbench_browser_evidence.json` and, when provided, `out/workbench_browser_screenshot.<ext>`.
 6. Run `slidex workbench verify-evidence --deck-id <deck_id>` to prove recorded browser evidence still matches the current deck-local artifacts.
 7. Resolve an existing deck with `slidex inspect --deck decks/<deck_id> --write`.
 8. Run `slidex intake --deck decks/<deck_id>` and stop on exit code 3 when Korean intake questions are produced.
@@ -33,6 +33,7 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 - Do not treat `slidex codex app-server skill-smoke` smoke evidence JSON as Codex App GUI/browser evidence.
 - Do not treat `slidex workbench save-smoke` evidence JSON as Codex App GUI/browser evidence.
 - Do not claim Codex App browser/work-surface verification passed unless `out/workbench_browser_evidence.json` was recorded after actual inspection.
+- Prefer `--screenshot` when recording browser evidence so the inspected Codex App surface is hashed under deck `out/`.
 - Treat failing `slidex workbench verify-evidence` output as stale browser evidence.
 
 ## References
