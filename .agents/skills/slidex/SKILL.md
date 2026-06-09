@@ -9,8 +9,8 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 
 ## Workflow
 
-1. For new deck creation, run `slidex workbench start --deck-id <deck_id>` and open the returned URL in the Codex App in-app browser or with `@Browser`.
-2. Verify `brief.md` and `out/workbench_manifest.json` after the user saves the workbench form.
+1. For new deck creation through the plugin, make sure the PATH binary is current with `mise exec -- go install ./cmd/slidex`, then run `slidex workbench start --deck-id <deck_id>` and open the returned URL in the Codex App in-app browser or with `@Browser`.
+2. Verify `brief.md`, `out/workbench_draft.json`, and `out/workbench_manifest.json` after the user saves the workbench form.
 3. Resolve an existing deck with `slidex inspect --deck decks/<deck_id> --write`.
 4. Run `slidex intake --deck decks/<deck_id>` and stop on exit code 3 when Korean intake questions are produced.
 5. Use `slidex run --deck decks/<deck_id>` for the standard local workflow through delivery summary and package.

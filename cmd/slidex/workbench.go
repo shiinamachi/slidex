@@ -26,7 +26,10 @@ import (
 	"time"
 )
 
-const workbenchManifestName = "workbench_manifest.json"
+const (
+	workbenchManifestName = "workbench_manifest.json"
+	workbenchDraftName    = "workbench_draft.json"
+)
 
 var deckIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
@@ -60,10 +63,22 @@ type workbenchManifest struct {
 	UpdatedAt           string            `json:"updatedAt"`
 	BriefPath           string            `json:"briefPath,omitempty"`
 	InputSavedAt        string            `json:"inputSavedAt,omitempty"`
+	DraftSavedAt        string            `json:"draftSavedAt,omitempty"`
+	DraftPath           string            `json:"draftPath,omitempty"`
 	SavedFieldLengths   map[string]int    `json:"savedFieldLengths,omitempty"`
 	BrowserOpenStrategy string            `json:"browserOpenStrategy"`
 	Notes               []string          `json:"notes,omitempty"`
 	Paths               map[string]string `json:"paths,omitempty"`
+}
+
+type workbenchDraft struct {
+	SchemaVersion string             `json:"schemaVersion"`
+	ToolName      string             `json:"toolName"`
+	ToolVersion   string             `json:"toolVersion"`
+	DeckID        string             `json:"deckId"`
+	Status        string             `json:"status"`
+	UpdatedAt     string             `json:"updatedAt"`
+	Input         workbenchSaveInput `json:"input"`
 }
 
 type workbenchSaveInput struct {
@@ -131,11 +146,14 @@ func runWorkbenchServe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *token != "" {
+		return exitCodeError(2, "--token is not supported; use --token-env to keep the workbench token out of process arguments")
+	}
 	if *token == "" && *tokenEnv != "" {
 		*token = os.Getenv(*tokenEnv)
 	}
 	if *deck == "" || *sessionID == "" || *token == "" || *port <= 0 {
-		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID (--token TOKEN|--token-env ENV) --port PORT")
+		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID --token-env ENV --port PORT")
 	}
 	deckAbs, err := resolveDeckDir(*workspace, "", *deck, false, "decks/_template")
 	if err != nil {
@@ -264,10 +282,6 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 	if err != nil {
 		return result, workbenchManifest{}, err
 	}
-	port, err := chooseLoopbackPort()
-	if err != nil {
-		return result, workbenchManifest{}, err
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return result, workbenchManifest{}, err
@@ -282,30 +296,42 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		return result, workbenchManifest{}, err
 	}
 	defer logFile.Close()
-	cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", "SLIDEX_WORKBENCH_TOKEN", "--port", strconv.Itoa(port))
-	cmd.Env = append(os.Environ(), "SLIDEX_WORKBENCH_TOKEN="+token)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		return result, workbenchManifest{}, err
-	}
-	manifest := newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, cmd.Process.Pid, "starting")
-	if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
-		return result, manifest, err
-	}
-	if err := waitForWorkbenchReady(manifest, 3*time.Second); err != nil {
-		manifest.Status = "stale"
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		port, err := chooseLoopbackPort()
+		if err != nil {
+			return result, workbenchManifest{}, err
+		}
+		cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", "SLIDEX_WORKBENCH_TOKEN", "--port", strconv.Itoa(port))
+		cmd.Env = append(os.Environ(), "SLIDEX_WORKBENCH_TOKEN="+token)
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			lastErr = err
+			continue
+		}
+		manifest := newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, cmd.Process.Pid, "starting")
+		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
+			stopWorkbenchProcess(manifest)
+			return result, manifest, err
+		}
+		if err := waitForWorkbenchReady(manifest, 3*time.Second); err != nil {
+			lastErr = err
+			stopWorkbenchProcess(manifest)
+			manifest.Status = "stale"
+			manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			_ = writeWorkbenchManifest(deckAbs, manifest)
+			continue
+		}
+		manifest.Status = "running"
 		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		_ = writeWorkbenchManifest(deckAbs, manifest)
-		return result, manifest, err
+		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
+			return result, manifest, err
+		}
+		return result, manifest, nil
 	}
-	manifest.Status = "running"
-	manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
-		return result, manifest, err
-	}
-	return result, manifest, nil
+	return result, workbenchManifest{}, fmt.Errorf("workbench did not become ready after port retries: %w", lastErr)
 }
 
 func serveWorkbench(deckAbs, workspace, sessionID, token string, port int) error {
@@ -318,8 +344,9 @@ func serveWorkbench(deckAbs, workspace, sessionID, token string, port int) error
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/readyz", server.handleReady)
 	mux.HandleFunc("/workbench/"+sessionID, server.handleWorkbench)
-	mux.HandleFunc("/api/session", server.handleSession)
-	mux.HandleFunc("/api/save", server.handleSave)
+	mux.HandleFunc("/workbench/"+sessionID+"/api/session", server.handleSession)
+	mux.HandleFunc("/workbench/"+sessionID+"/api/draft", server.handleDraft)
+	mux.HandleFunc("/workbench/"+sessionID+"/api/save", server.handleSave)
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -349,7 +376,12 @@ func (s *workbenchHTTPServer) handleReady(w http.ResponseWriter, r *http.Request
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
-	_ = writeJSONResponse(w, map[string]any{"status": "ready", "sessionId": s.sessionID})
+	_ = writeJSONResponse(w, map[string]any{
+		"status":    "ready",
+		"sessionId": s.sessionID,
+		"deckDir":   s.manifest.DeckDir,
+		"pid":       os.Getpid(),
+	})
 }
 
 func (s *workbenchHTTPServer) handleWorkbench(w http.ResponseWriter, r *http.Request) {
@@ -368,6 +400,55 @@ func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	_ = writeJSONResponse(w, publicWorkbenchStatus(s.manifest))
+}
+
+func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOrNoOrigin(r, s.manifest.URL) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	if !validWorkbenchToken(r.Header.Get("X-Slidex-Workbench-Token"), s.token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if draft, ok := readWorkbenchDraft(s.deckAbs); ok {
+			_ = writeJSONResponse(w, map[string]any{"status": "ok", "draft": draft})
+			return
+		}
+		_ = writeJSONResponse(w, map[string]any{"status": "empty"})
+	case http.MethodPost:
+		defer r.Body.Close()
+		var input workbenchSaveInput
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		input = normalizeWorkbenchInput(input)
+		if !hasAnyWorkbenchInput(input) {
+			http.Error(w, "draft is empty", http.StatusBadRequest)
+			return
+		}
+		draft, err := writeWorkbenchDraft(s.deckAbs, input, "draft")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		manifest := s.manifest
+		manifest.Status = "draft"
+		manifest.DraftSavedAt = draft.UpdatedAt
+		manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
+		manifest.UpdatedAt = draft.UpdatedAt
+		if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.manifest = manifest
+		_ = writeJSONResponse(w, map[string]any{"status": "draft_saved", "draft": draft, "manifest": publicWorkbenchStatus(manifest)})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request) {
@@ -394,10 +475,17 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	draft, err := writeWorkbenchDraft(s.deckAbs, input, "saved")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	manifest := s.manifest
 	now := time.Now().UTC().Format(time.RFC3339)
 	manifest.Status = "saved"
 	manifest.InputSavedAt = now
+	manifest.DraftSavedAt = draft.UpdatedAt
+	manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
 	manifest.UpdatedAt = now
 	manifest.BriefPath = filepath.ToSlash(filepath.Join(s.deckAbs, "brief.md"))
 	manifest.SavedFieldLengths = map[string]int{
@@ -420,6 +508,7 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
 		"deckId":    s.manifest.DeckID,
 		"deckDir":   s.manifest.DeckDir,
 		"sessionId": s.sessionID,
+		"apiBase":   "/workbench/" + s.sessionID + "/api",
 		"token":     s.token,
 	}
 	raw, _ := json.Marshal(bootstrap)
@@ -448,6 +537,7 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
     button:hover { background:var(--accent-strong); }
     button:disabled { opacity:.58; cursor:not-allowed; }
     output { font-size:13px; color:var(--muted); }
+    output.warn { color:var(--warn); }
     .notice { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; color:var(--muted); font-size:13px; line-height:1.5; }
     @media (max-width: 760px) { main { padding:20px; } header { display:block; } form { grid-template-columns:1fr; } }
   </style>
@@ -475,21 +565,59 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
     const boot = ` + string(raw) + `;
     const form = document.getElementById("deck-form");
     const status = document.getElementById("status");
+    let draftTimer = null;
+    let filling = false;
+    function formData() {
+      return Object.fromEntries(new FormData(form).entries());
+    }
+    function setStatus(text, warn = false) {
+      status.value = text;
+      status.classList.toggle("warn", warn);
+    }
+    async function loadDraft() {
+      const response = await fetch(boot.apiBase + "/draft", {headers: {"X-Slidex-Workbench-Token": boot.token}});
+      if (!response.ok) return;
+      const payload = await response.json();
+      if (!payload.draft || !payload.draft.input) return;
+      filling = true;
+      for (const [key, value] of Object.entries(payload.draft.input)) {
+        const field = form.elements[key];
+        if (field && !field.value) field.value = value || "";
+      }
+      filling = false;
+      setStatus("Recovered draft from out/workbench_draft.json");
+    }
+    async function saveDraft() {
+      const data = formData();
+      if (!Object.values(data).some((value) => String(value || "").trim() !== "")) return;
+      const response = await fetch(boot.apiBase + "/draft", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-Slidex-Workbench-Token": boot.token},
+        body: JSON.stringify(data)
+      });
+      if (response.ok) setStatus("Draft saved");
+    }
+    form.addEventListener("input", () => {
+      if (filling) return;
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(saveDraft, 500);
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const data = Object.fromEntries(new FormData(form).entries());
-      status.value = "Saving...";
-      const response = await fetch("/api/save", {
+      const data = formData();
+      setStatus("Saving...");
+      const response = await fetch(boot.apiBase + "/save", {
         method: "POST",
         headers: {"Content-Type": "application/json", "X-Slidex-Workbench-Token": boot.token},
         body: JSON.stringify(data)
       });
       if (!response.ok) {
-        status.value = "Save failed";
+        setStatus("Save failed", true);
         return;
       }
-      status.value = "Saved to brief.md and out/workbench_manifest.json";
+      setStatus("Saved to brief.md and out/workbench_manifest.json");
     });
+    loadDraft();
   </script>
 </body>
 </html>`
@@ -543,6 +671,9 @@ func resolveDeckDir(workspace, deckID, deck string, create bool, fromTemplate st
 		if !pathWithin(decksRoot, deckAbs) {
 			return "", fmt.Errorf("deck path must stay under %s: %s", filepath.ToSlash(decksRoot), filepath.ToSlash(deckAbs))
 		}
+		if err := rejectSymlinkEscape(decksRoot, deckAbs, false); err != nil {
+			return "", err
+		}
 		if _, err := os.Stat(deckAbs); err != nil {
 			return "", err
 		}
@@ -583,6 +714,9 @@ func safeDeckDir(root, deckID string) (string, error) {
 	if !pathWithin(decksRoot, deckAbs) {
 		return "", fmt.Errorf("deck path escapes decks directory: %s", deckID)
 	}
+	if err := rejectSymlinkEscape(decksRoot, deckAbs, true); err != nil {
+		return "", err
+	}
 	return deckAbs, nil
 }
 
@@ -610,6 +744,53 @@ func pathWithin(root, child string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+func rejectSymlinkEscape(root, target string, allowMissingTarget bool) error {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if !pathWithin(root, target) {
+		return fmt.Errorf("path escapes root: %s", filepath.ToSlash(target))
+	}
+	if err := rejectSymlinkComponent(root); err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return err
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "." || part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) && allowMissingTarget {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("deck path must not contain symlinks: %s", filepath.ToSlash(current))
+		}
+	}
+	return nil
+}
+
+func rejectSymlinkComponent(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("deck path must not contain symlinks: %s", filepath.ToSlash(path))
+	}
+	return nil
+}
+
 func workbenchStatus(workspace, deckID, deck string) (workbenchManifest, error) {
 	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
 	if err != nil {
@@ -633,9 +814,7 @@ func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
 		return manifest, err
 	}
 	if manifest.PID > 0 && manifest.Status == "running" {
-		if proc, err := os.FindProcess(manifest.PID); err == nil {
-			_ = proc.Signal(syscall.SIGTERM)
-		}
+		stopWorkbenchProcess(manifest)
 	}
 	manifest.Status = "stopped"
 	manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -643,6 +822,21 @@ func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
 		_ = writeWorkbenchManifest(manifest.DeckDir, manifest)
 	}
 	return manifest, nil
+}
+
+func stopWorkbenchProcess(manifest workbenchManifest) {
+	if manifest.PID <= 0 {
+		return
+	}
+	_ = syscall.Kill(-manifest.PID, syscall.SIGTERM)
+	deadline := time.Now().Add(1200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !isWorkbenchReady(manifest) {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	_ = syscall.Kill(-manifest.PID, syscall.SIGKILL)
 }
 
 func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid int, status string) workbenchManifest {
@@ -674,9 +868,11 @@ func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid
 			"Server binds to 127.0.0.1 only.",
 			"Mutating routes require X-Slidex-Workbench-Token and same-origin validation.",
 			"Full write token is not written to manifests or CLI output.",
+			"Draft state is autosaved under out/workbench_draft.json for reload and crash recovery.",
 		},
 		Paths: map[string]string{
 			"brief":    filepath.ToSlash(filepath.Join(deckAbs, "brief.md")),
+			"draft":    filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName)),
 			"manifest": filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName)),
 		},
 	}
@@ -696,6 +892,34 @@ func readWorkbenchManifest(deckAbs string) (workbenchManifest, bool) {
 
 func writeWorkbenchManifest(deckAbs string, manifest workbenchManifest) error {
 	return secureWriteJSON(filepath.Join(deckAbs, "out", workbenchManifestName), manifest)
+}
+
+func readWorkbenchDraft(deckAbs string) (workbenchDraft, bool) {
+	raw, err := os.ReadFile(filepath.Join(deckAbs, "out", workbenchDraftName))
+	if err != nil {
+		return workbenchDraft{}, false
+	}
+	var draft workbenchDraft
+	if err := json.Unmarshal(raw, &draft); err != nil {
+		return workbenchDraft{}, false
+	}
+	return draft, true
+}
+
+func writeWorkbenchDraft(deckAbs string, input workbenchSaveInput, status string) (workbenchDraft, error) {
+	draft := workbenchDraft{
+		SchemaVersion: "slidex.workbenchDraft.v1",
+		ToolName:      toolName,
+		ToolVersion:   toolVersion,
+		DeckID:        filepath.Base(deckAbs),
+		Status:        status,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+		Input:         input,
+	}
+	if err := secureWriteJSON(filepath.Join(deckAbs, "out", workbenchDraftName), draft); err != nil {
+		return draft, err
+	}
+	return draft, nil
 }
 
 func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
@@ -757,7 +981,18 @@ func isWorkbenchReady(manifest workbenchManifest) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16*1024)).Decode(&payload); err != nil {
+		return false
+	}
+	pid, pidOK := numberAsInt(payload["pid"])
+	return fmt.Sprint(payload["sessionId"]) == manifest.SessionID &&
+		fmt.Sprint(payload["deckDir"]) == manifest.DeckDir &&
+		pidOK &&
+		pid == manifest.PID
 }
 
 func randomURLToken(bytesLen int) (string, error) {
@@ -806,6 +1041,10 @@ func normalizeWorkbenchInput(input workbenchSaveInput) workbenchSaveInput {
 	input.SourceNotes = strings.TrimSpace(input.SourceNotes)
 	input.OutputExpectations = strings.TrimSpace(input.OutputExpectations)
 	return input
+}
+
+func hasAnyWorkbenchInput(input workbenchSaveInput) bool {
+	return input.Title != "" || input.Audience != "" || input.DecisionGoal != "" || input.SourceNotes != "" || input.OutputExpectations != ""
 }
 
 func writeWorkbenchBrief(deckAbs string, input workbenchSaveInput) error {

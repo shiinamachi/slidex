@@ -16,7 +16,7 @@ Use this as the default slidex plugin entry point.
 4. Confirm the JSON response reports a loopback `workbench.url`, `serverBind: 127.0.0.1`, and `tokenRedacted: true`.
 5. Open the returned URL in the Codex App in-app browser by clicking it or asking `@Browser` to navigate to it. Public Codex 0.138.0 docs do not expose a plugin-owned arbitrary Canvas mount API.
 6. Have the user enter deck title, audience, decision goal, source notes, and output expectations in the workbench.
-7. Verify `decks/<deck_id>/brief.md` and `decks/<deck_id>/out/workbench_manifest.json` are written.
+7. Verify `decks/<deck_id>/brief.md`, `decks/<deck_id>/out/workbench_draft.json`, and `decks/<deck_id>/out/workbench_manifest.json` are written.
 
 Do not run the full render, QA, or package workflow during startup unless the user asks for it.
 
@@ -24,4 +24,5 @@ Do not run the full render, QA, or package workflow during startup unless the us
 
 - Keep writes under `decks/<deck_id>/`.
 - Do not expose full workbench write tokens in chat-visible output.
+- If local plugin invocation does not expose `workbench.start`, install the current repository binary with `mise exec -- go install ./cmd/slidex` because the plugin MCP config resolves `slidex` through PATH.
 - Treat the local workbench as the Canvas-style surface for this plugin; do not claim a proprietary Canvas lifecycle API exists.

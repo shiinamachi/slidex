@@ -278,6 +278,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	protocol := localProtocolBundleStatus()
 	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
 	findings = append(findings, doctorProtocolBundleFindings(protocol)...)
+	findings = append(findings, doctorWorkbenchFindings()...)
 	if checkCodex {
 		codexVersion = installedCodexVersion()
 		if !codexVersionAtLeast(codexVersion, requiredCodexVersion) {
@@ -435,6 +436,35 @@ func workbenchDoctorSnapshot() map[string]any {
 		"status":  "available",
 		"command": "slidex workbench start --deck-id <deck_id>",
 	}
+}
+
+func doctorWorkbenchFindings() []qaFinding {
+	deckAbs := filepath.Join(workspaceRoot("."), "decks", "doctor-workbench-contract")
+	manifest := newWorkbenchManifest(deckAbs, workspaceRoot("."), "doctor-session", "doctor-token", 49152, os.Getpid(), "running")
+	var findings []qaFinding
+	if manifest.Host != "127.0.0.1" || manifest.ServerBind != "127.0.0.1" {
+		findings = append(findings, fail("doctor.workbench_loopback", "workbench must bind and advertise 127.0.0.1 only", "cmd/slidex/workbench.go"))
+	}
+	parsed, err := url.Parse(manifest.URL)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" {
+		findings = append(findings, fail("doctor.workbench_url", "workbench URL must be an http loopback URL", "cmd/slidex/workbench.go"))
+	}
+	if !manifest.TokenRedacted || manifest.TokenSHA256 == "" || strings.Contains(manifest.URL, "doctor-token") {
+		findings = append(findings, fail("doctor.workbench_token", "workbench must redact raw write tokens from public URL/manifest fields", "cmd/slidex/workbench.go"))
+	}
+	for name, rawPath := range manifest.Paths {
+		path := filepath.Clean(filepath.FromSlash(rawPath))
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workspaceRoot("."), path)
+		}
+		if !pathWithin(deckAbs, path) {
+			findings = append(findings, fail("doctor.workbench_paths", "workbench path must stay under the selected deck: "+name, "cmd/slidex/workbench.go"))
+		}
+		if name != "brief" && !pathWithin(filepath.Join(deckAbs, "out"), path) {
+			findings = append(findings, fail("doctor.workbench_paths", "generated workbench state must stay under deck out/: "+name, "cmd/slidex/workbench.go"))
+		}
+	}
+	return findings
 }
 
 func validatePluginMCPConfig(path string) []qaFinding {
@@ -3169,9 +3199,27 @@ func handleMCPRequest(req map[string]any) (any, error) {
 		params, _ := req["params"].(map[string]any)
 		name, _ := params["name"].(string)
 		args, _ := params["arguments"].(map[string]any)
-		return callMCPTool(name, args)
+		result, err := callMCPTool(name, args)
+		if err != nil {
+			return nil, err
+		}
+		return mcpToolCallResult(result), nil
 	default:
 		return nil, fmt.Errorf("unsupported MCP method: %s", method)
+	}
+}
+
+func mcpToolCallResult(result any) map[string]any {
+	raw, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		raw = []byte(fmt.Sprint(result))
+	}
+	return map[string]any{
+		"content": []map[string]any{{
+			"type": "text",
+			"text": string(raw),
+		}},
+		"structuredContent": result,
 	}
 }
 

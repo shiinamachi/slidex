@@ -3,6 +3,7 @@
 Primary workflow:
 
 ```bash
+mise exec -- go install ./cmd/slidex
 slidex workbench start --deck-id <deck_id>
 slidex run --deck decks/<deck_id>
 ```

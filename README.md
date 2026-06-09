@@ -154,7 +154,16 @@ slidex workbench start --deck-id customer-retention
 이 명령은 `decks/customer-retention/`을 만들거나 선택하고, `127.0.0.1`에만 bind되는
 local workbench 서버를 background로 시작한 뒤 Codex App in-app browser에서 열 수 있는
 loopback URL을 반환합니다. Workbench 저장은 `brief.md`와
-`out/workbench_manifest.json`에만 기록됩니다.
+`out/workbench_draft.json`, `out/workbench_manifest.json`에만 기록됩니다. 저장 API는
+session-scoped URL 아래에서만 노출되며, mutating request는
+`X-Slidex-Workbench-Token`과 Origin/Referer 검증을 통과해야 합니다.
+
+plugin MCP 설정은 PATH의 `slidex` binary를 실행합니다. repo 소스 변경 후 Codex App에서
+plugin을 검증하려면 먼저 현재 소스를 설치합니다.
+
+```bash
+mise exec -- go install ./cmd/slidex
+```
 
 Codex 0.138.0 공개 문서와 생성 App Server schema에는 plugin-owned arbitrary Canvas
 mount 또는 직접 browser-open request API가 확인되지 않았습니다. 따라서 slidex는

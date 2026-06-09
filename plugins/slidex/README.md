@@ -13,11 +13,19 @@ The Go CLI remains the implementation source of truth.
    asking `@Browser` to navigate there.
 5. Save initial deck creation input from the workbench.
 6. Verify `decks/<deck_id>/brief.md` and
+   `decks/<deck_id>/out/workbench_draft.json` plus
    `decks/<deck_id>/out/workbench_manifest.json`.
 
 The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires
 `X-Slidex-Workbench-Token` for writes, and records only token hashes in
 manifests.
+
+Because the plugin MCP configuration runs `slidex` from `PATH`, install the
+current repository binary before local plugin invocation tests:
+
+```bash
+mise exec -- go install ./cmd/slidex
+```
 
 ## Codex 0.138.0 Evidence
 
