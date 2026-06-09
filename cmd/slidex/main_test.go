@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net"
 	"os"
@@ -411,6 +414,44 @@ func TestEditorialGridClippingEvidenceUsesRuleID(t *testing.T) {
 	findings := editorialManifestWarningFindings(renderManifest{Warnings: []string{"overflow check could not run for slide_01: chrome failed"}}, "render_manifest.json")
 	if !hasFindingCheck(findings, "ED-GRID-003") {
 		t.Fatalf("manifest overflow warning should become ED-GRID-003, got %#v", findings)
+	}
+}
+
+func TestVerifyPDFPNGVisualParityDetectsMismatch(t *testing.T) {
+	dir := t.TempDir()
+	pngA := filepath.Join(dir, "slide_01.png")
+	pngB := filepath.Join(dir, "slide_02.png")
+	pdfPath := filepath.Join(dir, "final_deck.pdf")
+	writeSolidPNGForTest(t, pngA, color.RGBA{R: 255, A: 255})
+	writeSolidPNGForTest(t, pngB, color.RGBA{B: 255, A: 255})
+	if err := writePDFFromPNGs(pdfPath, []string{pngA}, 540, 540); err != nil {
+		t.Fatal(err)
+	}
+	matching := []renderedImage{{SlideID: "slide_01", Path: pngA, SHA256: mustSHA256(pngA), Dimensions: dimension{Width: 2, Height: 2}}}
+	if findings := verifyPDFPNGVisualParity(pdfPath, matching); hasFailures(findings) {
+		t.Fatalf("matching PDF/PNG parity should pass: %#v", findings)
+	}
+	mismatched := []renderedImage{{SlideID: "slide_01", Path: pngB, SHA256: mustSHA256(pngB), Dimensions: dimension{Width: 2, Height: 2}}}
+	if findings := verifyPDFPNGVisualParity(pdfPath, mismatched); !hasFindingCheck(findings, "ED-RENDER-004") {
+		t.Fatalf("mismatched PDF/PNG parity should fail ED-RENDER-004: %#v", findings)
+	}
+}
+
+func writeSolidPNGForTest(t *testing.T, path string, c color.RGBA) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			img.SetRGBA(x, y, c)
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatal(err)
 	}
 }
 

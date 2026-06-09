@@ -69,6 +69,8 @@ of the editorial policy:
 - `ED-RENDER-001`, `ED-RENDER-002`, and `ED-RENDER-003`: rendered PNG/PDF
   hashes must trace to the current HTML, and direct HTML edits must be synced
   against `final_deck.generated_baseline.html`.
+- `ED-RENDER-004`: decoded PDF page image streams must match the
+  `rendered_slides/*.png` pixels for the current PNG-to-PDF renderer.
 - `ED-PACKAGE-001`: required delivery files and rendered slide PNGs must exist
   before package handoff.
 - `ED-PACKAGE-002`: `delivery_summary.md` must include artifact hashes, QA

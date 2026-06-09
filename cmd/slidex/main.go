@@ -1228,6 +1228,7 @@ func editorialRenderFindings(htmlSlides []slideInfo, pngs []string, manifest ren
 	if pdfPages > 0 && manifest.PDFPageCount > 0 && pdfPages != manifest.PDFPageCount {
 		findings = append(findings, fail("ED-RENDER-002", fmt.Sprintf("current PDF page count %d does not match manifest %d", pdfPages, manifest.PDFPageCount), pdfPath))
 	}
+	findings = append(findings, verifyPDFPNGVisualParity(pdfPath, manifest.PNGFiles)...)
 	return findings
 }
 
@@ -1239,6 +1240,102 @@ func editorialManifestWarningFindings(manifest renderManifest, manifestPath stri
 		}
 	}
 	return findings
+}
+
+type pdfImageStream struct {
+	Width  int
+	Height int
+	Data   []byte
+}
+
+func verifyPDFPNGVisualParity(pdfPath string, images []renderedImage) []qaFinding {
+	if len(images) == 0 {
+		return nil
+	}
+	pdfImages, err := extractPDFImageStreams(pdfPath)
+	if err != nil {
+		return []qaFinding{fail("ED-RENDER-004", "could not inspect PDF image streams: "+err.Error(), pdfPath)}
+	}
+	if len(pdfImages) != len(images) {
+		return []qaFinding{fail("ED-RENDER-004", fmt.Sprintf("PDF image stream count %d does not match rendered PNG count %d", len(pdfImages), len(images)), pdfPath)}
+	}
+	var findings []qaFinding
+	for i, manifestImage := range images {
+		pdfImage := pdfImages[i]
+		rawRGB, width, height, err := pngToRawRGB(manifestImage.Path)
+		if err != nil {
+			findings = append(findings, fail("ED-RENDER-004", "could not decode rendered PNG: "+err.Error(), manifestImage.Path))
+			continue
+		}
+		if pdfImage.Width != width || pdfImage.Height != height {
+			findings = append(findings, fail("ED-RENDER-004", fmt.Sprintf("PDF image dimensions %dx%d do not match PNG %dx%d", pdfImage.Width, pdfImage.Height, width, height), pdfPath))
+			continue
+		}
+		if !bytes.Equal(pdfImage.Data, rawRGB) {
+			findings = append(findings, fail("ED-RENDER-004", fmt.Sprintf("PDF page image %d differs from rendered PNG pixels", i+1), manifestImage.Path))
+		}
+	}
+	return findings
+}
+
+func extractPDFImageStreams(pdfPath string) ([]pdfImageStream, error) {
+	raw, err := os.ReadFile(pdfPath)
+	if err != nil {
+		return nil, err
+	}
+	objects := bytes.Split(raw, []byte("\nendobj\n"))
+	var images []pdfImageStream
+	for _, obj := range objects {
+		if !bytes.Contains(obj, []byte("/Subtype /Image")) {
+			continue
+		}
+		streamMarker := []byte("\nstream\n")
+		streamStart := bytes.Index(obj, streamMarker)
+		if streamStart < 0 {
+			return nil, errors.New("PDF image object missing stream")
+		}
+		streamStart += len(streamMarker)
+		streamEnd := bytes.LastIndex(obj, []byte("\nendstream"))
+		if streamEnd < streamStart {
+			return nil, errors.New("PDF image object missing endstream")
+		}
+		dict := string(obj[:streamStart])
+		if !strings.Contains(dict, "/Filter /FlateDecode") {
+			return nil, errors.New("PDF image stream is not FlateDecode")
+		}
+		width, ok := pdfDictInt(dict, "Width")
+		if !ok {
+			return nil, errors.New("PDF image stream missing Width")
+		}
+		height, ok := pdfDictInt(dict, "Height")
+		if !ok {
+			return nil, errors.New("PDF image stream missing Height")
+		}
+		reader, err := zlib.NewReader(bytes.NewReader(obj[streamStart:streamEnd]))
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			return nil, err
+		}
+		images = append(images, pdfImageStream{Width: width, Height: height, Data: data})
+	}
+	return images, nil
+}
+
+func pdfDictInt(dict, name string) (int, bool) {
+	re := regexp.MustCompile(`/` + regexp.QuoteMeta(name) + `\s+([0-9]+)`)
+	match := re.FindStringSubmatch(dict)
+	if len(match) < 2 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func reconciledCounts(counts map[string]int) bool {
@@ -2380,6 +2477,22 @@ func writePDFFromPNGs(pdfPath string, paths []string, pageW, pageH float64) erro
 }
 
 func pngToCompressedRGB(path string) ([]byte, int, int, error) {
+	raw, width, height, err := pngToRawRGB(path)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	var compressed bytes.Buffer
+	zw := zlib.NewWriter(&compressed)
+	if _, err := zw.Write(raw); err != nil {
+		return nil, 0, 0, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, 0, 0, err
+	}
+	return compressed.Bytes(), width, height, nil
+}
+
+func pngToRawRGB(path string) ([]byte, int, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0, 0, err
@@ -2397,15 +2510,7 @@ func pngToCompressedRGB(path string) ([]byte, int, int, error) {
 			raw = append(raw, byte(r>>8), byte(g>>8), byte(bl>>8))
 		}
 	}
-	var compressed bytes.Buffer
-	zw := zlib.NewWriter(&compressed)
-	if _, err := zw.Write(raw); err != nil {
-		return nil, 0, 0, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, 0, 0, err
-	}
-	return compressed.Bytes(), b.Dx(), b.Dy(), nil
+	return raw, b.Dx(), b.Dy(), nil
 }
 
 func streamObject(dict string, data []byte) []byte {
@@ -3500,6 +3605,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			} else if pages != manifest.PDFPageCount || pages != len(manifest.PNGFiles) {
 				findings = append(findings, fail("package.pdf_pages", fmt.Sprintf("PDF pages=%d manifestPages=%d pngs=%d", pages, manifest.PDFPageCount, len(manifest.PNGFiles)), manifest.PDF.Path))
 			}
+			findings = append(findings, verifyPDFPNGVisualParity(manifest.PDF.Path, manifest.PNGFiles)...)
 			if manifest.PDFPageSizePoints.Width <= 0 || manifest.PDFPageSizePoints.Height <= 0 {
 				findings = append(findings, fail("package.pdf_page_size", "manifest PDF page size is missing", manifestPath))
 			}
