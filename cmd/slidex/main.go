@@ -3508,6 +3508,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			if summaryFindings := verifyTextArtifactFreshness("delivery_summary", deliverySummaryPath, manifestPath, []string{mustSHA256(manifestPath), mustSHA256(qaReportPath), riskStateHashForDeck(filepath.Dir(outDir))}); len(summaryFindings) > 0 {
 				findings = append(findings, summaryFindings...)
 			}
+			findings = append(findings, verifyDeliverySummaryPolicy(deliverySummaryPath)...)
 			findings = append(findings, verifyVisualReviewImageSet(visualImageSetPath, manifest)...)
 			if !visualReviewArtifactFresh(visualReviewPath, manifest) {
 				findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
@@ -3570,6 +3571,34 @@ func verifyQAReportStatus(path string) []qaFinding {
 		findings = append(findings, fail("package.qa_report_status", "Overall status is missing from QA report", path))
 	} else if overall != "pass" {
 		findings = append(findings, fail("package.qa_report_status", "Overall status is "+overall+", want pass", path))
+	}
+	return findings
+}
+
+func verifyDeliverySummaryPolicy(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("ED-PACKAGE-002", "delivery summary missing: "+err.Error(), path)}
+	}
+	text := string(raw)
+	requiredSnippets := []string{
+		"Render manifest hash:",
+		"QA report hash:",
+		"Risk state hash:",
+		"PNG set hash:",
+		"## QA Status",
+		"## Assumptions And Blockers",
+		"Approved assumption",
+		"Blockers:",
+	}
+	var findings []qaFinding
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(text, snippet) {
+			findings = append(findings, fail("ED-PACKAGE-002", "delivery_summary.md missing "+snippet, path))
+		}
+	}
+	if !strings.Contains(text, "## Accepted Risks") || !strings.Contains(text, "## Unresolved Risks") {
+		findings = append(findings, fail("ED-PACKAGE-002", "delivery_summary.md must summarize accepted and unresolved risks", path))
 	}
 	return findings
 }

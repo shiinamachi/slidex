@@ -3510,6 +3510,7 @@ func writeDeliverySummary(deck string) (string, error) {
 	notesPath := filepath.Join(outDir, "notes.md")
 	manifestPath := filepath.Join(outDir, "render_manifest.json")
 	qaPath := filepath.Join(outDir, "qa_report.md")
+	specPath := filepath.Join(outDir, "deck_spec.json")
 	manifestHash := mustSHA256(manifestPath)
 	qaHash := mustSHA256(qaPath)
 	pngSet := hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
@@ -3517,6 +3518,7 @@ func writeDeliverySummary(deck string) (string, error) {
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		_ = json.Unmarshal(raw, &manifest)
 	}
+	approvedAssumptions := approvedAssumptionsFromSpec(specPath)
 	state := readStateOrNew(deckAbs, "app-server", false)
 	riskHash := riskStateHash(state)
 	var b strings.Builder
@@ -3557,6 +3559,22 @@ func writeDeliverySummary(deck string) (string, error) {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("## Assumptions And Blockers\n\n")
+	if len(approvedAssumptions) == 0 {
+		b.WriteString("- Approved assumptions: none recorded in `out/deck_spec.json`.\n")
+	} else {
+		for _, assumption := range approvedAssumptions {
+			b.WriteString("- Approved assumption: `" + escapeMarkdownInline(assumption) + "`\n")
+		}
+	}
+	if len(state.UnresolvedRisks) == 0 {
+		b.WriteString("- Blockers: none recorded in `out/slidex_state.json`.\n\n")
+	} else {
+		for _, risk := range state.UnresolvedRisks {
+			b.WriteString("- Blocker: `" + escapeMarkdownInline(risk.Reason) + "`; artifact: `" + escapeMarkdownInline(risk.ArtifactLink) + "`\n")
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString("## Review Loop\n\n")
 	b.WriteString("- Structured review artifacts are stored under `out/agent_reviews/` when `slidex codex review` or reviewer gates run.\n")
 	if _, err := os.Stat(notesPath); os.IsNotExist(err) {
@@ -3565,6 +3583,19 @@ func writeDeliverySummary(deck string) (string, error) {
 		}
 	}
 	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func approvedAssumptionsFromSpec(specPath string) []string {
+	raw, err := os.ReadFile(specPath)
+	if err != nil {
+		return nil
+	}
+	var spec map[string]any
+	if json.Unmarshal(raw, &spec) != nil {
+		return nil
+	}
+	intake, _ := spec["intakeStatus"].(map[string]any)
+	return stringArrayValue(intake["approvedAssumptions"])
 }
 
 func writeStructuredReview(deck, stage string, round int) (string, error) {

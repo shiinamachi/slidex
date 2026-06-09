@@ -1149,6 +1149,12 @@ func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
 	if !strings.Contains(summary, "Risk state hash:") {
 		t.Fatalf("delivery summary did not include risk state hash: %s", summary)
 	}
+	if !strings.Contains(summary, "## Assumptions And Blockers") {
+		t.Fatalf("delivery summary did not include assumptions/blockers: %s", summary)
+	}
+	if hasFailures(verifyDeliverySummaryPolicy(path)) {
+		t.Fatalf("delivery summary should satisfy package policy: %#v", verifyDeliverySummaryPolicy(path))
+	}
 	findings := verifyTextArtifactFreshness("delivery_summary", path, filepath.Join(outDir, "render_manifest.json"), []string{mustSHA256(filepath.Join(outDir, "render_manifest.json")), mustSHA256(filepath.Join(outDir, "qa_report.md")), riskStateHashForDeck(deck)})
 	if hasFailures(findings) {
 		t.Fatalf("delivery summary should be fresh for manifest, QA, and state hashes: %#v", findings)
@@ -1159,6 +1165,39 @@ func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
 	findings = verifyTextArtifactFreshness("delivery_summary", path, filepath.Join(outDir, "render_manifest.json"), []string{riskStateHashForDeck(deck)})
 	if !hasFailures(findings) {
 		t.Fatalf("delivery summary should be stale after state risk change")
+	}
+}
+
+func TestVerifyDeliverySummaryPolicyRequiresHashesQAAndBlockers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "delivery_summary.md")
+	good := strings.Join([]string{
+		"# Delivery Summary",
+		"- Render manifest hash: `manifest`",
+		"- QA report hash: `qa`",
+		"- Risk state hash: `risk`",
+		"- PNG set hash: `png`",
+		"## QA Status",
+		"- Deterministic QA report: `out/qa_report.md`",
+		"## Accepted Risks",
+		"- None recorded.",
+		"## Unresolved Risks",
+		"- None recorded.",
+		"## Assumptions And Blockers",
+		"- Approved assumptions: none recorded.",
+		"- Blockers: none recorded.",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if findings := verifyDeliverySummaryPolicy(path); hasFailures(findings) {
+		t.Fatalf("good delivery summary should pass policy: %#v", findings)
+	}
+	bad := strings.ReplaceAll(good, "## Assumptions And Blockers\n- Approved assumptions: none recorded.\n- Blockers: none recorded.", "")
+	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if findings := verifyDeliverySummaryPolicy(path); !hasFindingCheck(findings, "ED-PACKAGE-002") {
+		t.Fatalf("bad delivery summary should fail ED-PACKAGE-002: %#v", findings)
 	}
 }
 

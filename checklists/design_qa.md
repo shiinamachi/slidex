@@ -69,6 +69,8 @@ of the editorial policy:
   against `final_deck.generated_baseline.html`.
 - `ED-PACKAGE-001`: required delivery files and rendered slide PNGs must exist
   before package handoff.
+- `ED-PACKAGE-002`: `delivery_summary.md` must include artifact hashes, QA
+  status, accepted assumptions, and blocker/risk status.
 
 Manual visual inspection is still required for alignment drift, clipping,
 non-explicit inherited contrast nuance, chart semantics, and final PDF review
