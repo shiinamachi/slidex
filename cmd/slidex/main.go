@@ -736,6 +736,9 @@ type editorialCSSPolicy struct {
 	ContrastLarge    float64
 	MinBodyFontPx    float64
 	MinCaptionFontPx float64
+	SafeMarginPx     float64
+	GridGutterPx     float64
+	SpacingScalePx   float64
 }
 
 func editorialCSSFindings(htmlPath, htmlString string, spec map[string]any) []qaFinding {
@@ -745,6 +748,7 @@ func editorialCSSFindings(htmlPath, htmlString string, spec map[string]any) []qa
 	}
 	vars := cssVariables(rules)
 	policy := editorialCSSPolicyFromSpec(spec)
+	findings := editorialGridFindings(htmlPath, rules, vars, policy)
 	inheritedText, _ := parseCSSColor("#111827", vars)
 	slideBackground, _ := parseCSSColor("#ffffff", vars)
 	if bodyRule := firstRuleMatching(rules, "body"); bodyRule != nil {
@@ -761,7 +765,6 @@ func editorialCSSFindings(htmlPath, htmlString string, spec map[string]any) []qa
 			}
 		}
 	}
-	var findings []qaFinding
 	for _, rule := range rules {
 		if !selectorLikelyContainsText(rule.Selector) {
 			continue
@@ -860,8 +863,40 @@ func cssVariables(rules []cssRule) map[string]string {
 	return vars
 }
 
+func editorialGridFindings(htmlPath string, rules []cssRule, vars map[string]string, policy editorialCSSPolicy) []qaFinding {
+	var findings []qaFinding
+	if slideRule := firstRuleMatching(rules, ".slide"); slideRule != nil {
+		if padding := firstDeclaration(*slideRule, "padding"); padding != "" {
+			top, right, bottom, left, ok := parseCSSBoxPx(padding, vars)
+			if ok {
+				minPadding := math.Min(math.Min(top, right), math.Min(bottom, left))
+				if minPadding < policy.SafeMarginPx {
+					findings = append(findings, fail("ED-GRID-001", fmt.Sprintf(".slide safe margin %.1fpx is below %.1fpx policy minimum", minPadding, policy.SafeMarginPx), htmlPath))
+				}
+			}
+		}
+	}
+	for _, rule := range rules {
+		if !selectorLikelyMajorGrid(rule.Selector) {
+			continue
+		}
+		gapValue := firstDeclaration(rule, "gap", "column-gap", "row-gap")
+		gap, ok := parseCSSLengthPx(gapValue, vars)
+		if !ok {
+			continue
+		}
+		if gap < policy.GridGutterPx {
+			findings = append(findings, qaFinding{Severity: "warn", Check: "ED-GRID-002", Message: fmt.Sprintf("%s grid gap %.1fpx is below %.1fpx policy gutter", strings.TrimSpace(rule.Selector), gap, policy.GridGutterPx), Path: htmlPath})
+		}
+		if policy.SpacingScalePx > 0 && math.Mod(gap, policy.SpacingScalePx) > 0.0001 {
+			findings = append(findings, qaFinding{Severity: "warn", Check: "ED-GRID-002", Message: fmt.Sprintf("%s grid gap %.1fpx is not aligned to %.1fpx spacing scale", strings.TrimSpace(rule.Selector), gap, policy.SpacingScalePx), Path: htmlPath})
+		}
+	}
+	return findings
+}
+
 func editorialCSSPolicyFromSpec(spec map[string]any) editorialCSSPolicy {
-	policy := editorialCSSPolicy{ContrastNormal: 4.5, ContrastLarge: 3.0, MinBodyFontPx: 24, MinCaptionFontPx: 18}
+	policy := editorialCSSPolicy{ContrastNormal: 4.5, ContrastLarge: 3.0, MinBodyFontPx: 24, MinCaptionFontPx: 18, SafeMarginPx: 96, GridGutterPx: 64, SpacingScalePx: 8}
 	if spec == nil {
 		return policy
 	}
@@ -877,6 +912,15 @@ func editorialCSSPolicyFromSpec(spec map[string]any) editorialCSSPolicy {
 	}
 	if n, ok := numberAsFloat(rawPolicy["minCaptionFontPx"]); ok {
 		policy.MinCaptionFontPx = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["safeMarginPx"]); ok {
+		policy.SafeMarginPx = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["gridGutterPx"]); ok {
+		policy.GridGutterPx = n
+	}
+	if n, ok := numberAsFloat(rawPolicy["spacingScalePx"]); ok {
+		policy.SpacingScalePx = n
 	}
 	return policy
 }
@@ -914,6 +958,16 @@ func selectorLikelyContainsText(selector string) bool {
 	return false
 }
 
+func selectorLikelyMajorGrid(selector string) bool {
+	normalized := strings.ToLower(selector)
+	for _, token := range []string{".body", ".grid", ".columns", ".chart-grid", ".table-grid", ".content-grid", ".evidence-grid"} {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func minFontPxForSelector(selector string, policy editorialCSSPolicy) float64 {
 	normalized := strings.ToLower(selector)
 	for _, token := range []string{"caption", "footer", "footnote", "source", "label", "small"} {
@@ -922,6 +976,58 @@ func minFontPxForSelector(selector string, policy editorialCSSPolicy) float64 {
 		}
 	}
 	return policy.MinBodyFontPx
+}
+
+func parseCSSBoxPx(value string, vars map[string]string) (float64, float64, float64, float64, bool) {
+	value = stripCSSImportant(resolveCSSValue(value, vars))
+	parts := strings.Fields(value)
+	if len(parts) == 0 || len(parts) > 4 {
+		return 0, 0, 0, 0, false
+	}
+	lengths := make([]float64, 0, len(parts))
+	for _, part := range parts {
+		n, ok := parseCSSLengthPx(part, vars)
+		if !ok {
+			return 0, 0, 0, 0, false
+		}
+		lengths = append(lengths, n)
+	}
+	switch len(lengths) {
+	case 1:
+		return lengths[0], lengths[0], lengths[0], lengths[0], true
+	case 2:
+		return lengths[0], lengths[1], lengths[0], lengths[1], true
+	case 3:
+		return lengths[0], lengths[1], lengths[2], lengths[1], true
+	case 4:
+		return lengths[0], lengths[1], lengths[2], lengths[3], true
+	default:
+		return 0, 0, 0, 0, false
+	}
+}
+
+func parseCSSLengthPx(value string, vars map[string]string) (float64, bool) {
+	value = strings.ToLower(resolveCSSValue(value, vars))
+	value = stripCSSImportant(value)
+	if value == "" {
+		return 0, false
+	}
+	re := regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*(px|pt|rem)$`)
+	match := re.FindStringSubmatch(value)
+	if len(match) < 3 {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(match[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	switch match[2] {
+	case "pt":
+		n *= 4.0 / 3.0
+	case "rem":
+		n *= 16
+	}
+	return n, true
 }
 
 func parseCSSFontPx(value string, vars map[string]string) (float64, bool) {

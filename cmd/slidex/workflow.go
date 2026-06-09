@@ -3436,7 +3436,7 @@ func ensureHTML(deck string, force bool) (string, error) {
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: #e5e7eb; font-family: var(--font-body); word-break: keep-all; overflow-wrap: normal; hyphens: none; line-break: strict; color: var(--color-text); }
 .deck { width: var(--slide-width); margin: 0 auto; }
-.slide { position: relative; width: var(--slide-width); height: var(--slide-height); overflow: hidden; background: var(--color-bg); padding: 72px 104px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 32px; border-bottom: 1px solid #d1d5db; }
+.slide { position: relative; width: var(--slide-width); height: var(--slide-height); overflow: hidden; background: var(--color-bg); padding: 96px 104px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 32px; border-bottom: 1px solid #d1d5db; }
 .slide::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 12px; background: linear-gradient(90deg, var(--color-primary), var(--color-accent)); }
 .kicker { color: var(--color-primary); font-size: 28px; font-weight: 700; margin: 0 0 20px; }
 h1, h2 { margin: 0; letter-spacing: 0; line-height: 1.08; max-width: 1280px; }

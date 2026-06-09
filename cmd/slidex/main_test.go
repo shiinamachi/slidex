@@ -360,6 +360,8 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 func TestEditorialHTMLFindingsEnforceStructureTypeAndA11y(t *testing.T) {
 	html := `<!doctype html><html lang="ko"><head><style>
 body { font-family: Arial, sans-serif; text-align: justify; }
+.slide { padding: 8px; }
+.body { display: grid; gap: 15px; }
 .message { color: #777777; background: #777777; font-size: 12px; }
 </style></head><body><main class="deck">
 <section class="slide" id="slide_01" data-slide-id="slide_01">
@@ -378,7 +380,7 @@ body { font-family: Arial, sans-serif; text-align: justify; }
 		},
 	}
 	findings := editorialHTMLFindings("final_deck.html", html, spec, slides)
-	for _, check := range []string{"ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-A11Y-002"} {
+	for _, check := range []string{"ED-GRID-001", "ED-GRID-002", "ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-A11Y-002"} {
 		if !hasFindingCheck(findings, check) {
 			t.Fatalf("expected %s finding, got %#v", check, findings)
 		}

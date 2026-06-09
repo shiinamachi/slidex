@@ -40,6 +40,10 @@ of the editorial policy:
 - `ED-STRUCT-002`: each non-appendix slide needs one primary headline or
   explicit headline metadata.
 - `ED-STRUCT-003`: each non-appendix slide needs a takeaway or reader question.
+- `ED-GRID-001`: `.slide` safe margin must meet
+  `editorialDesignPolicy.safeMarginPx`.
+- `ED-GRID-002`: major grid gaps are reported when below
+  `editorialDesignPolicy.gridGutterPx` or off the spacing scale.
 - `ED-HIER-001`: competing primary headlines on one non-appendix slide fail.
 - `ED-TYPE-001`: Korean documents must use a Korean-capable font stack.
 - `ED-TYPE-002`: explicit body, table, chart, footer, source, and caption font
