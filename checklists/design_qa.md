@@ -66,6 +66,9 @@ of the editorial policy:
   text or 3:1 large text contrast thresholds unless policy overrides them.
 - `ED-A11Y-002`: meaningful images require alt text, `aria-label`, or
   decorative marking.
+- `ED-A11Y-003`: image-embedded primary text marked with
+  `data-primary-text="true"` or primary-text classes must have an HTML text
+  equivalent.
 - `ED-RENDER-001`, `ED-RENDER-002`, and `ED-RENDER-003`: rendered PNG/PDF
   hashes must trace to the current HTML, and direct HTML edits must be synced
   against `final_deck.generated_baseline.html`.

@@ -716,8 +716,31 @@ func imageAltFindings(htmlPath, htmlString string) []qaFinding {
 		if !decorative && !hasAlt {
 			findings = append(findings, fail("ED-A11Y-002", fmt.Sprintf("meaningful image %d requires alt text, aria-label, or decorative marking", i+1), htmlPath))
 		}
+		if imageEmbeddedPrimaryText(tag) && !imageHasHTMLTextEquivalent(tag, htmlString) {
+			findings = append(findings, fail("ED-A11Y-003", fmt.Sprintf("image-embedded primary text %d requires an HTML text equivalent", i+1), htmlPath))
+		}
 	}
 	return findings
+}
+
+func imageEmbeddedPrimaryText(tag string) bool {
+	lower := strings.ToLower(tag)
+	return strings.Contains(lower, `data-primary-text="true"`) ||
+		strings.Contains(lower, `data-primary-text='true'`) ||
+		regexp.MustCompile(`(?is)\bclass\s*=\s*["'][^"']*(primary-text|text-image|image-text)[^"']*["']`).MatchString(tag)
+}
+
+func imageHasHTMLTextEquivalent(tag, htmlString string) bool {
+	if regexp.MustCompile(`(?is)\bdata-text-equivalent\s*=\s*["'][^"']+["']`).MatchString(tag) {
+		return true
+	}
+	if regexp.MustCompile(`(?is)\baria-describedby\s*=\s*["'][^"']+["']`).MatchString(tag) {
+		return true
+	}
+	if id := attrValue(tag, "data-text-equivalent-id"); id != "" {
+		return regexp.MustCompile(`(?is)\bid\s*=\s*["']` + regexp.QuoteMeta(id) + `["']`).MatchString(htmlString)
+	}
+	return false
 }
 
 type cssRule struct {
