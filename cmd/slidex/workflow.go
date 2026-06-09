@@ -5529,7 +5529,7 @@ func appendRunLog(outDir string, event map[string]any) error {
 		return err
 	}
 	path := filepath.Join(outDir, "run_log.jsonl")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := openSecureAppendFile(path, 0o600)
 	if err != nil {
 		return err
 	}
@@ -5562,17 +5562,130 @@ func secureWriteJSON(path string, v any) error {
 }
 
 func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
-	if err := ensureSecureDir(filepath.Dir(path)); err != nil {
+	dir := filepath.Dir(path)
+	if err := ensureSecureDir(dir); err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, mode)
+	if err := rejectSecureWriteTarget(path); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := rejectSymlinkAncestors(dir); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func openSecureAppendFile(path string, mode os.FileMode) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if err := ensureSecureDir(dir); err != nil {
+		return nil, err
+	}
+	if err := rejectSecureWriteTarget(path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, mode)
+	if err != nil {
+		return nil, err
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("secure write target must not be a symlink: %s", filepath.ToSlash(path))
+	}
+	fileInfo, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !os.SameFile(pathInfo, fileInfo) {
+		_ = f.Close()
+		return nil, fmt.Errorf("secure write target changed while opening: %s", filepath.ToSlash(path))
+	}
+	return f, nil
 }
 
 func ensureSecureDir(path string) error {
+	if err := rejectSymlinkAncestors(path); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
+	if err := rejectSymlinkAncestors(path); err != nil {
+		return err
+	}
 	return os.Chmod(path, 0o700)
+}
+
+func rejectSecureWriteTarget(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("secure write target must not be a symlink: %s", filepath.ToSlash(path))
+	}
+	return nil
+}
+
+func rejectSymlinkAncestors(path string) error {
+	path = filepath.Clean(path)
+	components := []string{}
+	for {
+		components = append(components, path)
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+		path = parent
+	}
+	for i := len(components) - 1; i >= 0; i-- {
+		current := components[i]
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("secure write path must not contain symlinks: %s", filepath.ToSlash(current))
+		}
+	}
+	return nil
 }
 
 func redactSecretsInAny(v any) any {

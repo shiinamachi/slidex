@@ -181,6 +181,103 @@ func TestResolveDeckDirRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestWorkbenchWritesRejectSymlinkTargets(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	outsideBrief := filepath.Join(outside, "brief.md")
+	if err := os.WriteFile(outsideBrief, []byte("outside brief\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideBrief, filepath.Join(deck, "brief.md")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	input := workbenchSaveInput{Title: "Demo", Audience: "Board", DecisionGoal: "Approve pilot"}
+	if err := writeWorkbenchBrief(deck, input); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink brief write to fail, got %v", err)
+	}
+	if got := readFileOrEmpty(outsideBrief); got != "outside brief\n" {
+		t.Fatalf("outside brief was modified: %q", got)
+	}
+
+	outsideManifest := filepath.Join(outside, "manifest.json")
+	if err := os.WriteFile(outsideManifest, []byte("outside manifest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideManifest, filepath.Join(deck, "out", workbenchManifestName)); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	if err := writeWorkbenchManifest(deck, manifest); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink manifest write to fail, got %v", err)
+	}
+	if got := readFileOrEmpty(outsideManifest); got != "outside manifest\n" {
+		t.Fatalf("outside manifest was modified: %q", got)
+	}
+
+	outsideDraft := filepath.Join(outside, "draft.json")
+	if err := os.WriteFile(outsideDraft, []byte("outside draft\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDraft, filepath.Join(deck, "out", workbenchDraftName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeWorkbenchDraft(deck, input, "draft"); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink draft write to fail, got %v", err)
+	}
+	if got := readFileOrEmpty(outsideDraft); got != "outside draft\n" {
+		t.Fatalf("outside draft was modified: %q", got)
+	}
+}
+
+func TestWorkbenchWritesRejectSymlinkParentDirectory(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(deck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideOut := filepath.Join(t.TempDir(), "outside-out")
+	if err := os.MkdirAll(outsideOut, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideOut, filepath.Join(deck, "out")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	if err := writeWorkbenchManifest(deck, manifest); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink parent write to fail, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outsideOut, workbenchManifestName)); !os.IsNotExist(err) {
+		t.Fatalf("outside manifest should not be created, stat err=%v", err)
+	}
+}
+
+func TestWorkbenchLogRejectsSymlinkTarget(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideLog := filepath.Join(t.TempDir(), "workbench_server.log")
+	if err := os.WriteFile(outsideLog, []byte("outside log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideLog, filepath.Join(outDir, "workbench_server.log")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	f, err := openSecureAppendFile(filepath.Join(outDir, "workbench_server.log"), 0o600)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("expected symlink log open to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
+	}
+	if got := readFileOrEmpty(outsideLog); got != "outside log\n" {
+		t.Fatalf("outside log was modified: %q", got)
+	}
+}
+
 func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	root := repoRootForTest(t)
 	workspace := t.TempDir()

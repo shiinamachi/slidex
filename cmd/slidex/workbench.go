@@ -291,7 +291,7 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		return result, workbenchManifest{}, err
 	}
 	logPath := filepath.Join(outDir, "workbench_server.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := openSecureAppendFile(logPath, 0o600)
 	if err != nil {
 		return result, workbenchManifest{}, err
 	}
