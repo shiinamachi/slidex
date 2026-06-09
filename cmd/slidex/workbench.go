@@ -873,22 +873,26 @@ func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOrNoOrigin(r, s.manifest.URL) {
-		http.Error(w, "origin not allowed", http.StatusForbidden)
-		return
-	}
 	if !validWorkbenchToken(r.Header.Get("X-Slidex-Workbench-Token"), s.token) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
+		if !sameOriginOrNoOrigin(r, s.manifest.URL) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
 		if draft, ok := readWorkbenchDraft(s.deckAbs); ok {
 			_ = writeJSONResponse(w, map[string]any{"status": "ok", "draft": draft})
 			return
 		}
 		_ = writeJSONResponse(w, map[string]any{"status": "empty"})
 	case http.MethodPost:
+		if !sameOriginRequired(r, s.manifest.URL) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
 		defer r.Body.Close()
 		var input workbenchSaveInput
 		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
@@ -926,7 +930,7 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOriginOrNoOrigin(r, s.manifest.URL) {
+	if !sameOriginRequired(r, s.manifest.URL) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -1813,7 +1817,7 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"outDir":              manifest.OutDir,
 		"url":                 manifest.URL,
 		"sessionId":           manifest.SessionID,
-		"tokenRedacted":       true,
+		"tokenRedacted":       manifest.TokenRedacted && manifest.TokenSHA256 != "",
 		"pid":                 manifest.PID,
 		"host":                manifest.Host,
 		"port":                manifest.Port,
@@ -1904,17 +1908,28 @@ func validWorkbenchToken(got, want string) bool {
 }
 
 func sameOriginOrNoOrigin(r *http.Request, expectedURL string) bool {
+	return sameOriginCheck(r, expectedURL, true)
+}
+
+func sameOriginRequired(r *http.Request, expectedURL string) bool {
+	return sameOriginCheck(r, expectedURL, false)
+}
+
+func sameOriginCheck(r *http.Request, expectedURL string, allowMissing bool) bool {
 	expected, err := url.Parse(expectedURL)
 	if err != nil {
 		return false
 	}
 	expectedOrigin := expected.Scheme + "://" + expected.Host
+	seen := false
 	if origin := r.Header.Get("Origin"); origin != "" {
+		seen = true
 		if origin != expectedOrigin {
 			return false
 		}
 	}
 	if referer := r.Header.Get("Referer"); referer != "" {
+		seen = true
 		parsed, err := url.Parse(referer)
 		if err != nil {
 			return false
@@ -1923,7 +1938,7 @@ func sameOriginOrNoOrigin(r *http.Request, expectedURL string) bool {
 			return false
 		}
 	}
-	return true
+	return seen || allowMissing
 }
 
 func normalizeWorkbenchInput(input workbenchSaveInput) workbenchSaveInput {

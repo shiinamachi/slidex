@@ -96,6 +96,14 @@ func TestWorkbenchSaveRequiresTokenAndSameOrigin(t *testing.T) {
 		t.Fatalf("bad referer status = %d, want %d", badRefererRecorder.Code, http.StatusForbidden)
 	}
 
+	noOrigin := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", bytes.NewReader(payload))
+	noOrigin.Header.Set("X-Slidex-Workbench-Token", token)
+	noOriginRecorder := httptest.NewRecorder()
+	server.handleSave(noOriginRecorder, noOrigin)
+	if noOriginRecorder.Code != http.StatusForbidden {
+		t.Fatalf("no origin status = %d, want %d", noOriginRecorder.Code, http.StatusForbidden)
+	}
+
 	goodReferer := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", bytes.NewReader(payload))
 	goodReferer.Header.Set("Referer", "http://127.0.0.1:43210/workbench/session-1")
 	goodReferer.Header.Set("X-Slidex-Workbench-Token", token)
@@ -145,6 +153,14 @@ func TestWorkbenchDraftRequiresTokenAndPersistsRecovery(t *testing.T) {
 	server.handleDraft(noTokenRecorder, noToken)
 	if noTokenRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("draft without token status = %d, want %d", noTokenRecorder.Code, http.StatusUnauthorized)
+	}
+
+	noOrigin := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/draft", bytes.NewReader(payload))
+	noOrigin.Header.Set("X-Slidex-Workbench-Token", token)
+	noOriginRecorder := httptest.NewRecorder()
+	server.handleDraft(noOriginRecorder, noOrigin)
+	if noOriginRecorder.Code != http.StatusForbidden {
+		t.Fatalf("draft without origin status = %d, want %d", noOriginRecorder.Code, http.StatusForbidden)
 	}
 
 	good := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/draft", bytes.NewReader(payload))
@@ -231,6 +247,26 @@ func TestWorkbenchHealthRejectsOriginAndOmitsCORS(t *testing.T) {
 	}
 	if manifest.ServerBind != "127.0.0.1" || manifest.Host != "127.0.0.1" {
 		t.Fatalf("workbench must be loopback-only: %#v", manifest)
+	}
+}
+
+func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatus(manifest)
+	if status["tokenRedacted"] != true {
+		t.Fatalf("tokenRedacted = %#v, want true", status["tokenRedacted"])
+	}
+	manifest.TokenRedacted = false
+	status = publicWorkbenchStatus(manifest)
+	if status["tokenRedacted"] != false {
+		t.Fatalf("tokenRedacted should reflect manifest false, got %#v", status["tokenRedacted"])
+	}
+	manifest.TokenRedacted = true
+	manifest.TokenSHA256 = ""
+	status = publicWorkbenchStatus(manifest)
+	if status["tokenRedacted"] != false {
+		t.Fatalf("tokenRedacted should require token hash, got %#v", status["tokenRedacted"])
 	}
 }
 
