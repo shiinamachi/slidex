@@ -33,6 +33,7 @@ const (
 	workbenchBrowserEvidenceName = "workbench_browser_evidence.json"
 	workbenchSaveSmokeName       = "workbench_save_smoke.json"
 	workbenchBrowserScreenshot   = "workbench_browser_screenshot"
+	workbenchLockName            = "workbench.lock"
 	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
 )
 
@@ -747,6 +748,15 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 	if err != nil {
 		return deckBootstrapResult{}, workbenchManifest{}, false, err
 	}
+	outDir := filepath.Join(deckAbs, "out")
+	if err := ensureSecureDir(outDir); err != nil {
+		return deckBootstrapResult{}, workbenchManifest{}, false, err
+	}
+	unlock, err := acquireWorkbenchLock(outDir)
+	if err != nil {
+		return deckBootstrapResult{}, workbenchManifest{}, false, err
+	}
+	defer unlock()
 	result := deckBootstrapResult{
 		Workspace: filepath.ToSlash(workspaceRoot(workspace)),
 		DeckID:    filepath.Base(deckAbs),
@@ -772,10 +782,6 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return result, workbenchManifest{}, false, err
-	}
-	outDir := filepath.Join(deckAbs, "out")
-	if err := ensureSecureDir(outDir); err != nil {
 		return result, workbenchManifest{}, false, err
 	}
 	logPath := filepath.Join(outDir, "workbench_server.log")
@@ -1370,6 +1376,11 @@ func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
 	if err != nil {
 		return workbenchManifest{}, err
 	}
+	unlock, err := acquireWorkbenchLock(filepath.Join(deckAbs, "out"))
+	if err != nil {
+		return workbenchManifest{}, err
+	}
+	defer unlock()
 	manifest := workbenchStatusForDeck(deckAbs)
 	if manifest.PID > 0 && manifest.Status == "running" {
 		stopWorkbenchProcess(manifest)
@@ -1391,6 +1402,22 @@ func canonicalWorkbenchManifestPaths(deckAbs string, manifest workbenchManifest)
 	manifest.Paths["draft"] = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName))
 	manifest.Paths["manifest"] = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName))
 	return manifest
+}
+
+func acquireWorkbenchLock(outDir string) (func(), error) {
+	f, err := openSecureAppendFile(filepath.Join(outDir, workbenchLockName), 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	_, _ = fmt.Fprintf(f, "pid=%d acquired=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 func stopWorkbenchProcess(manifest workbenchManifest) {

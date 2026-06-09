@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBootstrapDeckRejectsTraversalAndCreatesUnderDecks(t *testing.T) {
@@ -916,5 +917,64 @@ func TestWorkbenchStatusAndStopNormalizeCorruptManifestPaths(t *testing.T) {
 	}
 	if recorded.DeckDir != filepath.ToSlash(deck) || recorded.Status != "stopped" {
 		t.Fatalf("deck-local manifest was not normalized: %#v", recorded)
+	}
+}
+
+func TestWorkbenchLockSerializesAccessAndRejectsSymlink(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := acquireWorkbenchLock(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired := make(chan error, 1)
+	releaseSecond := make(chan struct{})
+	go func() {
+		unlockSecond, err := acquireWorkbenchLock(outDir)
+		if err != nil {
+			acquired <- err
+			return
+		}
+		acquired <- nil
+		<-releaseSecond
+		unlockSecond()
+	}()
+	select {
+	case err := <-acquired:
+		unlock()
+		close(releaseSecond)
+		t.Fatalf("second lock acquired before first release: %v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-acquired:
+		if err != nil {
+			close(releaseSecond)
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(releaseSecond)
+		t.Fatal("second lock did not acquire after first release")
+	}
+	close(releaseSecond)
+
+	outsideLock := filepath.Join(t.TempDir(), "outside.lock")
+	if err := os.WriteFile(outsideLock, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(outDir, workbenchLockName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideLock, filepath.Join(outDir, workbenchLockName)); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	if unlock, err := acquireWorkbenchLock(outDir); err == nil {
+		unlock()
+		t.Fatal("expected symlink workbench lock to be rejected")
+	} else if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
 	}
 }
