@@ -640,6 +640,7 @@ func editorialHTMLFindings(htmlPath, htmlString string, spec map[string]any, sli
 			if !hasSourceNote(slide.FullHTML) {
 				findings = append(findings, fail("ED-DATAVIZ-002", slideID+" chart or table requires a source line", htmlPath))
 			}
+			findings = append(findings, dataVizIntegrityFindings(htmlPath, slideID, slide.FullHTML)...)
 		}
 	}
 	findings = append(findings, imageAltFindings(htmlPath, htmlString)...)
@@ -704,6 +705,75 @@ func hasVisualTitle(htmlString string) bool {
 
 func hasSourceNote(htmlString string) bool {
 	return regexp.MustCompile(`(?is)(\bsource\b|출처|자료\s*:|\bclass\s*=\s*["'][^"']*(source|footnote)[^"']*["'])`).MatchString(htmlString)
+}
+
+func dataVizIntegrityFindings(htmlPath, slideID, htmlString string) []qaFinding {
+	var findings []qaFinding
+	if !hasDataVizDetail(htmlString, "unit") {
+		findings = append(findings, fail("ED-DATAVIZ-003", slideID+" chart or table requires unit metadata or visible unit text", htmlPath))
+	}
+	if !hasDataVizDetail(htmlString, "period") {
+		findings = append(findings, fail("ED-DATAVIZ-003", slideID+" chart or table requires date range or period metadata", htmlPath))
+	}
+	if chartLikeVisualization(htmlString) {
+		if !hasDataVizDetail(htmlString, "axis") && !hasDataVizDetail(htmlString, "direct-label") && !hasDataVizDetail(htmlString, "legend") {
+			findings = append(findings, fail("ED-DATAVIZ-003", slideID+" chart requires axis labels, direct labels, or legend metadata", htmlPath))
+		}
+		if colorOnlyMeaning(htmlString) {
+			findings = append(findings, fail("ED-DATAVIZ-004", slideID+" chart or table uses color-only meaning without non-color encoding", htmlPath))
+		}
+		if unfamiliarChartType(htmlString) && !hasChartExplanation(htmlString) {
+			findings = append(findings, qaFinding{Severity: "warn", Check: "ED-DATAVIZ-005", Message: slideID + " uses an unfamiliar chart type without explanatory text", Path: htmlPath})
+		}
+	}
+	return findings
+}
+
+func hasDataVizDetail(htmlString, detail string) bool {
+	lower := strings.ToLower(htmlString)
+	switch detail {
+	case "unit":
+		return regexp.MustCompile(`(?is)(data-unit\s*=|aria-label\s*=\s*["'][^"']*(unit|단위)|\bunit\b|단위\s*[:：]|%|₩|\$|원\b|명\b|건\b)`).MatchString(lower)
+	case "period":
+		return regexp.MustCompile(`(?is)(data-(date-range|period)\s*=|기간\s*[:：]|날짜\s*[:：]|\bperiod\b|\bdate range\b|\b20[0-9]{2}\b|[0-9]{4}\s*[.-]\s*[0-9]{1,2})`).MatchString(lower)
+	case "axis":
+		return regexp.MustCompile(`(?is)(data-axis|axis-label|축\s*[:：]|\baxis\b)`).MatchString(lower)
+	case "direct-label":
+		return regexp.MustCompile(`(?is)(data-direct-label|direct-label|직접\s*라벨|라벨\s*[:：])`).MatchString(lower)
+	case "legend":
+		return regexp.MustCompile(`(?is)(data-legend|class\s*=\s*["'][^"']*legend|범례|legend)`).MatchString(lower)
+	default:
+		return false
+	}
+}
+
+func chartLikeVisualization(htmlString string) bool {
+	return regexp.MustCompile(`(?is)(data-chart-type\s*=|\bclass\s*=\s*["'][^"']*(chart|data-viz|visualization)[^"']*["'])`).MatchString(htmlString)
+}
+
+func colorOnlyMeaning(htmlString string) bool {
+	lower := strings.ToLower(htmlString)
+	if strings.Contains(lower, `data-color-only="true"`) || strings.Contains(lower, `data-color-only='true'`) || regexp.MustCompile(`(?is)\bclass\s*=\s*["'][^"']*color-only[^"']*["']`).MatchString(htmlString) {
+		return !regexp.MustCompile(`(?is)(data-noncolor-encoding\s*=|data-pattern\s*=|data-symbol\s*=|class\s*=\s*["'][^"']*(pattern|symbol|label)[^"']*["'])`).MatchString(htmlString)
+	}
+	return false
+}
+
+func unfamiliarChartType(htmlString string) bool {
+	chartType := strings.ToLower(attrValue(htmlString, "data-chart-type"))
+	if chartType == "" {
+		return false
+	}
+	known := map[string]bool{
+		"bar": true, "line": true, "area": true, "scatter": true, "table": true,
+		"stacked-bar": true, "grouped-bar": true, "horizontal-bar": true,
+		"pie": true, "donut": true, "heatmap": true,
+	}
+	return !known[chartType]
+}
+
+func hasChartExplanation(htmlString string) bool {
+	return regexp.MustCompile(`(?is)(data-explanation\s*=|aria-describedby\s*=|class\s*=\s*["'][^"']*(explanation|note|caption)[^"']*["']|설명\s*[:：])`).MatchString(htmlString)
 }
 
 func imageAltFindings(htmlPath, htmlString string) []qaFinding {

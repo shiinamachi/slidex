@@ -62,6 +62,12 @@ of the editorial policy:
   and period metadata; unsupported superlative or guarantee language fails.
 - `ED-DATAVIZ-001` and `ED-DATAVIZ-002`: charts and tables require a title or
   caption and a source line.
+- `ED-DATAVIZ-003`: charts and tables require unit, period/date range, and
+  axis, direct-label, or legend metadata where applicable.
+- `ED-DATAVIZ-004`: color-only meaning fails unless a non-color encoding is
+  documented in the HTML.
+- `ED-DATAVIZ-005`: unfamiliar chart types warn unless explanatory text is
+  present.
 - `ED-A11Y-001`: explicit text/background color pairs must meet 4.5:1 normal
   text or 3:1 large text contrast thresholds unless policy overrides them.
 - `ED-A11Y-002`: meaningful images require alt text, `aria-label`, or

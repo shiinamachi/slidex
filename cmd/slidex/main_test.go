@@ -421,6 +421,7 @@ body { font-family: Arial, sans-serif; text-align: justify; }
   <h2>두 번째 제목</h2>
   <p class="message">작은 저대비 본문</p>
   <table><tr><td>35%</td></tr></table>
+  <div class="chart color-only" data-chart-type="sankey" data-color-only="true">색상으로만 의미를 구분하는 낯선 차트</div>
   <img src="chart.png" data-primary-text="true">
 </section>
 </main></body></html>`
@@ -432,7 +433,7 @@ body { font-family: Arial, sans-serif; text-align: justify; }
 		},
 	}
 	findings := editorialHTMLFindings("final_deck.html", html, spec, slides)
-	for _, check := range []string{"ED-GRID-001", "ED-GRID-002", "ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-A11Y-002", "ED-A11Y-003"} {
+	for _, check := range []string{"ED-GRID-001", "ED-GRID-002", "ED-A11Y-001", "ED-TYPE-001", "ED-TYPE-002", "ED-TYPE-003", "ED-HIER-001", "ED-STRUCT-003", "ED-DATAVIZ-002", "ED-DATAVIZ-003", "ED-DATAVIZ-004", "ED-DATAVIZ-005", "ED-A11Y-002", "ED-A11Y-003"} {
 		if !hasFindingCheck(findings, check) {
 			t.Fatalf("expected %s finding, got %#v", check, findings)
 		}
