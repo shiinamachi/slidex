@@ -611,3 +611,82 @@ func TestWorkbenchReadyValidatesSessionDeckAndPID(t *testing.T) {
 		t.Fatal("expected mismatched session to be rejected")
 	}
 }
+
+func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		_ = writeJSONResponse(w, map[string]any{
+			"status":    "ready",
+			"sessionId": "session-1",
+			"deckDir":   filepath.ToSlash(deck),
+			"pid":       os.Getpid(),
+		})
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", port, os.Getpid(), "starting")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := workbenchStatus(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "running" {
+		t.Fatalf("status = %q, want running", status.Status)
+	}
+}
+
+func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 1, 999999, "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := workbenchStatus(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "stale" {
+		t.Fatalf("status = %q, want stale", status.Status)
+	}
+	stopped, err := stopWorkbench(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Status != "stopped" {
+		t.Fatalf("stop status = %q, want stopped", stopped.Status)
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after stop")
+	}
+	if recorded.Status != "stopped" {
+		t.Fatalf("recorded status = %q, want stopped", recorded.Status)
+	}
+}
