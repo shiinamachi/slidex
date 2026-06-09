@@ -224,13 +224,14 @@
         },
         "copyLimits": {
           "type": "object",
-          "required": ["headlineChars", "takeawayChars", "maxBullets", "bulletChars"],
+          "required": ["headlineChars", "takeawayChars", "maxBullets", "bulletChars", "cjkLineChars"],
           "additionalProperties": false,
           "properties": {
             "headlineChars": {"type": "integer", "minimum": 1},
             "takeawayChars": {"type": "integer", "minimum": 1},
             "maxBullets": {"type": "integer", "minimum": 1},
-            "bulletChars": {"type": "integer", "minimum": 1}
+            "bulletChars": {"type": "integer", "minimum": 1},
+            "cjkLineChars": {"type": "integer", "minimum": 1}
           }
         },
         "evidencePolicy": {"type": "string", "enum": ["source_or_user_confirmation_or_assumption", "source_required"]},

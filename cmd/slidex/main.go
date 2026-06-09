@@ -541,6 +541,7 @@ type editorialCopyLimits struct {
 	TakeawayChars int
 	MaxBullets    int
 	BulletChars   int
+	CJKLineChars  int
 }
 
 func editorialSpecFindings(obj map[string]any, path string) []qaFinding {
@@ -570,9 +571,15 @@ func editorialSpecFindings(obj map[string]any, path string) []qaFinding {
 			if limits.HeadlineChars > 0 && runeLen(headline) > limits.HeadlineChars {
 				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-COPY-001", Message: fmt.Sprintf("%s headline is %d chars; policy limit is %d", slideID, runeLen(headline), limits.HeadlineChars), Path: path})
 			}
+			if limits.CJKLineChars > 0 && maxCJKRunLen(headline) > limits.CJKLineChars {
+				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-TYPE-004", Message: fmt.Sprintf("%s headline has a CJK run of %d chars; policy limit is %d", slideID, maxCJKRunLen(headline), limits.CJKLineChars), Path: path})
+			}
 			takeaway := stringValue(slide["takeaway"])
 			if limits.TakeawayChars > 0 && runeLen(takeaway) > limits.TakeawayChars {
 				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-COPY-001", Message: fmt.Sprintf("%s takeaway is %d chars; policy limit is %d", slideID, runeLen(takeaway), limits.TakeawayChars), Path: path})
+			}
+			if limits.CJKLineChars > 0 && maxCJKRunLen(takeaway) > limits.CJKLineChars {
+				findings = append(findings, qaFinding{Severity: "warn", Check: "ED-TYPE-004", Message: fmt.Sprintf("%s takeaway has a CJK run of %d chars; policy limit is %d", slideID, maxCJKRunLen(takeaway), limits.CJKLineChars), Path: path})
 			}
 			body := stringArrayValue(slide["bodyContent"])
 			if limits.MaxBullets > 0 && len(body) > limits.MaxBullets {
@@ -581,6 +588,9 @@ func editorialSpecFindings(obj map[string]any, path string) []qaFinding {
 			for j, bullet := range body {
 				if limits.BulletChars > 0 && runeLen(bullet) > limits.BulletChars {
 					findings = append(findings, qaFinding{Severity: "warn", Check: "ED-COPY-001", Message: fmt.Sprintf("%s bullet %d is %d chars; policy limit is %d", slideID, j+1, runeLen(bullet), limits.BulletChars), Path: path})
+				}
+				if limits.CJKLineChars > 0 && maxCJKRunLen(bullet) > limits.CJKLineChars {
+					findings = append(findings, qaFinding{Severity: "warn", Check: "ED-TYPE-004", Message: fmt.Sprintf("%s bullet %d has a CJK run of %d chars; policy limit is %d", slideID, j+1, maxCJKRunLen(bullet), limits.CJKLineChars), Path: path})
 				}
 			}
 		}
@@ -1161,7 +1171,7 @@ func verifyHTMLEditSync(htmlPath, baselinePath string) []qaFinding {
 }
 
 func copyLimitsFromSpec(obj map[string]any) editorialCopyLimits {
-	limits := editorialCopyLimits{HeadlineChars: 56, TakeawayChars: 90, MaxBullets: 5, BulletChars: 42}
+	limits := editorialCopyLimits{HeadlineChars: 56, TakeawayChars: 90, MaxBullets: 5, BulletChars: 42, CJKLineChars: 34}
 	policy, _ := obj["editorialDesignPolicy"].(map[string]any)
 	copyLimits, _ := policy["copyLimits"].(map[string]any)
 	if n, ok := numberAsInt(copyLimits["headlineChars"]); ok {
@@ -1175,6 +1185,9 @@ func copyLimitsFromSpec(obj map[string]any) editorialCopyLimits {
 	}
 	if n, ok := numberAsInt(copyLimits["bulletChars"]); ok {
 		limits.BulletChars = n
+	}
+	if n, ok := numberAsInt(copyLimits["cjkLineChars"]); ok {
+		limits.CJKLineChars = n
 	}
 	return limits
 }
@@ -1260,6 +1273,29 @@ func stringValue(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func maxCJKRunLen(text string) int {
+	maxRun := 0
+	current := 0
+	for _, r := range text {
+		if isCJKRune(r) {
+			current++
+			if current > maxRun {
+				maxRun = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return maxRun
+}
+
+func isCJKRune(r rune) bool {
+	return (r >= 0x3040 && r <= 0x30FF) ||
+		(r >= 0x3400 && r <= 0x4DBF) ||
+		(r >= 0x4E00 && r <= 0x9FFF) ||
+		(r >= 0xAC00 && r <= 0xD7AF)
 }
 
 func runeLen(text string) int {

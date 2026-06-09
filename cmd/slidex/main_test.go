@@ -318,6 +318,7 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 				"takeawayChars": 80,
 				"maxBullets":    2,
 				"bulletChars":   80,
+				"cjkLineChars":  6,
 			},
 		},
 		"slides": []any{
@@ -327,7 +328,7 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 				"headline":       "출처 없는 수치 주장을 점검합니다",
 				"readerQuestion": "",
 				"takeaway":       "",
-				"bodyContent":    []any{"첫 번째 근거", "두 번째 근거", "세 번째 근거"},
+				"bodyContent":    []any{"첫 번째 근거", "두 번째 근거", "세 번째 근거", "한국어문장이너무길어서줄바꿈위험"},
 			},
 		},
 		"claimProvenance": map[string]any{
@@ -349,7 +350,7 @@ func TestEditorialSpecFindingsEnforceSlideAndClaimGates(t *testing.T) {
 		},
 	}
 	findings := editorialSpecFindings(spec, "deck_spec.json")
-	for _, check := range []string{"ED-STRUCT-003", "ED-COPY-002", "ED-CLAIM-001", "ED-CLAIM-002", "ED-CLAIM-003"} {
+	for _, check := range []string{"ED-STRUCT-003", "ED-COPY-002", "ED-TYPE-004", "ED-CLAIM-001", "ED-CLAIM-002", "ED-CLAIM-003"} {
 		if !hasFindingCheck(findings, check) {
 			t.Fatalf("expected %s finding, got %#v", check, findings)
 		}

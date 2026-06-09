@@ -45,6 +45,9 @@ of the editorial policy:
 - `ED-TYPE-002`: explicit body, table, chart, footer, source, and caption font
   sizes must meet the policy minimums.
 - `ED-TYPE-003`: full justification fails without an explicit exception.
+- `ED-TYPE-004`: excessive CJK text runs are reported against
+  `editorialDesignPolicy.copyLimits.cjkLineChars`, with appendix relaxation
+  allowed only when the policy says so.
 - `ED-COPY-001` and `ED-COPY-002`: copy length and bullet density are checked
   against `editorialDesignPolicy.copyLimits`; appendix relaxation is allowed
   only when the policy says so.

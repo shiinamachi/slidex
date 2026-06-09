@@ -3233,7 +3233,7 @@ func defaultEditorialDesignPolicy() map[string]any {
 		"contrastNormal":            4.5,
 		"contrastLarge":             3.0,
 		"koreanWrapping":            map[string]any{"wordBreak": "keep-all", "lineBreak": "strict", "hyphenation": "none"},
-		"copyLimits":                map[string]any{"headlineChars": 56, "takeawayChars": 90, "maxBullets": 5, "bulletChars": 42},
+		"copyLimits":                map[string]any{"headlineChars": 56, "takeawayChars": 90, "maxBullets": 5, "bulletChars": 42, "cjkLineChars": 34},
 		"evidencePolicy":            "source_or_user_confirmation_or_assumption",
 		"sourceFooterPolicy":        "required_when_claims_or_visuals_present",
 		"appendixRelaxationAllowed": true,
