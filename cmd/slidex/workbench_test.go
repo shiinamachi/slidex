@@ -237,6 +237,23 @@ func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
 	}
 }
 
+func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	for _, want := range []string{
+		"Deck files",
+		filepath.ToSlash(filepath.Join(deck, "brief.md")),
+		filepath.ToSlash(filepath.Join(deck, "out", workbenchDraftName)),
+		filepath.ToSlash(filepath.Join(deck, "out", workbenchManifestName)),
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
+		}
+	}
+}
+
 func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")

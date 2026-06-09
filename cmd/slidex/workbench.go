@@ -1030,6 +1030,11 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
     button:disabled { opacity:.58; cursor:not-allowed; }
     output { font-size:13px; color:var(--muted); }
     output.warn { color:var(--warn); }
+    .paths { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; }
+    .paths h2 { margin:0 0 10px; font-size:14px; line-height:1.3; letter-spacing:0; }
+    .paths dl { margin:0; display:grid; grid-template-columns: minmax(90px, max-content) minmax(0, 1fr); gap:8px 14px; font-size:13px; line-height:1.45; }
+    .paths dt { color:var(--muted); font-weight:650; }
+    .paths dd { margin:0; overflow-wrap:anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .notice { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; color:var(--muted); font-size:13px; line-height:1.5; }
     @media (max-width: 760px) { main { padding:20px; } header { display:block; } form { grid-template-columns:1fr; } }
   </style>
@@ -1051,6 +1056,10 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
       <label>Output expectations<textarea name="outputExpectations" spellcheck="true"></textarea></label>
       <div class="actions"><button type="submit">Save initial brief</button><output id="status"></output></div>
     </form>
+    <section class="paths" aria-label="Deck files">
+      <h2>Deck files</h2>
+      <dl>` + workbenchFilePathHTML(s.manifest) + `</dl>
+    </section>
     <div class="notice">Later strategy, build, render, QA, and package stages remain separate slidex workflow steps.</div>
   </main>
   <script>
@@ -1113,6 +1122,28 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
   </script>
 </body>
 </html>`
+}
+
+func workbenchFilePathHTML(manifest workbenchManifest) string {
+	paths := manifest.Paths
+	if paths == nil {
+		paths = map[string]string{}
+	}
+	items := []struct {
+		key   string
+		label string
+		path  string
+	}{
+		{key: "brief", label: "Brief", path: filepath.ToSlash(filepath.Join(manifest.DeckDir, "brief.md"))},
+		{key: "draft", label: "Draft", path: filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchDraftName))},
+		{key: "manifest", label: "Manifest", path: filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName))},
+	}
+	var b strings.Builder
+	for _, item := range items {
+		path := firstNonEmpty(paths[item.key], item.path)
+		b.WriteString("<dt>" + html.EscapeString(item.label) + "</dt><dd>" + html.EscapeString(path) + "</dd>")
+	}
+	return b.String()
 }
 
 func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExisting bool) (deckBootstrapResult, error) {
