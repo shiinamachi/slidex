@@ -1404,6 +1404,23 @@ func TestReadPendingUpdateRejectsAdditionalProperties(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "validation") {
 		t.Fatalf("pending update with additional field should fail schema validation, got %v", err)
 	}
+
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending-invalid" || !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("schema-invalid pending update should be visible in status: %#v", status)
+	}
+	if status.PendingUpdatePath == "" || !strings.Contains(status.Reason, "pending update state is invalid") {
+		t.Fatalf("schema-invalid pending update evidence missing: %#v", status)
+	}
+	if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
+		t.Fatalf("pending-invalid status should match schema: %v", err)
+	}
+	if !hasStatusBannerForTest(updateStatusBanners(status), "pending_update_invalid") {
+		t.Fatalf("pending-invalid banner missing: %#v", updateStatusBanners(status))
+	}
 }
 
 func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {

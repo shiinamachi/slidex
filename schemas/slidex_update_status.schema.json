@@ -56,7 +56,8 @@
         "candidate-valid",
         "verification-failed",
         "verified",
-        "pending-activation"
+        "pending-activation",
+        "pending-invalid"
       ]
     },
     "reason": {

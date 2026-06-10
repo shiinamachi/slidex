@@ -575,7 +575,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		}
 	}
 	state, statePath, stateErr := readUpdateState(installRoot)
-	pending, pendingPath, _ := readPendingUpdate(installRoot)
+	pending, pendingPath, pendingErr := readPendingUpdate(installRoot)
 	status := updateStatus{
 		ToolName:                  toolName,
 		CurrentVersion:            toolVersion,
@@ -622,6 +622,14 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		status.VerifiedPluginVersion = state.VerifiedPluginVersion
 		status.VerifiedPluginPath = state.VerifiedPluginPath
 		status.VerifiedStartSkillPath = state.VerifiedStartSkillPath
+	}
+	if pendingErr != nil && !errors.Is(pendingErr, os.ErrNotExist) {
+		status.Status = "pending-invalid"
+		status.PendingUpdatePath = filepath.ToSlash(pendingPath)
+		status.RestartRequired = true
+		status.PluginVerificationStatus = "restart_required"
+		status.NextVerificationCommand = "slidex update activate-pending --yes --json"
+		status.Reason = appendReason(status.Reason, "pending update state is invalid and must be repaired before activation: "+pendingErr.Error())
 	}
 	if pending != nil {
 		status.PendingActivation = true
@@ -714,6 +722,15 @@ func updateStatusBanners(status updateStatus) []statusBanner {
 			Severity: "warn",
 			Title:    "Automatic updates disabled",
 			Message:  firstNonEmpty(status.Guidance, status.Reason),
+		})
+	}
+	if status.Status == "pending-invalid" {
+		banners = append(banners, statusBanner{
+			ID:       "pending_update_invalid",
+			Severity: "warn",
+			Title:    "Pending update invalid",
+			Message:  "A staged slidex update could not be read and must be repaired before activation.",
+			Command:  status.NextVerificationCommand,
 		})
 	}
 	if status.RestartRequired {
