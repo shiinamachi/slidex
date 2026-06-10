@@ -6207,6 +6207,13 @@ func copyDir(src, dst string) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if isSymlinkOrReparsePoint(path, info) {
+			return fmt.Errorf("copy source must not contain symlinks or reparse points: %s", filepath.ToSlash(path))
+		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err

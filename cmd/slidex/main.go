@@ -4380,6 +4380,13 @@ func writeJSONFile(path string, v any) error {
 }
 
 func copyFile(src, dst string) error {
+	srcInfo, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if isSymlinkOrReparsePoint(src, srcInfo) {
+		return fmt.Errorf("copy source must not be a symlink or reparse point: %s", filepath.ToSlash(src))
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -4389,12 +4396,32 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	if !os.SameFile(srcInfo, info) {
+		return fmt.Errorf("copy source changed while opening: %s", filepath.ToSlash(src))
+	}
+	if err := rejectSymlinkAncestors(filepath.Dir(dst)); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if err := rejectSymlinkAncestors(filepath.Dir(dst)); err != nil {
+		return err
+	}
+	if err := rejectSecureWriteTarget(dst); err != nil {
 		return err
 	}
 	mode := info.Mode().Perm()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
+		return err
+	}
+	if err := verifySecureOpenFile(dst, out); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := applyPlatformFileMode(dst, mode); err != nil {
+		_ = out.Close()
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
@@ -4404,7 +4431,10 @@ func copyFile(src, dst string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(dst, mode)
+	if err := os.Chmod(dst, mode); err != nil {
+		return err
+	}
+	return applyPlatformFileMode(dst, mode)
 }
 
 func mustAbs(path string) string {

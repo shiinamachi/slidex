@@ -2236,6 +2236,50 @@ func TestCopyDirPreservesExecutableMode(t *testing.T) {
 	}
 }
 
+func TestCopyDirRejectsSymlinkSources(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	target := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(src, "link.txt")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	err := copyDir(src, filepath.Join(t.TempDir(), "dst"))
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected copyDir symlink source rejection, got %v", err)
+	}
+}
+
+func TestCopyFileRejectsSymlinkEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.txt")
+	dst := filepath.Join(dir, "dst.txt")
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(src, []byte("src\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, dst); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	if err := copyFile(src, dst); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected copyFile symlink destination rejection, got %v", err)
+	}
+	linkSrc := filepath.Join(dir, "link-src.txt")
+	if err := os.Symlink(src, linkSrc); err != nil {
+		t.Skipf("second symlink unavailable on this platform: %v", err)
+	}
+	if err := copyFile(linkSrc, filepath.Join(dir, "copy.txt")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected copyFile symlink source rejection, got %v", err)
+	}
+}
+
 func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 	cases := []struct {
 		goos string
