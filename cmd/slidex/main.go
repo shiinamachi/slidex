@@ -2582,12 +2582,24 @@ func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height i
 	)
 	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
 	if err != nil {
+		if isChromeCommandTimeout(err) && screenshotFileExists(pngPath) {
+			return nil
+		}
 		return fmt.Errorf("chrome screenshot failed: %w\n%s", err, string(out))
 	}
-	if info, err := os.Stat(pngPath); err != nil || info.Size() == 0 {
+	if !screenshotFileExists(pngPath) {
 		return fmt.Errorf("chrome did not create screenshot: %s", pngPath)
 	}
 	return nil
+}
+
+func isChromeCommandTimeout(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "chrome timed out after")
+}
+
+func screenshotFileExists(pngPath string) bool {
+	info, err := os.Stat(pngPath)
+	return err == nil && info.Size() > 0
 }
 
 func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) ([]string, error) {

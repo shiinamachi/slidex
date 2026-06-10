@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	slashpath "path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -2325,7 +2326,7 @@ func unixSocketPathFromListenURL(u *url.URL) (string, error) {
 	if u.Host != "" {
 		return "", fmt.Errorf("managed app-server unix listen must use an absolute local path: unix://%s%s", u.Host, u.Path)
 	}
-	if u.Path == "" || !filepath.IsAbs(u.Path) {
+	if u.Path == "" || !strings.HasPrefix(u.Path, "/") {
 		return "", fmt.Errorf("managed app-server unix listen must use an absolute socket path: %s", u.String())
 	}
 	return u.Path, nil
@@ -6278,7 +6279,7 @@ func systemSymlinkAncestorAllowed(goos, path string) bool {
 	if goos != "darwin" {
 		return false
 	}
-	switch filepath.Clean(path) {
+	switch slashpath.Clean(filepath.ToSlash(path)) {
 	case "/var", "/tmp", "/etc":
 		return true
 	default:

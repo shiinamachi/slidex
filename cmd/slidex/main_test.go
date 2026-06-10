@@ -1260,7 +1260,7 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 		t.Fatal("missing skill should not be found")
 	}
 
-	command := appServerSkillSmokeWorkbenchCommand("/tmp/slidex workspace", "demo", "/repo/decks/_template")
+	command := appServerSkillSmokeWorkbenchCommandForOS("linux", "/tmp/slidex workspace", "demo", "/repo/decks/_template")
 	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
 		t.Fatalf("command was not shell quoted as expected: %s", command)
 	}
@@ -1875,6 +1875,9 @@ func TestChromeDiscoveryIncludesManagedLinuxCache(t *testing.T) {
 }
 
 func TestResolveChromeAcceptsMacOSAppBundle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("macOS app bundle executability is not represented on Windows")
+	}
 	bundle := filepath.Join(t.TempDir(), "Google Chrome.app")
 	exe := filepath.Join(bundle, "Contents", "MacOS", "Google Chrome")
 	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
@@ -2065,16 +2068,12 @@ func TestWriteJSONFileUsesSecurePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("json file mode = %o, want 0600", info.Mode().Perm())
-	}
+	assertSecureModeForTest(t, path, info, 0o600)
 	dirInfo, err := os.Stat(filepath.Dir(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dirInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("json dir mode = %o, want 0700", dirInfo.Mode().Perm())
-	}
+	assertSecureModeForTest(t, filepath.Dir(path), dirInfo, 0o700)
 }
 
 func TestCleanLogsKeepsReviewArtifacts(t *testing.T) {
@@ -2838,20 +2837,29 @@ func TestStateAndRunLogUseSecurePermissionsAndRedaction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o600 {
-			t.Fatalf("%s mode = %o, want 0600", path, info.Mode().Perm())
-		}
+		assertSecureModeForTest(t, path, info, 0o600)
 	}
 	outInfo, err := os.Stat(outDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("out dir mode = %o, want 0700", outInfo.Mode().Perm())
-	}
+	assertSecureModeForTest(t, outDir, outInfo, 0o700)
 	logText := readFileOrEmpty(filepath.Join(outDir, "run_log.jsonl"))
 	if strings.Contains(logText, "secret-token") || strings.Contains(logText, "raw-token") {
 		t.Fatalf("run log was not redacted: %s", logText)
+	}
+}
+
+func assertSecureModeForTest(t *testing.T, path string, info os.FileInfo, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if err := requirePlatformPrivateFile(path, "test fixture"); err != nil {
+			t.Fatalf("%s should be private on Windows: %v", path, err)
+		}
+		return
+	}
+	if info.Mode().Perm() != want {
+		t.Fatalf("%s mode = %o, want %o", path, info.Mode().Perm(), want)
 	}
 }
 
