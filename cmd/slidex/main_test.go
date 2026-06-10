@@ -2030,6 +2030,31 @@ func TestSecureWriteFileReplacesExistingFile(t *testing.T) {
 	}
 }
 
+func TestCopyDirPreservesExecutableMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not use Unix executable mode bits")
+	}
+	src := filepath.Join(t.TempDir(), "src")
+	script := filepath.Join(src, "scripts", "doctor.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := copyDir(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dst, "scripts", "doctor.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("copied executable mode = %o, want 755", got)
+	}
+}
+
 func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 	cases := []struct {
 		goos string
