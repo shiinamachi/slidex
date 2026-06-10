@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -557,6 +558,9 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stagedRoot, "VERSION")); err != nil {
 		t.Fatalf("staged candidate missing: %v", err)
 	}
+	if pathWithin(installRoot, stagedRoot) {
+		t.Fatalf("pending staged root should be outside install root, got %s", stagedRoot)
+	}
 	if _, err := os.Stat(pendingPath); err != nil {
 		t.Fatalf("pending update missing: %v", err)
 	}
@@ -564,8 +568,71 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !status.PendingActivation || status.PendingActivationCommand == "" {
+		t.Fatalf("pending activation not exposed in update status: %#v", status)
+	}
 	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" || status.TargetVersion != "0.2.0" {
 		t.Fatalf("pending handoff update status = %#v", status)
+	}
+	if !findingCheckPresent(updateVerificationFindings(status), "update.pending_activation") {
+		t.Fatalf("pending activation finding missing")
+	}
+}
+
+func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := activatePendingUpdate(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "applied" || !result.RestartRequired || result.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("activate pending result = %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("activated pending VERSION = %q", got)
+	}
+	if _, err := os.Stat(result.BackupRoot); err != nil {
+		t.Fatalf("backup root missing: %v", err)
+	}
+	if _, err := os.Stat(pendingUpdatePath(installRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending update manifest should not remain in activated root: %v", err)
+	}
+	status, err = currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingActivation || !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("post activation status = %#v", status)
+	}
+}
+
+func TestRunUpdateActivatePendingRequiresYes(t *testing.T) {
+	err := runUpdateActivatePending([]string{"--install-root", t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "requires --yes") {
+		t.Fatalf("activate pending without --yes err = %v", err)
 	}
 }
 

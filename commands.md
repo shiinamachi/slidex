@@ -165,7 +165,7 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 저장소 안의 `INSTALL.md`를 읽고 수행합니다.
 
 ```text
-Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm success. If update status reports restartRequired, restart Codex, start a new thread, run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" before treating bundled skills as active. Report each step's result.
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm success. If update status reports pendingActivation, run "slidex update activate-pending --yes --json" before plugin smoke. If update status reports restartRequired, restart Codex, start a new thread, run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" before treating bundled skills as active. Report each step's result.
 ```
 
 Release package update:
@@ -176,6 +176,13 @@ slidex update check --json
 slidex update apply --yes --json
 slidex codex app-server plugin-smoke --json
 slidex update verify --json
+```
+
+On Windows, `update apply` may report `pendingActivation: true` if the active
+executable could be locked. Complete that staged handoff before plugin smoke:
+
+```bash
+slidex update activate-pending --yes --json
 ```
 
 기본 `update apply`는 GitHub CLI release integrity와 artifact attestation 검증을

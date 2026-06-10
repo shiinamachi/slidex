@@ -286,7 +286,13 @@ slidex update apply \
 `update apply` validates the candidate bundle before activation. On Unix-like
 systems it stages the candidate, keeps a backup of the previous install root,
 and marks Codex plugin restart verification as required. On Windows it writes a
-pending update handoff because the running executable may be locked.
+pending update handoff because the running executable may be locked. If
+`update status --json` reports `pendingActivation: true`, complete the handoff
+before plugin smoke:
+
+```bash
+slidex update activate-pending --yes --json
+```
 
 `--attestation-policy allow-unverified` exists only for an explicit manual
 product/security decision. Runs that use it are not considered unattended

@@ -104,6 +104,10 @@ type updateStatus struct {
 	DiscoveredRelease         *updateRelease   `json:"discoveredRelease,omitempty"`
 	CandidateValidation       []qaFinding      `json:"candidateValidation,omitempty"`
 	InstalledMetadata         *installMetadata `json:"installedMetadata,omitempty"`
+	PendingActivation         bool             `json:"pendingActivation,omitempty"`
+	PendingActivationCommand  string           `json:"pendingActivationCommand,omitempty"`
+	PendingUpdatePath         string           `json:"pendingUpdatePath,omitempty"`
+	PendingUpdate             *pendingUpdate   `json:"pendingUpdate,omitempty"`
 	PersistedRestartStatePath string           `json:"persistedRestartStatePath,omitempty"`
 }
 
@@ -181,7 +185,7 @@ type releaseAssetContract struct {
 
 func runUpdate(args []string) error {
 	if len(args) == 0 {
-		return exitCodeError(2, "usage: slidex update status|check|apply|verify")
+		return exitCodeError(2, "usage: slidex update status|check|apply|verify|activate-pending")
 	}
 	switch args[0] {
 	case "status":
@@ -192,6 +196,8 @@ func runUpdate(args []string) error {
 		return runUpdateApply(args[1:])
 	case "verify":
 		return runUpdateVerify(args[1:])
+	case "activate-pending":
+		return runUpdateActivatePending(args[1:])
 	default:
 		return exitCodeError(2, "unknown update command: %s", args[0])
 	}
@@ -408,11 +414,50 @@ func runUpdateVerify(args []string) error {
 	return nil
 }
 
+func runUpdateActivatePending(args []string) error {
+	fs := flag.NewFlagSet("update activate-pending", flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "write JSON status")
+	metadataPath := fs.String("metadata", "", "install metadata path")
+	installRoot := fs.String("install-root", "", "install root")
+	yes := fs.Bool("yes", false, "activate the pending staged update")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return exitCodeError(2, "usage: slidex update activate-pending --yes [--json] [--metadata FILE] [--install-root DIR]")
+	}
+	if !*yes {
+		return exitCodeError(2, "slidex update activate-pending requires --yes before replacing the install root")
+	}
+	status, err := currentUpdateStatus(*installRoot, *metadataPath)
+	if err != nil {
+		return err
+	}
+	result, err := activatePendingUpdate(status)
+	if *jsonOut {
+		if printErr := printJSON(result); printErr != nil && err == nil {
+			err = printErr
+		}
+	} else {
+		printUpdateApplyResult(result)
+	}
+	if err != nil {
+		return err
+	}
+	if hasFailures(result.CandidateValidation) {
+		return exitCodeError(4, "pending candidate bundle validation failed")
+	}
+	return nil
+}
+
 func updateVerificationFindings(status updateStatus) []qaFinding {
 	if !status.UpdatesEnabled {
 		return nil
 	}
 	var findings []qaFinding
+	if status.PendingActivation {
+		findings = append(findings, fail("update.pending_activation", "a staged update must be activated before post-restart plugin verification", status.PendingUpdatePath))
+	}
 	if status.RestartRequired {
 		findings = append(findings, fail("update.restart_required", "Codex restart and post-restart plugin smoke are still required", status.PersistedRestartStatePath))
 	}
@@ -445,6 +490,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 	metadata, metadataErr := readInstallMetadata(metadataPath)
 	channel, mode, reason := inferUpdateChannel(installRoot, metadata, metadataErr)
 	state, statePath, _ := readUpdateState(installRoot)
+	pending, pendingPath, _ := readPendingUpdate(installRoot)
 	status := updateStatus{
 		ToolName:                  toolName,
 		CurrentVersion:            toolVersion,
@@ -483,6 +529,17 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 			status.NextVerificationCommand = state.VerificationCommand
 		}
 	}
+	if pending != nil {
+		status.PendingActivation = true
+		status.PendingUpdate = pending
+		status.PendingUpdatePath = filepath.ToSlash(pendingPath)
+		status.Status = "pending-activation"
+		status.TargetVersion = pending.TargetVersion
+		status.TargetTag = pending.TargetTag
+		status.RestartRequired = true
+		status.PluginVerificationStatus = "restart_required"
+		status.PendingActivationCommand = "slidex update activate-pending --yes --json"
+	}
 	return status, nil
 }
 
@@ -516,6 +573,8 @@ func updateStatusSnapshot() map[string]any {
 		"restartRequired":          status.RestartRequired,
 		"pluginVerificationStatus": status.PluginVerificationStatus,
 		"nextVerificationCommand":  status.NextVerificationCommand,
+		"pendingActivation":        status.PendingActivation,
+		"pendingActivationCommand": status.PendingActivationCommand,
 		"banners":                  updateStatusBanners(status),
 	}
 }
@@ -545,6 +604,15 @@ func updateStatusBanners(status updateStatus) []statusBanner {
 			Title:    "Codex restart required",
 			Message:  "Restart Codex and start a new thread before treating updated slidex plugin skills as active.",
 			Command:  status.NextVerificationCommand,
+		})
+	}
+	if status.PendingActivation {
+		banners = append(banners, statusBanner{
+			ID:       "pending_update_activation",
+			Severity: "warn",
+			Title:    "Pending update activation",
+			Message:  "A slidex update is staged and still needs install-root activation.",
+			Command:  status.PendingActivationCommand,
 		})
 	}
 	if status.PluginVerificationStatus == "drift" {
@@ -1016,16 +1084,30 @@ func stagePendingUpdateHandoff(installRoot, candidateRoot, targetVersion, target
 }
 
 func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion string) (string, error) {
-	stagedRoot := filepath.Join(installRoot, ".slidex", "pending", targetVersion)
-	_ = os.RemoveAll(stagedRoot)
-	if err := copyDir(candidateRoot, stagedRoot); err != nil {
-		return "", err
-	}
-	return stagedRoot, nil
+	return copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, "pending")
 }
 
 func pendingUpdatePath(installRoot string) string {
 	return filepath.Join(installRoot, ".slidex", "pending_update.json")
+}
+
+func readPendingUpdate(installRoot string) (*pendingUpdate, string, error) {
+	path := pendingUpdatePath(installRoot)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, path, err
+	}
+	var pending pendingUpdate
+	if err := json.Unmarshal(raw, &pending); err != nil {
+		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
+	}
+	if pending.SchemaVersion != "" && pending.SchemaVersion != pendingUpdateSchemaVersion {
+		return nil, path, fmt.Errorf("%s: unsupported schemaVersion %q", filepath.ToSlash(path), pending.SchemaVersion)
+	}
+	if pending.ToolName != "" && pending.ToolName != toolName {
+		return nil, path, fmt.Errorf("%s: toolName must be %s", filepath.ToSlash(path), toolName)
+	}
+	return &pending, path, nil
 }
 
 func writePendingUpdate(installRoot, stagedRoot, targetVersion, targetTag string) (string, error) {
@@ -1046,28 +1128,115 @@ func writePendingUpdate(installRoot, stagedRoot, targetVersion, targetTag string
 	return path, writeSourceJSONFile(path, pending)
 }
 
+func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
+	result := updateApplyResult{
+		ToolName:                 toolName,
+		CurrentVersion:           status.CurrentVersion,
+		Channel:                  status.Channel,
+		InstallRoot:              status.InstallRoot,
+		Status:                   "pending-not-found",
+		PluginVerificationStatus: status.PluginVerificationStatus,
+		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
+		Attestation:              attestationVerification{Status: "not_applicable"},
+	}
+	pending := status.PendingUpdate
+	if pending == nil {
+		var err error
+		pending, _, err = readPendingUpdate(status.InstallRoot)
+		if err != nil {
+			return result, fmt.Errorf("pending update handoff not found: %w", err)
+		}
+	}
+	result.TargetVersion = pending.TargetVersion
+	result.TargetTag = pending.TargetTag
+	result.StagedRoot = filepath.ToSlash(pending.StagedRoot)
+	if err := validatePendingUpdate(status.InstallRoot, pending); err != nil {
+		result.Status = "pending-invalid"
+		result.CandidateValidation = append(result.CandidateValidation, fail("update.pending_handoff", err.Error(), filepath.ToSlash(pendingUpdatePath(status.InstallRoot))))
+		return result, nil
+	}
+	result.CandidateValidation = validateCandidateBundle(filepath.FromSlash(pending.StagedRoot), pending.TargetVersion)
+	if metadata, err := readInstallMetadata(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
+		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))))
+	}
+	if hasFailures(result.CandidateValidation) {
+		result.Status = "candidate-invalid"
+		return result, nil
+	}
+	backupRoot, err := activateStagedInstallRoot(status.InstallRoot, filepath.FromSlash(pending.StagedRoot), pending.TargetVersion)
+	result.BackupRoot = filepath.ToSlash(backupRoot)
+	if err != nil {
+		result.Status = "rollback"
+		return result, err
+	}
+	if err := updateInstallMetadataAfterActivation(status.InstallRoot, pending.TargetVersion, pending.TargetTag, status.Channel); err != nil {
+		return result, err
+	}
+	if err := markPluginRestartRequired(status.InstallRoot, pending.TargetVersion, pending.TargetTag); err != nil {
+		return result, err
+	}
+	result.Status = "applied"
+	result.RestartRequired = true
+	result.PluginVerificationStatus = "restart_required"
+	return result, nil
+}
+
+func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
+	if pending == nil {
+		return errors.New("pending update is missing")
+	}
+	if pending.TargetVersion == "" {
+		return errors.New("pending update targetVersion is required")
+	}
+	if strings.TrimSpace(pending.StagedRoot) == "" {
+		return errors.New("pending update stagedRoot is required")
+	}
+	if pending.InstallRoot != "" && filepath.Clean(filepath.FromSlash(pending.InstallRoot)) != filepath.Clean(installRoot) {
+		return fmt.Errorf("pending update installRoot must be %s, got %s", filepath.ToSlash(installRoot), pending.InstallRoot)
+	}
+	if _, err := os.Stat(filepath.FromSlash(pending.StagedRoot)); err != nil {
+		return fmt.Errorf("pending staged root is unavailable: %w", err)
+	}
+	return nil
+}
+
 func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion string) (stagedRoot, backupRoot string, err error) {
+	stagedRoot, err = copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, "staged")
+	if err != nil {
+		return stagedRoot, backupRoot, err
+	}
+	backupRoot, err = activateStagedInstallRoot(installRoot, stagedRoot, targetVersion)
+	return stagedRoot, backupRoot, err
+}
+
+func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind string) (string, error) {
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
 	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
-	stagedRoot = filepath.Join(parent, "."+base+".staged-"+stamp)
-	backupRoot = filepath.Join(parent, "."+base+".backup-"+stamp)
+	stagedRoot := filepath.Join(parent, "."+base+"."+kind+"-"+stamp)
 	_ = os.RemoveAll(stagedRoot)
 	if err := copyDir(candidateRoot, stagedRoot); err != nil {
-		return stagedRoot, backupRoot, err
+		return stagedRoot, err
 	}
+	return stagedRoot, nil
+}
+
+func activateStagedInstallRoot(installRoot, stagedRoot, targetVersion string) (backupRoot string, err error) {
+	parent := filepath.Dir(filepath.Clean(installRoot))
+	base := filepath.Base(filepath.Clean(installRoot))
+	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
+	backupRoot = filepath.Join(parent, "."+base+".backup-"+stamp)
 	if err := os.Rename(installRoot, backupRoot); err != nil {
-		_ = os.RemoveAll(stagedRoot)
-		return stagedRoot, backupRoot, err
+		return backupRoot, err
 	}
 	if err := os.Rename(stagedRoot, installRoot); err != nil {
 		rollbackErr := os.Rename(backupRoot, installRoot)
 		if rollbackErr != nil {
-			return stagedRoot, backupRoot, fmt.Errorf("activation failed: %v; rollback failed: %w", err, rollbackErr)
+			return backupRoot, fmt.Errorf("activation failed: %v; rollback failed: %w", err, rollbackErr)
 		}
-		return stagedRoot, backupRoot, err
+		return backupRoot, err
 	}
-	return stagedRoot, backupRoot, nil
+	return backupRoot, nil
 }
 
 func updateInstallMetadataAfterActivation(installRoot, targetVersion, targetTag, channel string) error {
@@ -1788,6 +1957,9 @@ func printUpdateStatus(status updateStatus) {
 	}
 	if status.RestartRequired {
 		fmt.Println("restart required: restart Codex and start a new thread before treating updated plugin skills as active")
+	}
+	if status.PendingActivation {
+		fmt.Printf("pending activation: %s\n", status.PendingActivationCommand)
 	}
 	fmt.Printf("next verification: %s\n", status.NextVerificationCommand)
 }
