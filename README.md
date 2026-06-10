@@ -1,5 +1,7 @@
 # slidex
 
+[Korean documentation](README.ko.md)
+
 `slidex` is a local CLI and Codex Plugin workflow for producing HTML-first
 business documents and page-style PDFs. It keeps each document project in its
 own deck workspace, builds static HTML slides, renders slide PNGs and a PDF,
