@@ -119,6 +119,35 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	}
 }
 
+func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T) {
+	temp := t.TempDir()
+	installRoot := filepath.Join(temp, "active")
+	staleRoot := filepath.Join(temp, "old")
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+		InstallRoot:   filepath.ToSlash(staleRoot),
+	})
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.InstallRoot != filepath.ToSlash(installRoot) {
+		t.Fatalf("status should use resolved install root, got %#v", status)
+	}
+	if status.InstalledMetadata == nil || status.InstalledMetadata.InstallRoot != filepath.ToSlash(staleRoot) {
+		t.Fatalf("installed metadata should remain visible for drift evidence: %#v", status.InstalledMetadata)
+	}
+	if !strings.Contains(status.Reason, "different install root") {
+		t.Fatalf("stale metadata root reason missing: %#v", status)
+	}
+}
+
 func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
 	  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":true,"assets":[
@@ -347,6 +376,23 @@ func TestValidateCandidateBundleChecksInstallMetadataFields(t *testing.T) {
 	}
 }
 
+func TestValidateCandidateBundleRequiresMetadataChannelToMatchTargetVersion(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0-abcdef0")
+	metadataPath := filepath.Join(root, ".slidex", "install.json")
+	metadata, err := readInstallMetadata(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Channel = updateChannelProduction
+	writeInstallMetadataForTest(t, metadataPath, *metadata)
+
+	findings := validateCandidateBundle(root, "0.2.0-abcdef0")
+	if !findingCheckPresent(findings, "update.candidate_install_metadata") {
+		t.Fatalf("candidate metadata channel mismatch should fail: %#v", findings)
+	}
+}
+
 func findingCheckPresent(findings []qaFinding, check string) bool {
 	for _, finding := range findings {
 		if finding.Check == check {
@@ -375,6 +421,60 @@ func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	}
 	if result.Status != "candidate-invalid" || !hasFailures(result.CandidateValidation) {
 		t.Fatalf("invalid candidate result = %#v", result)
+	}
+}
+
+func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0-abcdef0")
+
+	result, err := applyCandidateBundle(status, candidate, "0.2.0-abcdef0", "v0.2.0-abcdef0", allowUnverifiedAttestationForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_channel") {
+		t.Fatalf("production install should reject canary target: %#v", result)
+	}
+
+	canaryRoot := filepath.Join(parent, "canary")
+	if err := os.MkdirAll(filepath.Join(canaryRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(canaryRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion + "-aaaaaaa",
+		Channel:       updateChannelCanary,
+		InstallMode:   installModeReleasePackage,
+	})
+	canaryStatus, err := currentUpdateStatus(canaryRoot, installMetadataPath(canaryRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableCandidate := filepath.Join(parent, "stable-candidate")
+	writeCandidateBundleForTest(t, stableCandidate, "0.2.0")
+	result, err = applyCandidateBundle(canaryStatus, stableCandidate, "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_channel") {
+		t.Fatalf("canary install should reject production target: %#v", result)
 	}
 }
 
@@ -560,6 +660,49 @@ func TestRunUpdateApplyRequiresAttestationBeforeActivation(t *testing.T) {
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
 		t.Fatalf("install root should not activate without attestation, got VERSION %q", got)
+	}
+}
+
+func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksumPath := filepath.Join(parent, contract.ChecksumName)
+	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--archive", archivePath, "--checksums", checksumPath, "--target-version", "0.2.0", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "--target-tag is required") {
+		t.Fatalf("expected target-tag failure before archive extraction, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(installRoot, ".slidex", "staged")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive should not be extracted before required target tag is present, stat err = %v", err)
 	}
 }
 
@@ -856,6 +999,44 @@ func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	}
 }
 
+func TestActivatePendingUpdateRejectsTargetVersionChannelSwitch(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion + "-aaaaaaa",
+		Channel:       updateChannelCanary,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := activatePendingUpdate(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_channel") {
+		t.Fatalf("pending activation should reject channel switch: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("pending channel switch should not activate, VERSION = %q", got)
+	}
+}
+
 func TestRunUpdateActivatePendingRequiresYes(t *testing.T) {
 	err := runUpdateActivatePending([]string{"--install-root", t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "requires --yes") {
@@ -953,6 +1134,39 @@ func TestUpdateVerifyJSONReportsRestartRequiredContract(t *testing.T) {
 		if !findingCheckPresent(status.VerificationFindings, check) {
 			t.Fatalf("verify JSON missing finding %q: %#v", check, status.VerificationFindings)
 		}
+	}
+}
+
+func TestUpdateStatusRejectsForgedVerifiedUpdateState(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := os.MkdirAll(filepath.Dir(updateStatePath(installRoot)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(updateStatePath(installRoot), []byte(`{"verificationStatus":"verified","targetVersion":"0.2.0","updatedAt":"2026-06-10T00:00:00Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("forged update state should fail closed: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "update state is invalid") {
+		t.Fatalf("invalid update state reason missing: %#v", status)
+	}
+	err = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath})
+	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
+		t.Fatalf("forged verified state should not pass update verify: %v", err)
 	}
 }
 

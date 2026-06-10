@@ -346,6 +346,9 @@ func runUpdateApply(args []string) error {
 		if *targetVersion == "" {
 			return exitCodeError(2, "--target-version is required with --archive")
 		}
+		if *targetTag == "" && *attestationPolicy == attestationPolicyRequire {
+			return exitCodeError(2, "--target-tag is required with --archive when attestation verification is required")
+		}
 		extracted, err := stageArchiveCandidate(*archive, *checksums, *targetVersion, status.InstallRoot)
 		if err != nil {
 			return err
@@ -503,7 +506,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 
 	metadata, metadataErr := readInstallMetadata(metadataPath)
 	channel, mode, reason := inferUpdateChannel(installRoot, metadata, metadataErr)
-	state, statePath, _ := readUpdateState(installRoot)
+	state, statePath, stateErr := readUpdateState(installRoot)
 	pending, pendingPath, _ := readPendingUpdate(installRoot)
 	status := updateStatus{
 		ToolName:                  toolName,
@@ -524,13 +527,19 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		if metadata.Version != "" {
 			status.CurrentVersion = metadata.Version
 		}
-		if metadata.InstallRoot != "" {
-			status.InstallRoot = filepath.ToSlash(metadata.InstallRoot)
+		if metadata.InstallRoot != "" && !sameFilesystemPath(metadata.InstallRoot, installRoot) {
+			status.Reason = appendReason(status.Reason, "install metadata records a different install root "+filepath.ToSlash(metadata.InstallRoot)+"; using resolved install root "+filepath.ToSlash(installRoot))
 		}
 	}
 	if !status.UpdatesEnabled {
 		status.Status = "disabled"
 		status.Guidance = "Automatic release updates are disabled for local-development installs. Install a production or canary release package to enable updates."
+	}
+	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		status.RestartRequired = true
+		status.PluginVerificationStatus = "restart_required"
+		status.NextVerificationCommand = "slidex codex app-server plugin-smoke --json"
+		status.Reason = appendReason(status.Reason, "update state is invalid and plugin verification must be repeated: "+stateErr.Error())
 	}
 	if state != nil {
 		status.RestartRequired = state.RestartRequired
@@ -555,6 +564,28 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		status.PendingActivationCommand = firstNonEmpty(pending.ActivationCommand, pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot))
 	}
 	return status, nil
+}
+
+func appendReason(base, extra string) string {
+	base = strings.TrimSpace(base)
+	extra = strings.TrimSpace(extra)
+	switch {
+	case base == "":
+		return extra
+	case extra == "":
+		return base
+	default:
+		return base + "; " + extra
+	}
+}
+
+func sameFilesystemPath(left, right string) bool {
+	left = filepath.Clean(filepath.FromSlash(strings.TrimSpace(left)))
+	right = filepath.Clean(filepath.FromSlash(strings.TrimSpace(right)))
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func updateStatusSnapshot() map[string]any {
@@ -1053,6 +1084,7 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		Attestation:              attestation,
 	}
 	result.CandidateValidation = validateCandidateBundle(candidateRoot, targetVersion)
+	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, targetVersion, filepath.Join(candidateRoot, ".slidex", "install.json"))...)
 	if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
 	}
@@ -1088,6 +1120,17 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 	result.RestartRequired = true
 	result.PluginVerificationStatus = "restart_required"
 	return result, nil
+}
+
+func validateCandidateChannelForStatus(statusChannel, targetVersion, evidencePath string) []qaFinding {
+	targetChannel := channelFromPackageVersion(targetVersion)
+	if targetChannel != updateChannelProduction && targetChannel != updateChannelCanary {
+		return []qaFinding{fail("update.candidate_channel", "candidate target version must resolve to production or canary, got "+targetVersion, filepath.ToSlash(evidencePath))}
+	}
+	if targetChannel != statusChannel {
+		return []qaFinding{fail("update.candidate_channel", "candidate target version channel must remain "+statusChannel+", got "+targetChannel+" from "+targetVersion, filepath.ToSlash(evidencePath))}
+	}
+	return nil
 }
 
 func stagePendingUpdateHandoff(installRoot, candidateRoot, targetVersion, targetTag string) (stagedRoot, pendingPath string, err error) {
@@ -1213,6 +1256,7 @@ func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
 		return result, nil
 	}
 	result.CandidateValidation = validateCandidateBundle(filepath.FromSlash(pending.StagedRoot), pending.TargetVersion)
+	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, pending.TargetVersion, filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))...)
 	if metadata, err := readInstallMetadata(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))))
 	}
@@ -1421,6 +1465,26 @@ func readUpdateState(installRoot string) (*updateState, string, error) {
 	var state updateState
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
+	}
+	if state.SchemaVersion != updateStateSchemaVersion {
+		return nil, path, fmt.Errorf("%s: schemaVersion must be %s, got %q", filepath.ToSlash(path), updateStateSchemaVersion, state.SchemaVersion)
+	}
+	if state.ToolName != toolName {
+		return nil, path, fmt.Errorf("%s: toolName must be %s, got %q", filepath.ToSlash(path), toolName, state.ToolName)
+	}
+	switch state.VerificationStatus {
+	case "restart_required", "verified", "drift":
+	default:
+		return nil, path, fmt.Errorf("%s: unsupported verificationStatus %q", filepath.ToSlash(path), state.VerificationStatus)
+	}
+	if state.TargetVersion == "" {
+		return nil, path, fmt.Errorf("%s: targetVersion is required", filepath.ToSlash(path))
+	}
+	if state.UpdatedAt == "" {
+		return nil, path, fmt.Errorf("%s: updatedAt is required", filepath.ToSlash(path))
+	}
+	if _, err := time.Parse(time.RFC3339, state.UpdatedAt); err != nil {
+		return nil, path, fmt.Errorf("%s: updatedAt must be RFC3339: %w", filepath.ToSlash(path), err)
 	}
 	return &state, path, nil
 }
@@ -1855,6 +1919,7 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	root = filepath.Clean(root)
 	expectedVersion = strings.TrimPrefix(strings.TrimSpace(expectedVersion), "v")
 	expectedBaseVersion := releaseBaseVersion(expectedVersion)
+	expectedChannel := channelFromPackageVersion(expectedVersion)
 	var findings []qaFinding
 	required := []string{
 		".agents/plugins/marketplace.json",
@@ -1900,6 +1965,8 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		}
 		if metadata.Channel != updateChannelProduction && metadata.Channel != updateChannelCanary {
 			findings = append(findings, fail("update.candidate_install_metadata", "install metadata channel must be production or canary, got "+metadata.Channel, filepath.ToSlash(metadataPath)))
+		} else if metadata.Channel != expectedChannel {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata channel must match target version channel "+expectedChannel+", got "+metadata.Channel, filepath.ToSlash(metadataPath)))
 		}
 		if metadata.Tag == "" {
 			findings = append(findings, fail("update.candidate_install_metadata", "install metadata tag is required", filepath.ToSlash(metadataPath)))
