@@ -76,9 +76,10 @@ slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-i
 ```
 
 This starts an App Server turn with the installed `slidex:slidex-start` skill
-input, verifies that the loopback workbench starts, and writes smoke evidence
-JSON. It does not prove that the Codex App GUI/browser displayed the workbench;
-that still requires `slidex workbench evidence` followed by
+input, verifies that the loopback workbench starts, saves initial deck creation
+input through that same workbench session, and writes smoke evidence JSON. It
+does not prove that the Codex App GUI/browser displayed the workbench; that
+still requires `slidex workbench evidence` followed by
 `slidex workbench verify-evidence` after actual inspection.
 
 ## Codex 0.138.0 Evidence

@@ -206,9 +206,10 @@ mise exec -- go install ./cmd/slidex
 
 Codex App GUI 검증 전 단계로 headless App Server smoke를 실행할 수 있습니다.
 이 명령은 App Server turn에 설치된 `slidex:slidex-start` skill input을 넣어
-loopback workbench가 시작되는지 확인하고 smoke evidence JSON을 남깁니다. 이 증거는
-Codex App GUI/browser 표시 증거를 대체하지 않습니다. 실제 GUI 확인은 계속
-`slidex workbench evidence`와 `slidex workbench verify-evidence`로 구분합니다.
+loopback workbench가 시작되는지 확인하고, 같은 workbench session에 초기 deck creation
+input을 저장한 뒤 smoke evidence JSON을 남깁니다. 이 증거는 Codex App GUI/browser 표시
+증거를 대체하지 않습니다. 실제 GUI 확인은 계속 `slidex workbench evidence`와
+`slidex workbench verify-evidence`로 구분합니다.
 
 ```bash
 slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke

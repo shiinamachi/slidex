@@ -404,6 +404,59 @@ func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	}
 }
 
+func TestAppServerSkillSmokeSaveInputUsesStartedWorkbenchSession(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "skill-smoke-token"
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", token, port, os.Getpid(), "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", handler.handleReady)
+	mux.HandleFunc("/workbench/session-1", handler.handleWorkbench)
+	mux.HandleFunc("/workbench/session-1/api/draft", handler.handleDraft)
+	mux.HandleFunc("/workbench/session-1/api/save", handler.handleSave)
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	result, err := saveAppServerSkillSmokeInput(deck, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "pass" || result.DraftStatus != "draft_saved" || result.SaveStatus != "saved" {
+		t.Fatalf("unexpected skill-smoke save result: %#v", result)
+	}
+	if !result.RawTokenAbsentFromArtifacts || len(result.VerifiedFiles) != 3 {
+		t.Fatalf("skill-smoke save should verify redaction and files: %#v", result)
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after skill-smoke save")
+	}
+	if recorded.InputSavedAt == "" || recorded.DraftSavedAt == "" {
+		t.Fatalf("manifest should record saved input timestamps: %#v", recorded)
+	}
+}
+
 func TestWorkbenchHealthRejectsOriginAndOmitsCORS(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")

@@ -38,9 +38,12 @@ slidex codex app-server probe
 slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke
 ```
 
-`slidex workbench save-smoke` is a local HTTP pre-GUI check. It verifies
-workbench HTML bootstrap, draft/save persistence, token redaction, and
-deck-local artifact hashes, but it is not Codex App GUI/browser evidence.
+`slidex codex app-server skill-smoke` is a headless pre-GUI App Server check.
+It verifies the installed `slidex:slidex-start` skill can start the loopback
+workbench and persist initial deck creation input through that same workbench
+session. `slidex workbench save-smoke` is a local HTTP pre-GUI check. It
+verifies workbench HTML bootstrap, draft/save persistence, token redaction, and
+deck-local artifact hashes, but neither smoke is Codex App GUI/browser evidence.
 
 Goal mirror:
 

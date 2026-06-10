@@ -1112,12 +1112,21 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 		DeckCreated:                     true,
 		ManifestExists:                  true,
 		StartStatus:                     "running",
+		DraftStatus:                     "draft_saved",
+		SaveStatus:                      "saved",
 		StopStatus:                      "stopped",
 		ServerBind:                      "127.0.0.1",
 		TokenRedacted:                   true,
+		RawTokenAbsentFromArtifacts:     true,
+		SavedInputVerified:              true,
 		ProprietaryCanvasAPI:            "not_used",
 		IsActualCodexAppBrowserEvidence: false,
 		WorkbenchURL:                    "http://127.0.0.1:49152/workbench/session",
+		VerifiedFiles: map[string]artifact{
+			"brief":    {Path: "brief.md", SHA256: strings.Repeat("a", 64), Size: 1},
+			"draft":    {Path: "workbench_draft.json", SHA256: strings.Repeat("b", 64), Size: 1},
+			"manifest": {Path: "workbench_manifest.json", SHA256: strings.Repeat("c", 64), Size: 1},
+		},
 	}
 	if status := appServerSkillSmokeStatus(result); status != "pass" {
 		t.Fatalf("status = %q, want pass", status)

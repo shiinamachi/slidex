@@ -86,42 +86,49 @@ type appServerPluginSmokeResult struct {
 }
 
 type appServerSkillSmokeResult struct {
-	SchemaVersion                   string         `json:"schemaVersion"`
-	ToolName                        string         `json:"toolName"`
-	ToolVersion                     string         `json:"toolVersion"`
-	Status                          string         `json:"status"`
-	Error                           string         `json:"error,omitempty"`
-	GeneratedAt                     string         `json:"generatedAt"`
-	CodexVersion                    string         `json:"codexVersion"`
-	Workspace                       string         `json:"workspace"`
-	DeckID                          string         `json:"deckId"`
-	DeckDir                         string         `json:"deckDir"`
-	ThreadID                        string         `json:"threadId,omitempty"`
-	TurnID                          string         `json:"turnId,omitempty"`
-	TurnStatus                      string         `json:"turnStatus,omitempty"`
-	SkillName                       string         `json:"skillName"`
-	SkillPath                       string         `json:"skillPath,omitempty"`
-	SkillFound                      bool           `json:"skillFound"`
-	PluginReadOK                    bool           `json:"pluginReadOk"`
-	TurnSandboxPolicy               string         `json:"turnSandboxPolicy"`
-	WorkbenchCommand                string         `json:"workbenchCommand"`
-	PromptSha256                    string         `json:"promptSha256"`
-	FinalMessage                    string         `json:"finalMessage,omitempty"`
-	EventCount                      int            `json:"eventCount"`
-	DeckCreated                     bool           `json:"deckCreated"`
-	ManifestExists                  bool           `json:"manifestExists"`
-	ManifestPath                    string         `json:"manifestPath"`
-	EvidencePath                    string         `json:"evidencePath"`
-	WorkbenchURL                    string         `json:"workbenchUrl,omitempty"`
-	ServerBind                      string         `json:"serverBind,omitempty"`
-	SessionID                       string         `json:"sessionId,omitempty"`
-	StartStatus                     string         `json:"startStatus,omitempty"`
-	StopStatus                      string         `json:"stopStatus,omitempty"`
-	TokenRedacted                   bool           `json:"tokenRedacted"`
-	BrowserOpenStrategy             string         `json:"browserOpenStrategy,omitempty"`
-	ProprietaryCanvasAPI            string         `json:"proprietaryCanvasApi"`
-	IsActualCodexAppBrowserEvidence bool           `json:"isActualCodexAppBrowserEvidence"`
-	Checks                          map[string]any `json:"checks"`
+	SchemaVersion                   string              `json:"schemaVersion"`
+	ToolName                        string              `json:"toolName"`
+	ToolVersion                     string              `json:"toolVersion"`
+	Status                          string              `json:"status"`
+	Error                           string              `json:"error,omitempty"`
+	GeneratedAt                     string              `json:"generatedAt"`
+	CodexVersion                    string              `json:"codexVersion"`
+	Workspace                       string              `json:"workspace"`
+	DeckID                          string              `json:"deckId"`
+	DeckDir                         string              `json:"deckDir"`
+	ThreadID                        string              `json:"threadId,omitempty"`
+	TurnID                          string              `json:"turnId,omitempty"`
+	TurnStatus                      string              `json:"turnStatus,omitempty"`
+	SkillName                       string              `json:"skillName"`
+	SkillPath                       string              `json:"skillPath,omitempty"`
+	SkillFound                      bool                `json:"skillFound"`
+	PluginReadOK                    bool                `json:"pluginReadOk"`
+	TurnSandboxPolicy               string              `json:"turnSandboxPolicy"`
+	WorkbenchCommand                string              `json:"workbenchCommand"`
+	PromptSha256                    string              `json:"promptSha256"`
+	FinalMessage                    string              `json:"finalMessage,omitempty"`
+	EventCount                      int                 `json:"eventCount"`
+	DeckCreated                     bool                `json:"deckCreated"`
+	ManifestExists                  bool                `json:"manifestExists"`
+	ManifestPath                    string              `json:"manifestPath"`
+	EvidencePath                    string              `json:"evidencePath"`
+	WorkbenchURL                    string              `json:"workbenchUrl,omitempty"`
+	ServerBind                      string              `json:"serverBind,omitempty"`
+	SessionID                       string              `json:"sessionId,omitempty"`
+	StartStatus                     string              `json:"startStatus,omitempty"`
+	DraftStatus                     string              `json:"draftStatus,omitempty"`
+	SaveStatus                      string              `json:"saveStatus,omitempty"`
+	StopStatus                      string              `json:"stopStatus,omitempty"`
+	TokenRedacted                   bool                `json:"tokenRedacted"`
+	RawTokenAbsentFromArtifacts     bool                `json:"rawTokenAbsentFromArtifacts"`
+	SavedInputVerified              bool                `json:"savedInputVerified"`
+	BriefPath                       string              `json:"briefPath,omitempty"`
+	DraftPath                       string              `json:"draftPath,omitempty"`
+	BrowserOpenStrategy             string              `json:"browserOpenStrategy,omitempty"`
+	ProprietaryCanvasAPI            string              `json:"proprietaryCanvasApi"`
+	IsActualCodexAppBrowserEvidence bool                `json:"isActualCodexAppBrowserEvidence"`
+	VerifiedFiles                   map[string]artifact `json:"verifiedFiles,omitempty"`
+	Checks                          map[string]any      `json:"checks"`
 }
 
 func newAppServerClient() (*appServerClient, error) {
@@ -799,8 +806,11 @@ func appServerWorkbenchSkillSmoke(workspace, deckID string) (result appServerSki
 		PromptSha256:                    sha256Bytes([]byte(prompt)),
 		ManifestPath:                    filepath.ToSlash(manifestPath),
 		EvidencePath:                    filepath.ToSlash(evidencePath),
+		BriefPath:                       filepath.ToSlash(filepath.Join(deckAbs, "brief.md")),
+		DraftPath:                       filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName)),
 		ProprietaryCanvasAPI:            "not_used",
 		IsActualCodexAppBrowserEvidence: false,
+		VerifiedFiles:                   map[string]artifact{},
 		Checks:                          map[string]any{"actualCodexAppBrowserEvidence": false, "turnSandboxPolicy": "dangerFullAccess"},
 	}
 	defer func() {
@@ -950,6 +960,19 @@ func appServerWorkbenchSkillSmoke(workspace, deckID string) (result appServerSki
 	result.TokenRedacted = manifest.TokenRedacted
 	result.BrowserOpenStrategy = manifest.BrowserOpenStrategy
 	result.Checks["workbenchManifestBeforeStop"] = summarizeJSONForEvidence(manifest)
+	saveResult, saveErr := saveAppServerSkillSmokeInput(deckAbs, manifest)
+	result.DraftStatus = saveResult.DraftStatus
+	result.SaveStatus = saveResult.SaveStatus
+	result.RawTokenAbsentFromArtifacts = saveResult.RawTokenAbsentFromArtifacts
+	result.SavedInputVerified = saveResult.Status == "pass"
+	result.VerifiedFiles = saveResult.VerifiedFiles
+	result.Checks["workbenchSave"] = summarizeJSONForEvidence(saveResult)
+	if saveErr != nil {
+		return result, saveErr
+	}
+	if !result.SavedInputVerified {
+		return result, fmt.Errorf("app-server skill smoke workbench save did not pass: status=%s findings=%v", saveResult.Status, saveResult.Findings)
+	}
 	return result, nil
 }
 
@@ -991,15 +1014,131 @@ func appServerSkillSmokeStatus(result appServerSkillSmokeResult) string {
 		result.DeckCreated &&
 		result.ManifestExists &&
 		result.StartStatus == "running" &&
+		result.DraftStatus == "draft_saved" &&
+		result.SaveStatus == "saved" &&
+		result.SavedInputVerified &&
 		result.StopStatus == "stopped" &&
 		result.ServerBind == "127.0.0.1" &&
 		result.TokenRedacted &&
+		result.RawTokenAbsentFromArtifacts &&
 		result.ProprietaryCanvasAPI == "not_used" &&
 		!result.IsActualCodexAppBrowserEvidence &&
+		len(result.VerifiedFiles) == 3 &&
 		isLoopbackWorkbenchURL(result.WorkbenchURL) {
 		return "pass"
 	}
 	return "fail"
+}
+
+func saveAppServerSkillSmokeInput(deckAbs string, manifest workbenchManifest) (workbenchSaveSmokeResult, error) {
+	input := normalizeWorkbenchInput(workbenchSaveInput{
+		Title:              "App Server skill smoke",
+		Audience:           "Codex App verification reviewer",
+		DecisionGoal:       "Verify the slidex-start plugin path can persist initial deck creation input.",
+		SourceNotes:        "Generated by slidex codex app-server skill-smoke. This is not Codex App GUI/browser evidence.",
+		OutputExpectations: "Deck-local brief.md, out/workbench_draft.json, and out/workbench_manifest.json are current after the skill-started workbench save.",
+	})
+	briefPath := filepath.Join(deckAbs, "brief.md")
+	draftPath := filepath.Join(deckAbs, "out", workbenchDraftName)
+	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
+	logPath := filepath.Join(deckAbs, "out", "workbench_server.log")
+	result := workbenchSaveSmokeResult{
+		SchemaVersion:                   "slidex.workbenchSaveSmoke.v1",
+		ToolName:                        toolName,
+		ToolVersion:                     toolVersion,
+		Status:                          "fail",
+		GeneratedAt:                     time.Now().UTC().Format(time.RFC3339),
+		Workspace:                       manifest.Workspace,
+		DeckID:                          manifest.DeckID,
+		DeckDir:                         filepath.ToSlash(deckAbs),
+		WorkbenchURL:                    manifest.URL,
+		SessionID:                       manifest.SessionID,
+		ServerBind:                      manifest.ServerBind,
+		StartStatus:                     manifest.Status,
+		TokenRedacted:                   manifest.TokenRedacted,
+		BriefPath:                       filepath.ToSlash(briefPath),
+		DraftPath:                       filepath.ToSlash(draftPath),
+		ManifestPath:                    filepath.ToSlash(manifestPath),
+		LogPath:                         filepath.ToSlash(logPath),
+		BrowserOpenStrategy:             manifest.BrowserOpenStrategy,
+		IsActualCodexAppBrowserEvidence: false,
+		Input:                           input,
+		VerifiedFiles:                   map[string]artifact{},
+		Checks:                          map[string]any{"actualCodexAppBrowserEvidence": false},
+	}
+	htmlRaw, err := fetchWorkbenchHTML(manifest.URL)
+	if err != nil {
+		result.Findings = append(result.Findings, "workbench HTML fetch failed: "+err.Error())
+		return result, err
+	}
+	boot, token, err := extractWorkbenchBoot(string(htmlRaw))
+	result.Checks["htmlBytes"] = len(htmlRaw)
+	result.Checks["htmlSha256"] = sha256Bytes(htmlRaw)
+	if err != nil {
+		result.Findings = append(result.Findings, "workbench HTML boot extraction failed: "+err.Error())
+		return result, err
+	}
+	result.HTMLBootstrapTokenFound = token != ""
+	result.Checks["htmlBoot"] = map[string]any{
+		"deckId":    boot["deckId"],
+		"sessionId": boot["sessionId"],
+		"apiBase":   boot["apiBase"],
+		"tokenHash": sha256Bytes([]byte(token)),
+	}
+	apiBase, _ := boot["apiBase"].(string)
+	if !result.HTMLBootstrapTokenFound || strings.TrimSpace(apiBase) == "" {
+		err := errors.New("workbench HTML did not include a usable bootstrap token/apiBase")
+		result.Findings = append(result.Findings, err.Error())
+		return result, err
+	}
+	draftResp, err := postWorkbenchJSON(manifest.URL, apiBase+"/draft", token, input)
+	if err != nil {
+		result.Findings = append(result.Findings, "draft POST failed: "+err.Error())
+		return result, err
+	}
+	result.DraftStatus, _ = draftResp["status"].(string)
+	result.Checks["draftResponse"] = summarizeWorkbenchSmokeResponse(draftResp)
+	saveResp, err := postWorkbenchJSON(manifest.URL, apiBase+"/save", token, input)
+	if err != nil {
+		result.Findings = append(result.Findings, "save POST failed: "+err.Error())
+		return result, err
+	}
+	result.SaveStatus, _ = saveResp["status"].(string)
+	result.Checks["saveResponse"] = summarizeWorkbenchSmokeResponse(saveResp)
+
+	updated, ok := readWorkbenchManifest(deckAbs)
+	if !ok {
+		err := fmt.Errorf("workbench manifest missing after save: %s", filepath.ToSlash(manifestPath))
+		result.Findings = append(result.Findings, err.Error())
+		return result, err
+	}
+	result.TokenRedacted = updated.TokenRedacted
+	result.ServerBind = updated.ServerBind
+	result.WorkbenchURL = updated.URL
+	result.SessionID = updated.SessionID
+	result.Checks["manifestAfterSave"] = publicWorkbenchStatus(updated)
+	result.VerifiedFiles = map[string]artifact{
+		"brief":    artifactFromPath(briefPath),
+		"draft":    artifactFromPath(draftPath),
+		"manifest": artifactFromPath(manifestPath),
+	}
+	tokenCheckPaths := []string{briefPath, draftPath, manifestPath}
+	if pathExists(logPath) {
+		tokenCheckPaths = append(tokenCheckPaths, logPath)
+	}
+	result.RawTokenAbsentFromArtifacts = rawTokenAbsentFromFiles(token, tokenCheckPaths)
+	result.Findings = workbenchSaveSmokeFindings(result, updated)
+	if result.DraftStatus == "draft_saved" &&
+		result.SaveStatus == "saved" &&
+		result.ServerBind == "127.0.0.1" &&
+		result.TokenRedacted &&
+		result.HTMLBootstrapTokenFound &&
+		result.RawTokenAbsentFromArtifacts &&
+		len(result.Findings) == 0 &&
+		len(result.VerifiedFiles) == 3 {
+		result.Status = "pass"
+	}
+	return result, nil
 }
 
 func appServerSkillSmokeWorkbenchCommand(workspace, deckID, fromTemplate string) string {
