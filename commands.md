@@ -173,7 +173,7 @@ Release package update:
 ```bash
 slidex update status --json
 slidex update check --json
-slidex update apply --archive slidex_<ASSET_VERSION>_<OS>_<ARCH>.<EXT> --checksums slidex_<ASSET_VERSION>_checksums.txt --target-version <ASSET_VERSION> --target-tag <TAG> --yes --json
+slidex update apply --yes --json
 slidex codex app-server plugin-smoke --json
 slidex update verify --json
 ```

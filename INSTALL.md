@@ -262,6 +262,12 @@ When a matching release archive and checksum file have been downloaded, apply
 the verified bundle as one unit:
 
 ```bash
+slidex update apply --yes --json
+```
+
+For a manually downloaded archive, pass the local files explicitly:
+
+```bash
 slidex update apply \
   --archive slidex_<ASSET_VERSION>_<OS>_<ARCH>.<EXT> \
   --checksums slidex_<ASSET_VERSION>_checksums.txt \

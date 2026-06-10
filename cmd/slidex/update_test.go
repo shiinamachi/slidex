@@ -6,6 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -257,6 +260,75 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	}
 }
 
+func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
+	archivePayload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archivePayload)
+	digest := hex.EncodeToString(sum[:])
+	checksumText := digest + "  " + contract.ArchiveName + "\n"
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `[{"tag_name":"v0.2.0","draft":false,"prerelease":false,"assets":[{"name":%q,"browser_download_url":%q,"digest":%q},{"name":%q,"browser_download_url":%q}]}]`,
+				contract.ArchiveName,
+				server.URL+"/assets/"+contract.ArchiveName,
+				"sha256:"+digest,
+				contract.ChecksumName,
+				server.URL+"/assets/"+contract.ChecksumName,
+			)
+		case "/assets/" + contract.ArchiveName:
+			_, _ = w.Write(archivePayload)
+		case "/assets/" + contract.ChecksumName:
+			_, _ = w.Write([]byte(checksumText))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--yes", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("downloaded update VERSION = %q", got)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.TargetVersion != "0.2.0" {
+		t.Fatalf("downloaded apply status = %#v", status)
+	}
+}
+
 func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	sourceRoot := t.TempDir()
 	for _, dir := range []string{".git", filepath.Join("cmd", "slidex")} {
@@ -409,5 +481,57 @@ func readInstallMetadataFromTarGzForTest(t *testing.T, path, wantName string) in
 			t.Fatal(err)
 		}
 		return metadata
+	}
+}
+
+func writeTarGzFromDirForTest(t *testing.T, archivePath, root, topName string) {
+	t.Helper()
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		name := topName
+		if rel != "." {
+			name = filepath.ToSlash(filepath.Join(topName, rel))
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = name
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		_, err = tw.Write(raw)
+		return err
+	})
+	closeErr := tw.Close()
+	gzErr := gz.Close()
+	fileErr := f.Close()
+	for _, err := range []error{walkErr, closeErr, gzErr, fileErr} {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

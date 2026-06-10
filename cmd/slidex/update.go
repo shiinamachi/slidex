@@ -263,21 +263,19 @@ func runUpdateApply(args []string) error {
 	checksums := fs.String("checksums", "", "release checksums file")
 	targetVersion := fs.String("target-version", "", "expected target version")
 	targetTag := fs.String("target-tag", "", "target release tag")
+	apiURL := fs.String("api-url", updateGitHubReleasesAPI, "GitHub releases API URL")
 	yes := fs.Bool("yes", false, "activate the staged update")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return exitCodeError(2, "usage: slidex update apply --target-version VERSION (--candidate DIR | --archive FILE --checksums FILE) --yes [--json] [--install-root DIR] [--metadata FILE] [--target-tag TAG]")
+		return exitCodeError(2, "usage: slidex update apply --yes [--json] [--install-root DIR] [--metadata FILE] [--api-url URL] [--target-version VERSION --candidate DIR | --target-version VERSION --archive FILE --checksums FILE --target-tag TAG]")
 	}
 	if !*yes {
 		return exitCodeError(2, "slidex update apply requires --yes before replacing the install root")
 	}
-	if *targetVersion == "" {
-		return exitCodeError(2, "--target-version is required")
-	}
-	if (*candidate == "") == (*archive == "") {
-		return exitCodeError(2, "provide exactly one of --candidate or --archive")
+	if *candidate != "" && *archive != "" {
+		return exitCodeError(2, "provide only one of --candidate or --archive")
 	}
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -287,15 +285,33 @@ func runUpdateApply(args []string) error {
 		return exitCodeError(4, "updates are disabled for channel %s: %s", status.Channel, firstNonEmpty(status.Guidance, status.Reason))
 	}
 	candidateRoot := *candidate
-	if *archive != "" {
+	if *candidate == "" && *archive == "" {
+		downloadedRoot, downloadedVersion, downloadedTag, err := downloadAndStageReleaseCandidate(context.Background(), status, *apiURL)
+		if err != nil {
+			return err
+		}
+		candidateRoot = downloadedRoot
+		if *targetVersion == "" {
+			*targetVersion = downloadedVersion
+		}
+		if *targetTag == "" {
+			*targetTag = downloadedTag
+		}
+	} else if *archive != "" {
 		if *checksums == "" {
 			return exitCodeError(2, "--checksums is required with --archive")
+		}
+		if *targetVersion == "" {
+			return exitCodeError(2, "--target-version is required with --archive")
 		}
 		extracted, err := stageArchiveCandidate(*archive, *checksums, *targetVersion, status.InstallRoot)
 		if err != nil {
 			return err
 		}
 		candidateRoot = extracted
+	}
+	if *targetVersion == "" {
+		return exitCodeError(2, "--target-version is required with --candidate")
 	}
 	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag)
 	if *jsonOut {
@@ -397,6 +413,8 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 	}
 	if state != nil {
 		status.RestartRequired = state.RestartRequired
+		status.TargetVersion = state.TargetVersion
+		status.TargetTag = state.TargetTag
 		if state.VerificationStatus != "" {
 			status.PluginVerificationStatus = state.VerificationStatus
 		}
@@ -432,6 +450,8 @@ func updateStatusSnapshot() map[string]any {
 		"updatesEnabled":           status.UpdatesEnabled,
 		"status":                   status.Status,
 		"reason":                   status.Reason,
+		"targetVersion":            status.TargetVersion,
+		"targetTag":                status.TargetTag,
 		"restartRequired":          status.RestartRequired,
 		"pluginVerificationStatus": status.PluginVerificationStatus,
 		"nextVerificationCommand":  status.NextVerificationCommand,
@@ -530,6 +550,83 @@ func stageArchiveCandidate(archivePath, checksumsPath, targetVersion, installRoo
 		return "", err
 	}
 	return extractReleaseArchive(archivePath, stageParent)
+}
+
+func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL string) (candidateRoot, targetVersion, targetTag string, err error) {
+	releases, err := fetchUpdateReleases(ctx, apiURL)
+	if err != nil {
+		return "", "", "", err
+	}
+	release, err := selectUpdateRelease(status.Channel, releases)
+	if err != nil {
+		return "", "", "", err
+	}
+	contract, err := releaseAssetContractFor(release.TagName, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return "", "", "", err
+	}
+	archive, checksum, err := release.requiredAssets(contract)
+	if err != nil {
+		return "", "", "", err
+	}
+	archivePayload, err := downloadUpdateAsset(ctx, archive)
+	if err != nil {
+		return "", "", "", err
+	}
+	checksumPayload, err := downloadUpdateAsset(ctx, checksum)
+	if err != nil {
+		return "", "", "", err
+	}
+	candidateRoot, err = stageDownloadedArchiveCandidate(status.InstallRoot, contract.Version, archive, archivePayload, checksum, checksumPayload)
+	if err != nil {
+		return "", "", "", err
+	}
+	return candidateRoot, contract.Version, release.TagName, nil
+}
+
+func downloadUpdateAsset(ctx context.Context, asset updateAsset) ([]byte, error) {
+	if asset.BrowserDownloadURL == "" {
+		return nil, fmt.Errorf("release asset %s is missing browser_download_url", asset.Name)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("User-Agent", "slidex-update/"+toolVersion)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("download %s returned %s: %s", asset.Name, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 512<<20))
+}
+
+func stageDownloadedArchiveCandidate(installRoot, targetVersion string, archive updateAsset, archivePayload []byte, checksum updateAsset, checksumPayload []byte) (string, error) {
+	if _, err := verifyReleaseAssetSHA256(archive.Name, archivePayload, string(checksumPayload), archive.Digest); err != nil {
+		return "", err
+	}
+	stageParent := filepath.Join(installRoot, ".slidex", "downloads", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.MkdirAll(stageParent, 0o755); err != nil {
+		return "", err
+	}
+	archivePath := filepath.Join(stageParent, archive.Name)
+	checksumPath := filepath.Join(stageParent, checksum.Name)
+	if err := os.WriteFile(archivePath, archivePayload, 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(checksumPath, checksumPayload, 0o644); err != nil {
+		return "", err
+	}
+	extractRoot := filepath.Join(stageParent, "extract")
+	if err := os.MkdirAll(extractRoot, 0o755); err != nil {
+		return "", err
+	}
+	return extractReleaseArchive(archivePath, extractRoot)
 }
 
 func extractReleaseArchive(archivePath, dest string) (string, error) {
