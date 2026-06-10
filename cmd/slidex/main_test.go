@@ -1822,7 +1822,7 @@ func TestExecAuditCorrectionIsWrittenBackToArtifact(t *testing.T) {
 
 func TestChromeDiscoveryPolicyCoversSupportedPlatforms(t *testing.T) {
 	envVars := chromeEnvironmentVariables()
-	for _, name := range []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN"} {
+	for _, name := range []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN", "CHROME_FOR_TESTING_BIN", "PLAYWRIGHT_CHROMIUM_BIN", "PLAYWRIGHT_CHROME_BIN", "PUPPETEER_EXECUTABLE_PATH"} {
 		if !testStringSliceContains(envVars, name) {
 			t.Fatalf("chrome environment variables missing %s: %#v", name, envVars)
 		}
@@ -1856,6 +1856,24 @@ func TestChromeDiscoveryPolicyCoversSupportedPlatforms(t *testing.T) {
 	}
 }
 
+func TestChromeDiscoveryIncludesManagedLinuxCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.UserHomeDir does not use HOME on Windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	chromePath := filepath.Join(home, ".cache", "ms-playwright", "chromium-1234", "chrome-linux", "chrome")
+	if err := os.MkdirAll(filepath.Dir(chromePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(chromePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if candidates := chromeExecutableCandidates("linux"); !testStringSliceContains(candidates, chromePath) {
+		t.Fatalf("managed Playwright Chromium candidate missing %s: %#v", chromePath, candidates)
+	}
+}
+
 func TestResolveChromeAcceptsMacOSAppBundle(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "Google Chrome.app")
 	exe := filepath.Join(bundle, "Contents", "MacOS", "Google Chrome")
@@ -1871,6 +1889,19 @@ func TestResolveChromeAcceptsMacOSAppBundle(t *testing.T) {
 	t.Setenv("CHROME_BIN", bundle)
 	if got, err := resolveChrome(""); err != nil || got != exe {
 		t.Fatalf("env app bundle resolved to %q, %v; want %q", got, err, exe)
+	}
+}
+
+func TestResolveChromeRejectsNonExecutableExplicitFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows executability is not represented by Unix permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(path, []byte("not executable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveChrome(path); err == nil || !strings.Contains(err.Error(), "not executable") {
+		t.Fatalf("expected non-executable Chrome path to fail clearly, got %v", err)
 	}
 }
 

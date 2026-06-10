@@ -2276,21 +2276,24 @@ func fontFamilyForPreset(preset string) string {
 func resolveChrome(explicit string) (string, error) {
 	explicit = cleanExecutablePath(explicit)
 	if explicit != "" {
-		if path, ok := resolveChromeExecutablePath(explicit); ok {
-			return path, nil
+		path, err := resolveChromeExecutablePath(explicit)
+		if err != nil {
+			return "", err
 		}
-		return "", fmt.Errorf("chrome binary not found: %s", explicit)
+		return path, nil
 	}
 	for _, envName := range chromeEnvironmentVariables() {
 		if env := cleanExecutablePath(os.Getenv(envName)); env != "" {
-			if path, ok := resolveChromeExecutablePath(env); ok {
-				return path, nil
+			path, err := resolveChromeExecutablePath(env)
+			if err != nil {
+				return "", fmt.Errorf("%s points to an unusable Chrome/Chromium binary: %w", envName, err)
 			}
+			return path, nil
 		}
 	}
 	for _, candidate := range chromeExecutableCandidates(runtime.GOOS) {
 		if filepath.IsAbs(candidate) {
-			if path, ok := resolveChromeExecutablePath(candidate); ok {
+			if path, err := resolveChromeExecutablePath(candidate); err == nil {
 				return path, nil
 			}
 			continue
@@ -2302,37 +2305,60 @@ func resolveChrome(explicit string) (string, error) {
 	return "", errors.New("Chrome/Chromium binary not found")
 }
 
-func resolveChromeExecutablePath(candidate string) (string, bool) {
+func resolveChromeExecutablePath(candidate string) (string, error) {
 	info, err := os.Stat(candidate)
 	if err != nil {
-		return "", false
+		return "", fmt.Errorf("chrome binary not found: %s", candidate)
 	}
 	if info.IsDir() {
-		if path, ok := chromeExecutableFromAppBundle(candidate); ok {
-			return path, true
-		}
-		return "", false
+		return chromeExecutableFromAppBundle(candidate)
 	}
-	return candidate, true
+	if err := requireExecutableChromeFile(candidate, info); err != nil {
+		return "", err
+	}
+	return candidate, nil
 }
 
-func chromeExecutableFromAppBundle(bundlePath string) (string, bool) {
+func chromeExecutableFromAppBundle(bundlePath string) (string, error) {
 	if !strings.EqualFold(filepath.Ext(bundlePath), ".app") {
-		return "", false
+		return "", fmt.Errorf("chrome path is a directory, not an app bundle: %s", bundlePath)
 	}
 	macOSDir := filepath.Join(bundlePath, "Contents", "MacOS")
 	appName := strings.TrimSuffix(filepath.Base(bundlePath), filepath.Ext(bundlePath))
+	var foundErr error
 	for _, name := range uniqueStrings([]string{appName, "Google Chrome", "Chromium", "Microsoft Edge", "Brave Browser", "chrome", "chromium"}) {
 		candidate := filepath.Join(macOSDir, name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
+			if err := requireExecutableChromeFile(candidate, info); err != nil {
+				foundErr = err
+				continue
+			}
+			return candidate, nil
 		}
 	}
-	return "", false
+	if foundErr != nil {
+		return "", foundErr
+	}
+	return "", fmt.Errorf("chrome app bundle executable not found: %s", bundlePath)
+}
+
+func requireExecutableChromeFile(path string, info os.FileInfo) error {
+	if runtime.GOOS == "windows" {
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".exe", ".com", ".cmd", ".bat":
+			return nil
+		default:
+			return fmt.Errorf("chrome binary has an unsupported Windows executable extension: %s", path)
+		}
+	}
+	if info.Mode()&0o111 == 0 {
+		return fmt.Errorf("chrome binary is not executable: %s", path)
+	}
+	return nil
 }
 
 func chromeEnvironmentVariables() []string {
-	return []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN"}
+	return []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN", "CHROME_FOR_TESTING_BIN", "PLAYWRIGHT_CHROMIUM_BIN", "PLAYWRIGHT_CHROME_BIN", "PUPPETEER_EXECUTABLE_PATH"}
 }
 
 func cleanExecutablePath(value string) string {
@@ -2409,7 +2435,57 @@ func chromeExecutableCandidates(goos string) []string {
 			"brave-browser",
 		)
 	}
+	add(chromeManagedInstallCandidates(goos)...)
 	return uniqueStrings(candidates)
+}
+
+func chromeManagedInstallCandidates(goos string) []string {
+	home, _ := os.UserHomeDir()
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" && home != "" {
+		localAppData = filepath.Join(home, "AppData", "Local")
+	}
+	var patterns []string
+	switch goos {
+	case "darwin":
+		if home != "" {
+			cache := filepath.Join(home, "Library", "Caches")
+			patterns = append(patterns,
+				filepath.Join(cache, "ms-playwright", "chromium-*", "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
+				filepath.Join(cache, "puppeteer", "chrome", "*", "chrome-mac-*", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+				filepath.Join(cache, "chrome-for-testing", "*", "chrome-mac-*", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+			)
+		}
+	case "windows":
+		if localAppData != "" {
+			patterns = append(patterns,
+				filepath.Join(localAppData, "ms-playwright", "chromium-*", "chrome-win", "chrome.exe"),
+				filepath.Join(localAppData, "puppeteer", "chrome", "*", "chrome-win64", "chrome.exe"),
+				filepath.Join(localAppData, "puppeteer", "chrome", "*", "chrome-win32", "chrome.exe"),
+				filepath.Join(localAppData, "chrome-for-testing", "*", "chrome-win64", "chrome.exe"),
+				filepath.Join(localAppData, "chrome-for-testing", "*", "chrome-win32", "chrome.exe"),
+			)
+		}
+	default:
+		if home != "" {
+			cache := filepath.Join(home, ".cache")
+			patterns = append(patterns,
+				filepath.Join(cache, "ms-playwright", "chromium-*", "chrome-linux", "chrome"),
+				filepath.Join(cache, "puppeteer", "chrome", "*", "chrome-linux64", "chrome"),
+				filepath.Join(cache, "chrome-for-testing", "*", "chrome-linux64", "chrome"),
+			)
+		}
+	}
+	var candidates []string
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		sort.Strings(matches)
+		candidates = append(candidates, matches...)
+	}
+	return candidates
 }
 
 func chromeVersion(chromePath string) string {
