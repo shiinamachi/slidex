@@ -41,6 +41,36 @@ func TestExtractSlidesUsesHTMLParserForNestedSections(t *testing.T) {
 	}
 }
 
+func TestParseInitArgsAcceptsFromTemplateAroundDeckID(t *testing.T) {
+	for _, args := range [][]string{
+		{"demo", "--from-template", "custom_template"},
+		{"--from-template", "custom_template", "demo"},
+		{"demo", "--from-template=custom_template"},
+		{"--from-template=custom_template", "demo"},
+	} {
+		deckID, fromTemplate, err := parseInitArgs(args)
+		if err != nil {
+			t.Fatalf("parseInitArgs(%v) failed: %v", args, err)
+		}
+		if deckID != "demo" || fromTemplate != "custom_template" {
+			t.Fatalf("parseInitArgs(%v) = %q %q", args, deckID, fromTemplate)
+		}
+	}
+}
+
+func TestParseInitArgsRejectsAmbiguousInput(t *testing.T) {
+	for _, args := range [][]string{
+		{},
+		{"demo", "extra"},
+		{"demo", "--from-template"},
+		{"demo", "--unknown"},
+	} {
+		if _, _, err := parseInitArgs(args); err == nil {
+			t.Fatalf("parseInitArgs(%v) should fail", args)
+		}
+	}
+}
+
 func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

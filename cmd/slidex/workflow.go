@@ -195,20 +195,49 @@ type visualReviewImageSet struct {
 	Images                []renderedImage `json:"images"`
 }
 
+const initUsage = "usage: slidex init <deck_id> [--from-template decks/_template]"
+
 func runInit(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fromTemplate := fs.String("from-template", "decks/_template", "template deck directory")
-	if err := fs.Parse(args); err != nil {
+	deckID, fromTemplate, err := parseInitArgs(args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return exitCodeError(2, "usage: slidex init <deck_id> [--from-template decks/_template]")
-	}
-	result, err := bootstrapDeckWorkspace(".", fs.Arg(0), *fromTemplate, false)
+	result, err := bootstrapDeckWorkspace(".", deckID, fromTemplate, false)
 	if err != nil {
 		return err
 	}
 	return printJSON(map[string]any{"toolName": toolName, "version": toolVersion, "deckDir": result.DeckDir, "status": result.Status})
+}
+
+func parseInitArgs(args []string) (string, string, error) {
+	deckID := ""
+	fromTemplate := "decks/_template"
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-h" || arg == "--help":
+			return "", "", exitCodeError(2, initUsage)
+		case arg == "--from-template":
+			if i+1 >= len(args) {
+				return "", "", exitCodeError(2, "--from-template requires a value")
+			}
+			i++
+			fromTemplate = args[i]
+		case strings.HasPrefix(arg, "--from-template="):
+			fromTemplate = strings.TrimPrefix(arg, "--from-template=")
+		case strings.HasPrefix(arg, "-"):
+			return "", "", exitCodeError(2, "unknown init flag: %s", arg)
+		default:
+			if deckID != "" {
+				return "", "", exitCodeError(2, initUsage)
+			}
+			deckID = arg
+		}
+	}
+	if deckID == "" {
+		return "", "", exitCodeError(2, initUsage)
+	}
+	return deckID, fromTemplate, nil
 }
 
 func runDoctor(args []string) error {
