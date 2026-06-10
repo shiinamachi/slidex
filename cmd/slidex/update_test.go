@@ -185,6 +185,98 @@ func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 	}
 }
 
+func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
+	installRoot := t.TempDir()
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := applyCandidateBundle(status, t.TempDir(), "0.2.0", "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "candidate-invalid" || !hasFailures(result.CandidateValidation) {
+		t.Fatalf("invalid candidate result = %#v", result)
+	}
+}
+
+func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "applied" || !result.RestartRequired {
+		t.Fatalf("apply result = %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("activated VERSION = %q", got)
+	}
+	if _, err := os.Stat(result.BackupRoot); err != nil {
+		t.Fatalf("backup root missing: %v", err)
+	}
+	status, err = currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("post-apply update status = %#v", status)
+	}
+	if status.InstalledMetadata == nil || status.InstalledMetadata.InstallRoot != filepath.ToSlash(installRoot) {
+		t.Fatalf("install metadata not updated: %#v", status.InstalledMetadata)
+	}
+}
+
+func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
+	sourceRoot := t.TempDir()
+	for _, dir := range []string{".git", filepath.Join("cmd", "slidex")} {
+		if err := os.MkdirAll(filepath.Join(sourceRoot, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{"go.mod", filepath.Join("cmd", "slidex", "main.go")} {
+		if err := os.WriteFile(filepath.Join(sourceRoot, file), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	err := runUpdateApply([]string{"--install-root", sourceRoot, "--metadata", filepath.Join(sourceRoot, ".slidex", "missing.json"), "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "updates are disabled") {
+		t.Fatalf("local-development apply err = %v", err)
+	}
+}
+
 func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell release smoke uses the Unix package path")
@@ -239,6 +331,7 @@ func writeInstallMetadataForTest(t *testing.T, path string, metadata installMeta
 func writeCandidateBundleForTest(t *testing.T, root, version string) {
 	t.Helper()
 	dirs := []string{
+		".slidex",
 		"decks/_template",
 		"schemas",
 		"plugins/slidex/.codex-plugin",
@@ -257,6 +350,14 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 	files := map[string]string{
 		"VERSION": version,
 		binary:    "",
+		".slidex/install.json": `{
+		  "schemaVersion":"slidex.install.v1",
+		  "toolName":"slidex",
+		  "version":"` + version + `",
+		  "channel":"production",
+		  "tag":"v` + version + `",
+		  "installMode":"release-package"
+		}`,
 		"plugins/slidex/.codex-plugin/plugin.json": `{
 		  "name":"slidex",
 		  "version":"` + version + `+codex.test",

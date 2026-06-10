@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,6 +34,7 @@ const (
 
 	installMetadataSchemaVersion = "slidex.install.v1"
 	updateStateSchemaVersion     = "slidex.updateState.v1"
+	pendingUpdateSchemaVersion   = "slidex.pendingUpdate.v1"
 	updateGitHubReleasesAPI      = "https://api.github.com/repos/shiinamachi/slidex/releases"
 
 	updateInstallRootEnv     = "SLIDEX_INSTALL_ROOT"
@@ -97,6 +101,33 @@ type updateStatus struct {
 	PersistedRestartStatePath string           `json:"persistedRestartStatePath,omitempty"`
 }
 
+type updateApplyResult struct {
+	ToolName                string      `json:"toolName"`
+	CurrentVersion          string      `json:"currentVersion"`
+	TargetVersion           string      `json:"targetVersion"`
+	TargetTag               string      `json:"targetTag,omitempty"`
+	Channel                 string      `json:"channel"`
+	InstallRoot             string      `json:"installRoot"`
+	Status                  string      `json:"status"`
+	StagedRoot              string      `json:"stagedRoot,omitempty"`
+	BackupRoot              string      `json:"backupRoot,omitempty"`
+	PendingUpdatePath       string      `json:"pendingUpdatePath,omitempty"`
+	RestartRequired         bool        `json:"restartRequired"`
+	NextVerificationCommand string      `json:"nextVerificationCommand"`
+	CandidateValidation     []qaFinding `json:"candidateValidation,omitempty"`
+}
+
+type pendingUpdate struct {
+	SchemaVersion string `json:"schemaVersion"`
+	ToolName      string `json:"toolName"`
+	TargetVersion string `json:"targetVersion"`
+	TargetTag     string `json:"targetTag,omitempty"`
+	InstallRoot   string `json:"installRoot"`
+	StagedRoot    string `json:"stagedRoot"`
+	Reason        string `json:"reason"`
+	CreatedAt     string `json:"createdAt"`
+}
+
 type statusBanner struct {
 	ID       string `json:"id"`
 	Severity string `json:"severity"`
@@ -141,6 +172,8 @@ func runUpdate(args []string) error {
 		return runUpdateStatus(args[1:])
 	case "check":
 		return runUpdateCheck(args[1:])
+	case "apply":
+		return runUpdateApply(args[1:])
 	case "verify":
 		return runUpdateVerify(args[1:])
 	default:
@@ -217,6 +250,67 @@ func runUpdateCheck(args []string) error {
 		return printJSON(status)
 	}
 	printUpdateStatus(status)
+	return nil
+}
+
+func runUpdateApply(args []string) error {
+	fs := flag.NewFlagSet("update apply", flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "write JSON status")
+	metadataPath := fs.String("metadata", "", "install metadata path")
+	installRoot := fs.String("install-root", "", "install root")
+	candidate := fs.String("candidate", "", "extracted candidate bundle root")
+	archive := fs.String("archive", "", "release archive path")
+	checksums := fs.String("checksums", "", "release checksums file")
+	targetVersion := fs.String("target-version", "", "expected target version")
+	targetTag := fs.String("target-tag", "", "target release tag")
+	yes := fs.Bool("yes", false, "activate the staged update")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return exitCodeError(2, "usage: slidex update apply --target-version VERSION (--candidate DIR | --archive FILE --checksums FILE) --yes [--json] [--install-root DIR] [--metadata FILE] [--target-tag TAG]")
+	}
+	if !*yes {
+		return exitCodeError(2, "slidex update apply requires --yes before replacing the install root")
+	}
+	if *targetVersion == "" {
+		return exitCodeError(2, "--target-version is required")
+	}
+	if (*candidate == "") == (*archive == "") {
+		return exitCodeError(2, "provide exactly one of --candidate or --archive")
+	}
+	status, err := currentUpdateStatus(*installRoot, *metadataPath)
+	if err != nil {
+		return err
+	}
+	if !status.UpdatesEnabled {
+		return exitCodeError(4, "updates are disabled for channel %s: %s", status.Channel, firstNonEmpty(status.Guidance, status.Reason))
+	}
+	candidateRoot := *candidate
+	if *archive != "" {
+		if *checksums == "" {
+			return exitCodeError(2, "--checksums is required with --archive")
+		}
+		extracted, err := stageArchiveCandidate(*archive, *checksums, *targetVersion, status.InstallRoot)
+		if err != nil {
+			return err
+		}
+		candidateRoot = extracted
+	}
+	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag)
+	if *jsonOut {
+		if printErr := printJSON(result); printErr != nil && err == nil {
+			err = printErr
+		}
+	} else {
+		printUpdateApplyResult(result)
+	}
+	if err != nil {
+		return err
+	}
+	if hasFailures(result.CandidateValidation) {
+		return exitCodeError(4, "candidate bundle validation failed")
+	}
 	return nil
 }
 
@@ -417,6 +511,303 @@ func markPluginVerified(installRoot, pluginVersion, skillPath string) error {
 	state.VerificationCommand = "slidex update verify --json"
 	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeUpdateState(installRoot, *state)
+}
+
+func stageArchiveCandidate(archivePath, checksumsPath, targetVersion, installRoot string) (string, error) {
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		return "", err
+	}
+	checksumText, err := os.ReadFile(checksumsPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := verifyReleaseAssetSHA256(filepath.Base(archivePath), payload, string(checksumText), ""); err != nil {
+		return "", err
+	}
+	stageParent := filepath.Join(installRoot, ".slidex", "staged", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.MkdirAll(stageParent, 0o755); err != nil {
+		return "", err
+	}
+	return extractReleaseArchive(archivePath, stageParent)
+}
+
+func extractReleaseArchive(archivePath, dest string) (string, error) {
+	switch {
+	case strings.HasSuffix(archivePath, ".zip"):
+		if err := extractZipArchive(archivePath, dest); err != nil {
+			return "", err
+		}
+	case strings.HasSuffix(archivePath, ".tar.gz"), strings.HasSuffix(archivePath, ".tgz"):
+		if err := extractTarGzArchive(archivePath, dest); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("unsupported release archive format: %s", filepath.ToSlash(archivePath))
+	}
+	return singleExtractedRoot(dest), nil
+}
+
+func extractTarGzArchive(archivePath, dest string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, filepath.Clean(header.Name))
+		if !pathWithin(dest, target) {
+			return fmt.Errorf("archive entry escapes extraction root: %s", header.Name)
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(header.Mode)&0o777); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			if err := writeStreamFile(target, tr, os.FileMode(header.Mode)&0o777); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported archive entry type for %s", header.Name)
+		}
+	}
+	return nil
+}
+
+func extractZipArchive(archivePath, dest string) error {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	for _, file := range zr.File {
+		target := filepath.Join(dest, filepath.Clean(file.Name))
+		if !pathWithin(dest, target) {
+			return fmt.Errorf("archive entry escapes extraction root: %s", file.Name)
+		}
+		mode := file.FileInfo().Mode()
+		if mode&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsupported symlink in archive: %s", file.Name)
+		}
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, mode&0o777); err != nil {
+				return err
+			}
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			_ = rc.Close()
+			return err
+		}
+		err = writeStreamFile(target, rc, mode&0o777)
+		closeErr := rc.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
+func writeStreamFile(path string, r io.Reader, mode os.FileMode) error {
+	if mode == 0 {
+		mode = 0o644
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(f, r)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func singleExtractedRoot(dest string) string {
+	entries, err := os.ReadDir(dest)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return dest
+	}
+	return filepath.Join(dest, entries[0].Name())
+}
+
+func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, targetTag string) (updateApplyResult, error) {
+	result := updateApplyResult{
+		ToolName:                toolName,
+		CurrentVersion:          status.CurrentVersion,
+		TargetVersion:           targetVersion,
+		TargetTag:               targetTag,
+		Channel:                 status.Channel,
+		InstallRoot:             status.InstallRoot,
+		Status:                  "candidate-invalid",
+		NextVerificationCommand: "slidex codex app-server plugin-smoke --json",
+	}
+	result.CandidateValidation = validateCandidateBundle(candidateRoot, targetVersion)
+	if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
+		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
+	}
+	if hasFailures(result.CandidateValidation) {
+		return result, nil
+	}
+	if runtime.GOOS == "windows" {
+		stagedRoot, err := stageCandidateForWindowsHandoff(status.InstallRoot, candidateRoot, targetVersion)
+		if err != nil {
+			return result, err
+		}
+		pendingPath, err := writePendingUpdate(status.InstallRoot, stagedRoot, targetVersion, targetTag)
+		if err != nil {
+			return result, err
+		}
+		result.Status = "pending-restart"
+		result.StagedRoot = filepath.ToSlash(stagedRoot)
+		result.PendingUpdatePath = filepath.ToSlash(pendingPath)
+		return result, nil
+	}
+	stagedRoot, backupRoot, err := replaceInstallRootWithCandidate(status.InstallRoot, candidateRoot, targetVersion)
+	result.StagedRoot = filepath.ToSlash(stagedRoot)
+	result.BackupRoot = filepath.ToSlash(backupRoot)
+	if err != nil {
+		result.Status = "rollback"
+		return result, err
+	}
+	if err := updateInstallMetadataAfterActivation(status.InstallRoot, targetVersion, targetTag, status.Channel); err != nil {
+		return result, err
+	}
+	if err := markPluginRestartRequired(status.InstallRoot, targetVersion, targetTag); err != nil {
+		return result, err
+	}
+	result.Status = "applied"
+	result.RestartRequired = true
+	return result, nil
+}
+
+func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion string) (string, error) {
+	stagedRoot := filepath.Join(installRoot, ".slidex", "pending", targetVersion)
+	_ = os.RemoveAll(stagedRoot)
+	if err := copyDir(candidateRoot, stagedRoot); err != nil {
+		return "", err
+	}
+	return stagedRoot, nil
+}
+
+func pendingUpdatePath(installRoot string) string {
+	return filepath.Join(installRoot, ".slidex", "pending_update.json")
+}
+
+func writePendingUpdate(installRoot, stagedRoot, targetVersion, targetTag string) (string, error) {
+	path := pendingUpdatePath(installRoot)
+	pending := pendingUpdate{
+		SchemaVersion: pendingUpdateSchemaVersion,
+		ToolName:      toolName,
+		TargetVersion: targetVersion,
+		TargetTag:     targetTag,
+		InstallRoot:   filepath.ToSlash(installRoot),
+		StagedRoot:    filepath.ToSlash(stagedRoot),
+		Reason:        "Windows may lock the running slidex executable; activate this staged bundle on next run.",
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	return path, writeSourceJSONFile(path, pending)
+}
+
+func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion string) (stagedRoot, backupRoot string, err error) {
+	parent := filepath.Dir(filepath.Clean(installRoot))
+	base := filepath.Base(filepath.Clean(installRoot))
+	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
+	stagedRoot = filepath.Join(parent, "."+base+".staged-"+stamp)
+	backupRoot = filepath.Join(parent, "."+base+".backup-"+stamp)
+	_ = os.RemoveAll(stagedRoot)
+	if err := copyDir(candidateRoot, stagedRoot); err != nil {
+		return stagedRoot, backupRoot, err
+	}
+	if err := os.Rename(installRoot, backupRoot); err != nil {
+		_ = os.RemoveAll(stagedRoot)
+		return stagedRoot, backupRoot, err
+	}
+	if err := os.Rename(stagedRoot, installRoot); err != nil {
+		rollbackErr := os.Rename(backupRoot, installRoot)
+		if rollbackErr != nil {
+			return stagedRoot, backupRoot, fmt.Errorf("activation failed: %v; rollback failed: %w", err, rollbackErr)
+		}
+		return stagedRoot, backupRoot, err
+	}
+	return stagedRoot, backupRoot, nil
+}
+
+func updateInstallMetadataAfterActivation(installRoot, targetVersion, targetTag, channel string) error {
+	path := installMetadataPath(installRoot)
+	metadata, err := readInstallMetadata(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if metadata == nil {
+		metadata = &installMetadata{}
+	}
+	metadata.SchemaVersion = installMetadataSchemaVersion
+	metadata.ToolName = toolName
+	metadata.Version = targetVersion
+	metadata.Channel = channel
+	if targetTag != "" {
+		metadata.Tag = targetTag
+	}
+	metadata.InstallRoot = filepath.ToSlash(installRoot)
+	metadata.InstalledAt = time.Now().UTC().Format(time.RFC3339)
+	metadata.InstallMode = installModeReleasePackage
+	if metadata.OS == "" {
+		metadata.OS = runtime.GOOS
+	}
+	if metadata.Arch == "" {
+		metadata.Arch = runtime.GOARCH
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return writeSourceJSONFile(path, metadata)
+}
+
+func printUpdateApplyResult(result updateApplyResult) {
+	fmt.Printf("%s update apply %s\n", result.ToolName, result.Status)
+	fmt.Printf("channel: %s\n", result.Channel)
+	fmt.Printf("current version: %s\n", result.CurrentVersion)
+	fmt.Printf("target version: %s\n", result.TargetVersion)
+	fmt.Printf("install root: %s\n", result.InstallRoot)
+	if result.BackupRoot != "" {
+		fmt.Printf("backup root: %s\n", result.BackupRoot)
+	}
+	if result.PendingUpdatePath != "" {
+		fmt.Printf("pending update: %s\n", result.PendingUpdatePath)
+	}
+	if result.RestartRequired {
+		fmt.Println("restart required: restart Codex and start a new thread before treating updated plugin skills as active")
+	}
+	fmt.Printf("next verification: %s\n", result.NextVerificationCommand)
 }
 
 func inferUpdateChannel(installRoot string, metadata *installMetadata, metadataErr error) (channel, mode, reason string) {
@@ -750,6 +1141,7 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	var findings []qaFinding
 	required := []string{
 		"VERSION",
+		".slidex/install.json",
 		"decks/_template",
 		"schemas",
 		"plugins/slidex/.codex-plugin/plugin.json",
@@ -766,6 +1158,17 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	version := strings.TrimSpace(readFileOrEmpty(filepath.Join(root, "VERSION")))
 	if version != expectedVersion {
 		findings = append(findings, fail("update.candidate_version", fmt.Sprintf("candidate VERSION must be %s, got %s", expectedVersion, firstNonEmpty(version, "missing")), filepath.ToSlash(filepath.Join(root, "VERSION"))))
+	}
+	metadataPath := filepath.Join(root, ".slidex", "install.json")
+	if metadata, err := readInstallMetadata(metadataPath); err != nil {
+		findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
+	} else {
+		if metadata.Version != expectedVersion {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata version must be "+expectedVersion+", got "+metadata.Version, filepath.ToSlash(metadataPath)))
+		}
+		if metadata.Channel != updateChannelProduction && metadata.Channel != updateChannelCanary {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata channel must be production or canary, got "+metadata.Channel, filepath.ToSlash(metadataPath)))
+		}
 	}
 	manifestPath := filepath.Join(root, "plugins", "slidex", ".codex-plugin", "plugin.json")
 	if manifest, err := readCandidateJSON(manifestPath); err != nil {

@@ -269,7 +269,7 @@ Commands:
   revise --deck decks/<deck_id>
   sync-html-edits --deck decks/<deck_id>
   sync-version-metadata [--json]
-  update status|check|verify [--json]
+  update status|check|apply|verify [--json]
   finalize --deck decks/<deck_id>
   package --deck decks/<deck_id>
   clean --deck decks/<deck_id> [--logs] [--older-than DURATION]
