@@ -841,6 +841,105 @@ func TestUpdateVerifyJSONReportsRestartRequiredContract(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckHumanAndJSONReportAvailableRelease(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `[
+		  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]},
+		  {"tag_name":"v0.2.0","draft":false,"prerelease":false,"published_at":"2026-02-01T00:00:00Z","assets":[
+		    {"name":%q,"browser_download_url":"https://example.invalid/archive","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		    {"name":%q,"browser_download_url":"https://example.invalid/checksums"}
+		  ]}
+		]`, contract.ArchiveName, contract.ChecksumName)
+	}))
+	defer server.Close()
+
+	var runErr error
+	jsonOutput := captureStdoutForTest(t, func() {
+		runErr = runUpdateCheck([]string{"--install-root", installRoot, "--metadata", metadataPath, "--api-url", server.URL, "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("update check JSON failed: %v", runErr)
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(jsonOutput), &status); err != nil {
+		t.Fatalf("invalid update check JSON: %v\n%s", err, jsonOutput)
+	}
+	if status.Status != "available" || status.Channel != updateChannelProduction || status.TargetVersion != "0.2.0" || status.TargetTag != "v0.2.0" {
+		t.Fatalf("available release fields missing from update check JSON: %#v", status)
+	}
+	if status.ReleaseAssetName != contract.ArchiveName || status.ChecksumAssetName != contract.ChecksumName {
+		t.Fatalf("asset fields missing from update check JSON: %#v", status)
+	}
+	if status.PluginVerificationStatus != "not_verified" || status.RestartRequired || status.NextVerificationCommand != "slidex update verify --json" {
+		t.Fatalf("plugin/restart fields missing from update check JSON: %#v", status)
+	}
+
+	humanOutput := captureStdoutForTest(t, func() {
+		runErr = runUpdateCheck([]string{"--install-root", installRoot, "--metadata", metadataPath, "--api-url", server.URL})
+	})
+	if runErr != nil {
+		t.Fatalf("update check human failed: %v", runErr)
+	}
+	for _, want := range []string{
+		"slidex update available",
+		"channel: production",
+		"current version: " + toolVersion,
+		"target version: 0.2.0 (v0.2.0)",
+		"release asset: " + contract.ArchiveName,
+		"plugin status: not_verified",
+		"next verification: slidex update verify --json",
+	} {
+		if !strings.Contains(humanOutput, want) {
+			t.Fatalf("human update check missing %q:\n%s", want, humanOutput)
+		}
+	}
+}
+
+func TestUpdateCheckLocalDevelopmentDoesNotFetchReleaseAPI(t *testing.T) {
+	installRoot := t.TempDir()
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateCheck([]string{"--install-root", installRoot, "--metadata", filepath.Join(installRoot, ".slidex", "missing.json"), "--api-url", server.URL, "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("local-development update check failed: %v", runErr)
+	}
+	if called {
+		t.Fatal("local-development update check should not fetch release metadata")
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid local-development update check JSON: %v\n%s", err, output)
+	}
+	if status.Status != "disabled" || status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled {
+		t.Fatalf("local-development status missing from update check JSON: %#v", status)
+	}
+	if !strings.Contains(status.Guidance, "disabled") {
+		t.Fatalf("local-development guidance missing from update check JSON: %#v", status)
+	}
+}
+
 func TestUpdateStatusHumanAndJSONReportPendingActivation(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
