@@ -1023,6 +1023,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	normalizeWorkbenchEvidenceRuntimeForTest(t, deck)
 
 	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "", false)
 	if err != nil {
@@ -1098,6 +1099,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleBrowserScreenshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	normalizeWorkbenchEvidenceRuntimeForTest(t, deck)
 	copied := filepath.Join(deck, "out", "workbench_browser_screenshot.png")
 	writeSolidPNGForTest(t, copied, color.RGBA{R: 90, G: 20, B: 10, A: 255})
 
@@ -1138,6 +1140,7 @@ func TestWorkbenchVerifyEvidenceCanRequireBrowserScreenshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	normalizeWorkbenchEvidenceRuntimeForTest(t, deck)
 
 	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "", true)
 	if err != nil {
@@ -1145,6 +1148,28 @@ func TestWorkbenchVerifyEvidenceCanRequireBrowserScreenshot(t *testing.T) {
 	}
 	if result.Status != "fail" || !strings.Contains(strings.Join(result.Findings, "\n"), "must include a browser screenshot") {
 		t.Fatalf("require-screenshot should fail without screenshot artifact: %#v", result.Findings)
+	}
+}
+
+func normalizeWorkbenchEvidenceRuntimeForTest(t *testing.T, deck string) {
+	t.Helper()
+	path := filepath.Join(deck, "out", workbenchBrowserEvidenceName)
+	var evidence workbenchBrowserEvidence
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(evidence.CodexVersion) == "" || evidence.CodexVersion == "unavailable" {
+		evidence.CodexVersion = requiredCodexVersion
+	}
+	if strings.TrimSpace(evidence.PluginVersion) == "" || evidence.PluginVersion == "unavailable" {
+		evidence.PluginVersion = firstNonEmpty(localPluginVersion(), toolVersion)
+	}
+	if err := secureWriteJSON(path, evidence); err != nil {
+		t.Fatal(err)
 	}
 }
 
