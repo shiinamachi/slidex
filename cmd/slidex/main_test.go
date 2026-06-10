@@ -1350,6 +1350,60 @@ func TestDoctorPluginPackageFindingsValidateLocalManifests(t *testing.T) {
 	}
 }
 
+func TestDoctorDesktopRetirementFindingsValidateLocalTombstone(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	if findings := doctorDesktopRetirementFindings(); hasFailures(findings) {
+		t.Fatalf("local desktop tombstone should satisfy doctor gate: %#v", findings)
+	}
+	snapshot := desktopDoctorSnapshot()
+	if snapshot["canonicalUX"] != false || snapshot["futureProductPath"] != false || snapshot["shippingDisabled"] != true {
+		t.Fatalf("desktop doctor snapshot should report retired shipping path: %#v", snapshot)
+	}
+}
+
+func TestDoctorDesktopRetirementFindingsRejectActivePackaging(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "apps", "desktop", "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(rel, text string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("AGENTS.md", "`apps/desktop/`: Electron boilerplate for a future GUI wrapper around the CLI.\n")
+	write("README.md", "## Desktop\napps/desktop is a future product path.\n")
+	write("apps/desktop/README.md", "# slidex Desktop\nshipping app\n")
+	write("apps/desktop/DESIGN.md", "# slidex Desktop\nactive implementation rules\n")
+	write("apps/desktop/scripts/tombstone.cjs", "process.exit(2)\n")
+	write("apps/desktop/package.json", `{
+  "name": "slidex-desktop",
+  "scripts": {
+    "pack": "pnpm run build && electron-builder --dir",
+    "dist": "pnpm run build && electron-builder"
+  }
+}`)
+
+	findings := doctorDesktopRetirementFindingsAt(root)
+	if !hasFailures(findings) || !hasFindingCheck(findings, "doctor.desktop_retirement") {
+		t.Fatalf("active Electron packaging should fail doctor gate: %#v", findings)
+	}
+}
+
 func TestGoalContinuationStopsForUsageLimitAndRepeatedBlocker(t *testing.T) {
 	if !shouldStopGoalContinuation(goalMirror{UsageLimitReached: true}) {
 		t.Fatal("usage limit should stop continuation")

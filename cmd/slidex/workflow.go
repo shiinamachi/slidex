@@ -279,6 +279,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
 	findings = append(findings, doctorProtocolBundleFindings(protocol)...)
 	findings = append(findings, doctorWorkbenchFindings()...)
+	findings = append(findings, doctorDesktopRetirementFindings()...)
 	if checkCodex {
 		codexVersion = installedCodexVersion()
 		if !codexVersionAtLeast(codexVersion, requiredCodexVersion) {
@@ -315,6 +316,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"protocolSchema":              protocol,
 		"plugin":                      pluginDoctorSnapshot(pluginList),
 		"workbench":                   workbenchDoctorSnapshot(),
+		"desktop":                     desktopDoctorSnapshot(),
 		"dangerousAppServerApiPolicy": dangerousAppServerPolicySnapshot(),
 		"codexDoctorJson":             json.RawMessage(nullOrRaw(codexDoctor)),
 		"features":                    featureList,
@@ -323,6 +325,133 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"findings":                    findings,
 		"status":                      statusFromFindings(findings),
 	}
+}
+
+func doctorDesktopRetirementFindings() []qaFinding {
+	return doctorDesktopRetirementFindingsAt(".")
+}
+
+func doctorDesktopRetirementFindingsAt(root string) []qaFinding {
+	desktopDir := filepath.Join(root, "apps", "desktop")
+	if _, err := os.Stat(desktopDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	var findings []qaFinding
+	docChecks := []struct {
+		path     string
+		needles  []string
+		message  string
+		failPath string
+	}{
+		{
+			path:     filepath.Join(root, "AGENTS.md"),
+			needles:  []string{"tombstoned Electron prototype", "not the canonical UX", "future product path", "plugins/slidex", "slidex workbench"},
+			message:  "AGENTS.md must describe apps/desktop as tombstoned migration reference, not a future product path",
+			failPath: "AGENTS.md",
+		},
+		{
+			path:     filepath.Join(root, "README.md"),
+			needles:  []string{"Desktop Tombstone", "canonical UX", "future product path", "migration"},
+			message:  "README.md must keep apps/desktop documented as tombstoned, not canonical",
+			failPath: "README.md",
+		},
+		{
+			path:     filepath.Join(desktopDir, "README.md"),
+			needles:  []string{"Desktop Tombstone", "shipping path", "future product path", "Codex Plugin workbench"},
+			message:  "apps/desktop README must state that Electron is not shipping or future UX",
+			failPath: filepath.Join("apps", "desktop", "README.md"),
+		},
+		{
+			path:     filepath.Join(desktopDir, "DESIGN.md"),
+			needles:  []string{"Tombstone", "migration reference", "새 기능 구현 지침으로 사용하지 않는다"},
+			message:  "apps/desktop DESIGN.md must be an archived design record, not active UI guidance",
+			failPath: filepath.Join("apps", "desktop", "DESIGN.md"),
+		},
+	}
+	for _, check := range docChecks {
+		if !fileContainsAll(check.path, check.needles) {
+			findings = append(findings, fail("doctor.desktop_retirement", check.message, check.failPath))
+		}
+		if fileContainsAny(check.path, []string{"future GUI wrapper", "future packaging work", "not the canonical workflow surface yet"}) {
+			findings = append(findings, fail("doctor.desktop_retirement", "desktop documentation still contains an active/future Electron product-path phrase", check.failPath))
+		}
+	}
+
+	packagePath := filepath.Join(desktopDir, "package.json")
+	if !desktopPackageDisablesShipping(packagePath) {
+		findings = append(findings, fail("doctor.desktop_retirement", "apps/desktop package scripts pack/dist must use the tombstone guard instead of Electron packaging", filepath.Join("apps", "desktop", "package.json")))
+	}
+	if _, err := os.Stat(filepath.Join(desktopDir, "scripts", "tombstone.cjs")); err != nil {
+		findings = append(findings, fail("doctor.desktop_retirement", "apps/desktop tombstone guard script is missing", filepath.Join("apps", "desktop", "scripts", "tombstone.cjs")))
+	}
+	return findings
+}
+
+func desktopDoctorSnapshot() map[string]any {
+	desktopDir := filepath.Join("apps", "desktop")
+	exists := true
+	if _, err := os.Stat(desktopDir); os.IsNotExist(err) {
+		exists = false
+	}
+	status := "tombstoned"
+	if !exists {
+		status = "removed"
+	}
+	return map[string]any{
+		"path":              filepath.ToSlash(desktopDir),
+		"exists":            exists,
+		"status":            status,
+		"canonicalUX":       false,
+		"futureProductPath": false,
+		"shippingDisabled":  !exists || desktopPackageDisablesShipping(filepath.Join(desktopDir, "package.json")),
+	}
+}
+
+func fileContainsAll(path string, needles []string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	text := string(raw)
+	for _, needle := range needles {
+		if !strings.Contains(text, needle) {
+			return false
+		}
+	}
+	return true
+}
+
+func fileContainsAny(path string, needles []string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	text := string(raw)
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func desktopPackageDisablesShipping(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return false
+	}
+	scripts, _ := manifest["scripts"].(map[string]any)
+	pack := fmt.Sprint(scripts["pack"])
+	dist := fmt.Sprint(scripts["dist"])
+	return strings.Contains(pack, "scripts/tombstone.cjs") &&
+		strings.Contains(dist, "scripts/tombstone.cjs") &&
+		!strings.Contains(pack, "electron-builder") &&
+		!strings.Contains(dist, "electron-builder")
 }
 
 func codexDoctorFindings(protocol map[string]any, mcpList string) []qaFinding {
