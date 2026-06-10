@@ -60,7 +60,8 @@ func TestPluginDoctorHelperWindowsInvokesSlidexDoctor(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SLIDEX_HELPER_LOG", logPath)
-	cmd := exec.Command("cmd", "/c", filepath.Join(root, "plugins", "slidex", "scripts", "slidex-doctor.cmd"), "--probe")
+	deckPath := filepath.Join(t.TempDir(), "deck with spaces")
+	cmd := exec.Command("cmd", "/c", filepath.Join(root, "plugins", "slidex", "scripts", "slidex-doctor.cmd"), "--deck", deckPath, "--probe")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("helper failed: %v\n%s", err, out)
 	}
@@ -68,8 +69,8 @@ func TestPluginDoctorHelperWindowsInvokesSlidexDoctor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Fields(strings.ReplaceAll(string(raw), "\r\n", "\n"))
-	want := []string{"doctor", "--codex", "--render", "--json", "--probe"}
+	got := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(raw), "\r\n", "\n")), "\n")
+	want := []string{"doctor", "--codex", "--render", "--json", "--deck", deckPath, "--probe"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("helper args = %#v, want %#v", got, want)
 	}
