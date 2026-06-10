@@ -1143,8 +1143,12 @@ func saveAppServerSkillSmokeInput(deckAbs string, manifest workbenchManifest) (w
 }
 
 func appServerSkillSmokeWorkbenchCommand(workspace, deckID, fromTemplate string) string {
+	return appServerSkillSmokeWorkbenchCommandForOS(runtime.GOOS, workspace, deckID, fromTemplate)
+}
+
+func appServerSkillSmokeWorkbenchCommandForOS(goos, workspace, deckID, fromTemplate string) string {
 	quote := shellQuote
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		quote = windowsShellQuote
 	}
 	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s --from-template %s", quote(workspace), quote(deckID), quote(fromTemplate))

@@ -18,7 +18,7 @@ The Go CLI remains the implementation source of truth.
 7. Optionally run local HTTP save smoke before GUI evidence:
 
 ```bash
-slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id <deck_id>
+slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>
 ```
 
 This fetches the workbench HTML, posts draft/save input through the session API,
@@ -78,7 +78,7 @@ Before a full Codex App GUI smoke, run the headless pre-GUI App Server skill
 smoke as a separate plugin/App Server path check:
 
 ```bash
-slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke
+slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id skill-smoke
 ```
 
 This starts an App Server turn with the installed `slidex:slidex-start` skill

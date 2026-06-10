@@ -54,13 +54,13 @@ Codex App GUI를 열기 전에는 local HTTP 저장 smoke로 bootstrap과 저장
 있습니다.
 
 ```bash
-slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id save-smoke
+slidex workbench save-smoke --workspace <tmp-workspace> --deck-id save-smoke
 ```
 
 렌더링까지 headless로 확인하려면 `--screenshot`을 추가합니다.
 
 ```bash
-slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id save-smoke --screenshot
+slidex workbench save-smoke --workspace <tmp-workspace> --deck-id save-smoke --screenshot
 ```
 
 이 smoke evidence는 Codex App GUI/browser 표시 증거가 아닙니다. 실제 Codex App
@@ -88,7 +88,7 @@ slidex workbench verify-evidence --deck-id customer-retention --require-screensh
 plugin/App Server 경로 자체를 headless로 점검하려면 다음 smoke를 사용합니다.
 
 ```bash
-slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke
+slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id skill-smoke
 ```
 
 ## 작업공간 모델

@@ -2262,6 +2262,7 @@ func fontFamilyForPreset(preset string) string {
 }
 
 func resolveChrome(explicit string) (string, error) {
+	explicit = cleanExecutablePath(explicit)
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err == nil {
 			return explicit, nil
@@ -2269,7 +2270,7 @@ func resolveChrome(explicit string) (string, error) {
 		return "", fmt.Errorf("chrome binary not found: %s", explicit)
 	}
 	for _, envName := range chromeEnvironmentVariables() {
-		if env := os.Getenv(envName); env != "" {
+		if env := cleanExecutablePath(os.Getenv(envName)); env != "" {
 			if _, err := os.Stat(env); err == nil {
 				return env, nil
 			}
@@ -2291,6 +2292,13 @@ func resolveChrome(explicit string) (string, error) {
 
 func chromeEnvironmentVariables() []string {
 	return []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN"}
+}
+
+func cleanExecutablePath(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, `"`)
+	value = strings.Trim(value, `'`)
+	return strings.TrimSpace(value)
 }
 
 func chromeExecutableCandidates(goos string) []string {

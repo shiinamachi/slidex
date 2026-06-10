@@ -1093,6 +1093,10 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
 		t.Fatalf("command was not shell quoted as expected: %s", command)
 	}
+	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", `C:\Users\Me\slidex workspace`, "demo", `C:\repo\decks\_template`)
+	if !strings.Contains(windowsCommand, `--workspace "C:\Users\Me\slidex workspace"`) || !strings.Contains(windowsCommand, `--from-template C:\repo\decks\_template`) {
+		t.Fatalf("windows command was not quoted as expected: %s", windowsCommand)
+	}
 	if got := windowsShellQuote(`C:\Users\Me\slidex workspace`); got != `"C:\Users\Me\slidex workspace"` {
 		t.Fatalf("windows shell quote did not preserve spaced path: %s", got)
 	}
@@ -1587,6 +1591,44 @@ func TestExecAuditCorrectionIsWrittenBackToArtifact(t *testing.T) {
 	if structured["status"] != "pass" || got["auditCorrection"] == nil {
 		t.Fatalf("correction was not written back: %#v", got)
 	}
+}
+
+func TestChromeDiscoveryPolicyCoversSupportedPlatforms(t *testing.T) {
+	envVars := chromeEnvironmentVariables()
+	for _, name := range []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN"} {
+		if !testStringSliceContains(envVars, name) {
+			t.Fatalf("chrome environment variables missing %s: %#v", name, envVars)
+		}
+	}
+	if got := cleanExecutablePath(` "C:\Program Files\Google\Chrome\Application\chrome.exe" `); got != `C:\Program Files\Google\Chrome\Application\chrome.exe` {
+		t.Fatalf("clean executable path did not strip quoting: %q", got)
+	}
+
+	linux := chromeExecutableCandidates("linux")
+	for _, name := range []string{"google-chrome-stable", "chromium-browser", "microsoft-edge-stable"} {
+		if !testStringSliceContains(linux, name) {
+			t.Fatalf("linux chrome candidates missing %s: %#v", name, linux)
+		}
+	}
+	darwin := chromeExecutableCandidates("darwin")
+	if !testStringSliceContains(darwin, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") {
+		t.Fatalf("darwin chrome candidates missing app bundle path: %#v", darwin)
+	}
+	windows := chromeExecutableCandidates("windows")
+	for _, name := range []string{"chrome.exe", "msedge.exe", "chromium.exe"} {
+		if !testStringSliceContains(windows, name) {
+			t.Fatalf("windows chrome candidates missing %s: %#v", name, windows)
+		}
+	}
+}
+
+func testStringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStructuredReviewTurnCanNormalizeSchemaDrift(t *testing.T) {

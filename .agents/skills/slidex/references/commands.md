@@ -5,11 +5,18 @@ Primary workflow:
 ```bash
 mise exec -- go install ./cmd/slidex
 slidex workbench start --deck-id <deck_id>
-slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id <deck_id> --screenshot
+slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id> --screenshot
 slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified
 slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
 slidex run --deck decks/<deck_id>
 ```
+
+Platform support:
+
+Windows, Linux, and macOS are supported targets. Use `<tmp-workspace>` as an
+OS-appropriate temporary directory. Browser discovery checks common Chrome,
+Chromium, and Microsoft Edge locations on each OS, with `CHROME_BIN` or
+`--chrome` available as explicit overrides.
 
 Stage commands:
 
@@ -35,7 +42,7 @@ versions at or above that minimum satisfy the runtime gate.
 slidex codex doctor --json
 slidex codex schema refresh --codex-version 0.138.0
 slidex codex app-server probe
-slidex codex app-server skill-smoke --workspace /tmp/slidex-skill-smoke --deck-id skill-smoke
+slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id skill-smoke
 ```
 
 `slidex codex app-server skill-smoke` is a headless pre-GUI App Server check.
