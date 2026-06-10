@@ -64,14 +64,7 @@ func TestChannelFromPackageVersionOnlyAcceptsStableAndCanary(t *testing.T) {
 func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	temp := t.TempDir()
 	productionMeta := filepath.Join(temp, "production.json")
-	writeInstallMetadataForTest(t, productionMeta, installMetadata{
-		SchemaVersion:    installMetadataSchemaVersion,
-		ToolName:         toolName,
-		Version:          toolVersion,
-		Channel:          updateChannelProduction,
-		InstallMode:      installModeReleasePackage,
-		ReleaseAssetName: "slidex_0.1.0_linux_amd64.tar.gz",
-	})
+	writeInstallMetadataForTest(t, productionMeta, releaseInstallMetadataForTest(t, toolVersion))
 	status, err := currentUpdateStatus(filepath.Join(temp, "prod-root"), productionMeta)
 	if err != nil {
 		t.Fatal(err)
@@ -81,13 +74,7 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	}
 
 	canaryMeta := filepath.Join(temp, "canary.json")
-	writeInstallMetadataForTest(t, canaryMeta, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion + "-abcdef0",
-		Channel:       updateChannelCanary,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, canaryMeta, releaseInstallMetadataForTest(t, toolVersion+"-abcdef0"))
 	status, err = currentUpdateStatus(filepath.Join(temp, "canary-root"), canaryMeta)
 	if err != nil {
 		t.Fatal(err)
@@ -124,14 +111,9 @@ func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T
 	installRoot := filepath.Join(temp, "active")
 	staleRoot := filepath.Join(temp, "old")
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-		InstallRoot:   filepath.ToSlash(staleRoot),
-	})
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	metadata.InstallRoot = filepath.ToSlash(staleRoot)
+	writeInstallMetadataForTest(t, metadataPath, metadata)
 
 	status, err := currentUpdateStatus(installRoot, metadataPath)
 	if err != nil {
@@ -151,13 +133,9 @@ func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T
 func TestUpdateStatusDisablesInconsistentReleaseMetadata(t *testing.T) {
 	temp := t.TempDir()
 	metadataPath := filepath.Join(temp, "install.json")
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion + "-abcdef0",
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	metadata := releaseInstallMetadataForTest(t, toolVersion+"-abcdef0")
+	metadata.Channel = updateChannelProduction
+	writeInstallMetadataForTest(t, metadataPath, metadata)
 
 	status, err := currentUpdateStatus(filepath.Join(temp, "slidex"), metadataPath)
 	if err != nil {
@@ -174,14 +152,9 @@ func TestUpdateStatusDisablesInconsistentReleaseMetadata(t *testing.T) {
 func TestUpdateCheckInconsistentReleaseMetadataDoesNotFetchReleaseAPI(t *testing.T) {
 	temp := t.TempDir()
 	metadataPath := filepath.Join(temp, "install.json")
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		Tag:           "v9.9.9",
-		InstallMode:   installModeReleasePackage,
-	})
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	metadata.Tag = "v9.9.9"
+	writeInstallMetadataForTest(t, metadataPath, metadata)
 	var called bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -208,6 +181,145 @@ func TestUpdateCheckInconsistentReleaseMetadataDoesNotFetchReleaseAPI(t *testing
 	}
 	if !strings.Contains(status.Reason, "tag must resolve") {
 		t.Fatalf("inconsistent release metadata reason missing: %#v", status)
+	}
+}
+
+func TestUpdateStatusDisablesIncompleteReleaseMetadata(t *testing.T) {
+	temp := t.TempDir()
+	tests := []struct {
+		name        string
+		mutate      func(*installMetadata)
+		wantReason  string
+		wantCurrent string
+	}{
+		{
+			name:        "missing schema version",
+			mutate:      func(metadata *installMetadata) { metadata.SchemaVersion = "" },
+			wantReason:  "schemaVersion must be",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing tool name",
+			mutate:      func(metadata *installMetadata) { metadata.ToolName = "" },
+			wantReason:  "toolName must be slidex",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:       "missing version",
+			mutate:     func(metadata *installMetadata) { metadata.Version = "" },
+			wantReason: "version is required",
+		},
+		{
+			name:        "missing tag",
+			mutate:      func(metadata *installMetadata) { metadata.Tag = "" },
+			wantReason:  "tag is required",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing commit",
+			mutate:      func(metadata *installMetadata) { metadata.Commit = "" },
+			wantReason:  "commit is required",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "invalid commit",
+			mutate:      func(metadata *installMetadata) { metadata.Commit = "not-a-sha" },
+			wantReason:  "commit must be a 7-40 character lowercase git SHA",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing build time",
+			mutate:      func(metadata *installMetadata) { metadata.BuildTime = "" },
+			wantReason:  "buildTime is required",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "invalid build time",
+			mutate:      func(metadata *installMetadata) { metadata.BuildTime = "soon" },
+			wantReason:  "buildTime must be RFC3339",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing release asset",
+			mutate:      func(metadata *installMetadata) { metadata.ReleaseAssetName = "" },
+			wantReason:  "releaseAssetName is required",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing install mode",
+			mutate:      func(metadata *installMetadata) { metadata.InstallMode = "" },
+			wantReason:  "installMode must be release-package",
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing os",
+			mutate:      func(metadata *installMetadata) { metadata.OS = "" },
+			wantReason:  "os must be " + runtime.GOOS,
+			wantCurrent: toolVersion,
+		},
+		{
+			name:        "missing arch",
+			mutate:      func(metadata *installMetadata) { metadata.Arch = "" },
+			wantReason:  "arch must be " + runtime.GOARCH,
+			wantCurrent: toolVersion,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := releaseInstallMetadataForTest(t, toolVersion)
+			tc.mutate(&metadata)
+			metadataPath := filepath.Join(temp, strings.ReplaceAll(tc.name, " ", "-")+".json")
+			writeInstallMetadataForTest(t, metadataPath, metadata)
+
+			status, err := currentUpdateStatus(filepath.Join(temp, "slidex-"+tc.name), metadataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled || status.Status != "disabled" {
+				t.Fatalf("incomplete release metadata should disable updates: %#v", status)
+			}
+			if !strings.Contains(status.Reason, "update is disabled fail-closed") || !strings.Contains(status.Reason, tc.wantReason) {
+				t.Fatalf("incomplete release metadata reason missing %q: %#v", tc.wantReason, status)
+			}
+			if tc.wantCurrent != "" && status.CurrentVersion != tc.wantCurrent {
+				t.Fatalf("current version = %q, want %q", status.CurrentVersion, tc.wantCurrent)
+			}
+		})
+	}
+}
+
+func TestUpdateCheckIncompleteReleaseMetadataDoesNotFetchReleaseAPI(t *testing.T) {
+	temp := t.TempDir()
+	metadataPath := filepath.Join(temp, "install.json")
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	metadata.Commit = ""
+	writeInstallMetadataForTest(t, metadataPath, metadata)
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateCheck([]string{"--install-root", filepath.Join(temp, "slidex"), "--metadata", metadataPath, "--api-url", server.URL, "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("incomplete release metadata check failed: %v\n%s", runErr, output)
+	}
+	if called {
+		t.Fatal("incomplete release metadata should not fetch release metadata")
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid incomplete metadata check JSON: %v\n%s", err, output)
+	}
+	if status.Status != "disabled" || status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled {
+		t.Fatalf("incomplete release metadata check should be disabled: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "commit is required") {
+		t.Fatalf("incomplete release metadata reason missing: %#v", status)
 	}
 }
 
@@ -489,13 +601,7 @@ func candidateExtractedUnderForTest(t *testing.T, root string) bool {
 
 func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	installRoot := t.TempDir()
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
 	if err != nil {
 		t.Fatal(err)
@@ -515,13 +621,7 @@ func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
 	if err != nil {
 		t.Fatal(err)
@@ -541,13 +641,7 @@ func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(canaryRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(canaryRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion + "-aaaaaaa",
-		Channel:       updateChannelCanary,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(canaryRoot), releaseInstallMetadataForTest(t, toolVersion+"-aaaaaaa"))
 	canaryStatus, err := currentUpdateStatus(canaryRoot, installMetadataPath(canaryRoot))
 	if err != nil {
 		t.Fatal(err)
@@ -575,13 +669,7 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
@@ -642,13 +730,7 @@ func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
@@ -714,13 +796,7 @@ func TestRunUpdateApplyRequiresAttestationBeforeActivation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
@@ -763,13 +839,7 @@ func TestRunUpdateApplyArchiveAttestationFailureJSONReportsFailureContract(t *te
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
@@ -832,13 +902,7 @@ func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
@@ -875,13 +939,7 @@ func TestRunUpdateApplyDownloadRequiresAttestationBeforeExtraction(t *testing.T)
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
@@ -1077,13 +1135,7 @@ func TestRunUpdateApplyCandidateRequiresAllowUnverifiedPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 
@@ -1105,13 +1157,7 @@ func TestRunUpdateApplyCandidateRecordsAllowUnverifiedAttestation(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 
@@ -1151,13 +1197,7 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	stagedRoot, pendingPath, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
@@ -1206,13 +1246,7 @@ func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
@@ -1276,13 +1310,7 @@ func TestActivatePendingUpdateRejectsTargetVersionChannelSwitch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion + "-aaaaaaa",
-		Channel:       updateChannelCanary,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion+"-aaaaaaa"))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
@@ -1315,13 +1343,7 @@ func TestRunUpdateActivatePendingRequiresYes(t *testing.T) {
 func TestUpdateVerifyFailsUntilPluginVerified(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginRestartRequired(installRoot, "0.2.0", "v0.2.0"); err != nil {
 		t.Fatal(err)
 	}
@@ -1340,13 +1362,7 @@ func TestUpdateVerifyFailsUntilPluginVerified(t *testing.T) {
 func TestUpdateVerifyFailsOnPluginDrift(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginDrift(installRoot, toolVersion+"+codex.test", filepath.Join(t.TempDir(), "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -1367,13 +1383,7 @@ func TestUpdateVerifyFailsOnPluginDrift(t *testing.T) {
 func TestUpdateVerifyJSONReportsRestartRequiredContract(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginRestartRequired(installRoot, "0.2.0", "v0.2.0"); err != nil {
 		t.Fatal(err)
 	}
@@ -1408,13 +1418,7 @@ func TestUpdateVerifyJSONReportsRestartRequiredContract(t *testing.T) {
 func TestUpdateStatusRejectsForgedVerifiedUpdateState(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := os.MkdirAll(filepath.Dir(updateStatePath(installRoot)), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1441,13 +1445,7 @@ func TestUpdateStatusRejectsForgedVerifiedUpdateState(t *testing.T) {
 func TestUpdateCheckHumanAndJSONReportAvailableRelease(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		t.Fatal(err)
@@ -1540,13 +1538,7 @@ func TestUpdateCheckLocalDevelopmentDoesNotFetchReleaseAPI(t *testing.T) {
 func TestUpdateStatusHumanAndJSONReportPendingActivation(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(t.TempDir(), "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	_, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
@@ -1753,6 +1745,31 @@ func writeInstallMetadataForTest(t *testing.T, path string, metadata installMeta
 	}
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func releaseInstallMetadataForTest(t *testing.T, version string) installMetadata {
+	t.Helper()
+	channel := channelFromPackageVersion(version)
+	if channel != updateChannelProduction && channel != updateChannelCanary {
+		t.Fatalf("test release metadata version must be production or canary, got %q", version)
+	}
+	contract, err := releaseAssetContractFor("v"+version, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return installMetadata{
+		SchemaVersion:    installMetadataSchemaVersion,
+		ToolName:         toolName,
+		Version:          version,
+		Channel:          channel,
+		Tag:              "v" + version,
+		Commit:           "0123456789abcdef",
+		BuildTime:        "2026-06-10T00:00:00Z",
+		ReleaseAssetName: contract.ArchiveName,
+		InstallMode:      installModeReleasePackage,
+		OS:               runtime.GOOS,
+		Arch:             runtime.GOARCH,
 	}
 }
 

@@ -49,6 +49,7 @@ const (
 var (
 	stablePackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	canaryPackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{7,40}$`)
+	gitCommitPattern            = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 )
 
 type installMetadata struct {
@@ -1488,37 +1489,58 @@ func installedReleaseMetadataIssue(metadata *installMetadata) string {
 	if metadata == nil {
 		return ""
 	}
-	if metadata.Version != "" {
-		versionChannel := channelFromPackageVersion(metadata.Version)
-		if versionChannel != updateChannelProduction && versionChannel != updateChannelCanary {
-			return "install metadata version must resolve to production or canary, got " + metadata.Version
-		}
-		if metadata.Channel != "" && metadata.Channel != versionChannel {
-			return "install metadata channel must match package version channel " + versionChannel + ", got " + metadata.Channel
-		}
-		if metadata.Tag != "" {
-			tagVersion, err := releasePackageVersionFromTag(metadata.Tag)
-			if err != nil || tagVersion != metadata.Version {
-				return "install metadata tag must resolve to " + metadata.Version + ", got " + metadata.Tag
-			}
-		}
-		if metadata.ReleaseAssetName != "" {
-			contract, err := releaseAssetContractFor("v"+metadata.Version, runtime.GOOS, runtime.GOARCH)
-			if err != nil {
-				return err.Error()
-			}
-			if metadata.ReleaseAssetName != contract.ArchiveName {
-				return "install metadata releaseAssetName must be " + contract.ArchiveName + ", got " + metadata.ReleaseAssetName
-			}
-		}
+	if metadata.SchemaVersion != installMetadataSchemaVersion {
+		return "install metadata schemaVersion must be " + installMetadataSchemaVersion + ", got " + metadata.SchemaVersion
 	}
-	if metadata.InstallMode != "" && metadata.InstallMode != installModeReleasePackage {
+	if metadata.ToolName != toolName {
+		return "install metadata toolName must be " + toolName + ", got " + metadata.ToolName
+	}
+	if metadata.Version == "" {
+		return "install metadata version is required"
+	}
+	versionChannel := channelFromPackageVersion(metadata.Version)
+	if versionChannel != updateChannelProduction && versionChannel != updateChannelCanary {
+		return "install metadata version must resolve to production or canary, got " + metadata.Version
+	}
+	if metadata.Channel != versionChannel {
+		return "install metadata channel must match package version channel " + versionChannel + ", got " + metadata.Channel
+	}
+	if metadata.Tag == "" {
+		return "install metadata tag is required"
+	}
+	tagVersion, err := releasePackageVersionFromTag(metadata.Tag)
+	if err != nil || tagVersion != metadata.Version {
+		return "install metadata tag must resolve to " + metadata.Version + ", got " + metadata.Tag
+	}
+	if metadata.Commit == "" {
+		return "install metadata commit is required"
+	}
+	if !gitCommitPattern.MatchString(metadata.Commit) {
+		return "install metadata commit must be a 7-40 character lowercase git SHA, got " + metadata.Commit
+	}
+	if metadata.BuildTime == "" {
+		return "install metadata buildTime is required"
+	}
+	if _, err := time.Parse(time.RFC3339, metadata.BuildTime); err != nil {
+		return "install metadata buildTime must be RFC3339: " + err.Error()
+	}
+	if metadata.ReleaseAssetName == "" {
+		return "install metadata releaseAssetName is required"
+	}
+	contract, err := releaseAssetContractFor("v"+metadata.Version, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err.Error()
+	}
+	if metadata.ReleaseAssetName != contract.ArchiveName {
+		return "install metadata releaseAssetName must be " + contract.ArchiveName + ", got " + metadata.ReleaseAssetName
+	}
+	if metadata.InstallMode != installModeReleasePackage {
 		return "install metadata installMode must be " + installModeReleasePackage + ", got " + metadata.InstallMode
 	}
-	if metadata.OS != "" && metadata.OS != runtime.GOOS {
+	if metadata.OS != runtime.GOOS {
 		return "install metadata os must be " + runtime.GOOS + ", got " + metadata.OS
 	}
-	if metadata.Arch != "" && metadata.Arch != runtime.GOARCH {
+	if metadata.Arch != runtime.GOARCH {
 		return "install metadata arch must be " + runtime.GOARCH + ", got " + metadata.Arch
 	}
 	return ""

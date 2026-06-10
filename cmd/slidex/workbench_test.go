@@ -559,13 +559,7 @@ func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 func TestWorkbenchHTMLRendersRestartRequiredBannerWithoutBlockingForm(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginRestartRequired(installRoot, "0.2.0", "v0.2.0"); err != nil {
 		t.Fatal(err)
 	}
@@ -615,13 +609,7 @@ func TestWorkbenchHTMLRendersUpdatesDisabledBanner(t *testing.T) {
 func TestWorkbenchHTMLRendersPluginDriftBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginDrift(installRoot, toolVersion, filepath.Join(t.TempDir(), "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -643,13 +631,7 @@ func TestWorkbenchHTMLRendersPluginDriftBanner(t *testing.T) {
 func TestWorkbenchHTMLRendersPluginVerifiedBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -676,13 +658,7 @@ func TestWorkbenchHTMLRendersPluginVerifiedBanner(t *testing.T) {
 func TestWorkbenchHTMLRendersPendingActivationBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(t.TempDir(), "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
@@ -720,13 +696,7 @@ func TestWorkbenchHTMLStatusBannersDoNotOverlapDeckForm(t *testing.T) {
 
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion + "-abcdef0",
-		Channel:       updateChannelCanary,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion+"-abcdef0"))
 	if err := markPluginRestartRequired(installRoot, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
 		t.Fatal(err)
 	}
@@ -949,13 +919,7 @@ func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
 func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion + "-abcdef0",
-		Channel:       updateChannelCanary,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion+"-abcdef0"))
 	if err := markPluginRestartRequired(installRoot, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
 		t.Fatal(err)
 	}
@@ -984,13 +948,7 @@ func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 func TestPublicWorkbenchStatusIncludesPendingActivationBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(t.TempDir(), "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {

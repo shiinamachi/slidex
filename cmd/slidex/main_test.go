@@ -1260,13 +1260,7 @@ func TestAppServerPluginSmokeHelpers(t *testing.T) {
 func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
 		t.Fatal(err)
 	}
@@ -1305,13 +1299,7 @@ func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
 		t.Fatal(err)
 	}
@@ -1410,13 +1398,7 @@ func TestAppServerPluginSmokeUsesDocumentedPluginSurfaces(t *testing.T) {
 
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
 		t.Fatal(err)
 	}
@@ -1917,13 +1899,7 @@ func TestDoctorReportIncludesUpdateSnapshot(t *testing.T) {
 
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, installMetadata{
-		SchemaVersion: installMetadataSchemaVersion,
-		ToolName:      toolName,
-		Version:       toolVersion,
-		Channel:       updateChannelProduction,
-		InstallMode:   installModeReleasePackage,
-	})
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	t.Setenv(updateInstallRootEnv, installRoot)
 	t.Setenv(updateInstallMetadataEnv, metadataPath)
 
