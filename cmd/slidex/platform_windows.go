@@ -199,6 +199,76 @@ func requirePlatformPrivateFile(path, flagName string) error {
 	return nil
 }
 
+func applyPlatformFileMode(path string, mode os.FileMode) error {
+	if mode&0o077 != 0 {
+		return nil
+	}
+	return windowsApplyPrivateDACL(path, false)
+}
+
+func applyPlatformDirMode(path string, mode os.FileMode) error {
+	if mode&0o077 != 0 {
+		return nil
+	}
+	return windowsApplyPrivateDACL(path, true)
+}
+
+func windowsApplyPrivateDACL(path string, inherit bool) error {
+	acl, err := windowsPrivateACL(inherit)
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		acl,
+		nil,
+	)
+}
+
+func windowsPrivateACL(inherit bool) (*windows.ACL, error) {
+	userSID, err := windowsCurrentUserSID()
+	if err != nil {
+		return nil, err
+	}
+	sids := []*windows.SID{userSID}
+	for _, sidType := range []windows.WELL_KNOWN_SID_TYPE{
+		windows.WinLocalSystemSid,
+		windows.WinBuiltinAdministratorsSid,
+	} {
+		sid, err := windows.CreateWellKnownSid(sidType)
+		if err != nil {
+			return nil, err
+		}
+		sids = append(sids, sid)
+	}
+	inheritance := uint32(windows.NO_INHERITANCE)
+	if inherit {
+		inheritance = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+	}
+	entries := make([]windows.EXPLICIT_ACCESS, 0, len(sids))
+	for i, sid := range sids {
+		trusteeType := windows.TRUSTEE_TYPE(windows.TRUSTEE_IS_WELL_KNOWN_GROUP)
+		if i == 0 {
+			trusteeType = windows.TRUSTEE_IS_USER
+		}
+		entries = append(entries, windows.EXPLICIT_ACCESS{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Inheritance:       inheritance,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  trusteeType,
+				TrusteeValue: windows.TrusteeValueFromSID(sid),
+			},
+		})
+	}
+	return windows.ACLFromEntries(entries, nil)
+}
+
 func windowsPrivateFileForbiddenReason(path string) (string, error) {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {

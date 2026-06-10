@@ -1702,6 +1702,11 @@ func acquireWorkbenchLock(outDir string) (func(), error) {
 		}
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
+			if err := applyPlatformFileMode(lockPath, 0o600); err != nil {
+				_ = f.Close()
+				_ = os.Remove(lockPath)
+				return nil, err
+			}
 			_, _ = fmt.Fprintf(f, "pid=%d acquired=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 			return func() {
 				_ = f.Close()

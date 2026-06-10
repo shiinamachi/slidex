@@ -532,7 +532,7 @@ func writeAppServerTurnResult(outDir string, result appServerTurnResult) (string
 	}
 	eventPath := filepath.Join(dir, result.Stage+"_appserver_events.jsonl")
 	if len(result.Events) > 0 {
-		f, err := os.OpenFile(eventPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		f, err := openSecureTruncateFile(eventPath, 0o600)
 		if err != nil {
 			return "", result, err
 		}

@@ -4520,7 +4520,7 @@ func attachStructuredReviewRuntimeEvidence(deckAbs string, payload map[string]an
 
 func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[string]any) (string, error) {
 	outDir := filepath.Join(deckAbs, "out", "agent_reviews", fmt.Sprintf("round_%02d", round))
-	if err := os.MkdirAll(outDir, 0o700); err != nil {
+	if err := ensureSecureDir(outDir); err != nil {
 		return "", err
 	}
 	reportPath := filepath.Join(outDir, "reviewer_"+stage+".json")
@@ -5970,13 +5970,18 @@ func appendRunLog(outDir string, event map[string]any) error {
 }
 
 func acquireRunLock(outDir string) (func(), error) {
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := ensureSecureDir(outDir); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(outDir, ".slidex.lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, exitCodeError(1, "another slidex run appears active: %s", path)
+	}
+	if err := applyPlatformFileMode(path, 0o600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return nil, err
 	}
 	_, _ = fmt.Fprintf(f, "pid=%d\nstarted=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 	_ = f.Close()
@@ -6015,6 +6020,10 @@ func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := applyPlatformFileMode(tmpPath, mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		return err
@@ -6026,6 +6035,9 @@ func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := replaceFile(tmpPath, path); err != nil {
+		return err
+	}
+	if err := applyPlatformFileMode(path, mode); err != nil {
 		return err
 	}
 	cleanup = false
@@ -6048,6 +6060,10 @@ func openSecureTruncateFile(path string, mode os.FileMode) (*os.File, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	if err := applyPlatformFileMode(path, mode); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return f, nil
 }
 
@@ -6064,6 +6080,10 @@ func openSecureAppendFile(path string, mode os.FileMode) (*os.File, error) {
 		return nil, err
 	}
 	if err := verifySecureOpenFile(path, f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := applyPlatformFileMode(path, mode); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -6098,7 +6118,10 @@ func ensureSecureDir(path string) error {
 	if err := rejectSymlinkAncestors(path); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o700)
+	if err := os.Chmod(path, 0o700); err != nil {
+		return err
+	}
+	return applyPlatformDirMode(path, 0o700)
 }
 
 func rejectSecureWriteTarget(path string) error {
@@ -6880,7 +6903,7 @@ func recordGoalSync(outDir, threadID, status string, events []map[string]any) er
 		if err := ensureSecureDir(filepath.Dir(path)); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		f, err := openSecureAppendFile(path, 0o600)
 		if err != nil {
 			return err
 		}

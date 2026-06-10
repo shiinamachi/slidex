@@ -93,6 +93,14 @@ func requirePlatformPrivateFile(string, string) error {
 	return nil
 }
 
+func applyPlatformFileMode(string, os.FileMode) error {
+	return nil
+}
+
+func applyPlatformDirMode(string, os.FileMode) error {
+	return nil
+}
+
 func replaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }

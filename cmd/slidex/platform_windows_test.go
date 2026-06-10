@@ -131,6 +131,39 @@ func TestRequirePlatformPrivateFileRejectsBroadWindowsACL(t *testing.T) {
 	}
 }
 
+func TestSecureWriteFileAppliesPrivateWindowsACL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out", "token.json")
+	if err := secureWriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reason, err := windowsPrivateFileForbiddenReason(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason != "" {
+		t.Fatalf("secureWriteFile left non-private Windows ACL: %s", reason)
+	}
+}
+
+func TestOpenSecureAppendFileAppliesPrivateWindowsACL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out", "run_log.jsonl")
+	f, err := openSecureAppendFile(path, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("{}\n")
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reason, err := windowsPrivateFileForbiddenReason(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason != "" {
+		t.Fatalf("openSecureAppendFile left non-private Windows ACL: %s", reason)
+	}
+}
+
 func makeTestPrivateFile(t *testing.T, path string) {
 	t.Helper()
 	userSID, err := windowsCurrentUserSID()
