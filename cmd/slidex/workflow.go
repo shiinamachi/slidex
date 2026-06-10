@@ -407,6 +407,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 		path string
 		kind string
 	}{
+		{filepath.Join("cmd", "slidex", "VERSION"), "version source"},
 		{filepath.Join(".agents", "plugins", "marketplace.json"), "repo marketplace"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"), "plugin manifest"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"), "plugin version lock"},
@@ -419,6 +420,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 			findings = append(findings, fail("doctor.plugin_package", "missing "+check.kind+": "+err.Error(), check.path))
 		}
 	}
+	findings = append(findings, validateVersionSourceFile(filepath.Join("cmd", "slidex", "VERSION"))...)
 	findings = append(findings, validatePluginJSONManifest(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"))...)
 	findings = append(findings, validatePluginVersionLock(filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"))...)
 	findings = append(findings, validateMarketplaceManifest(filepath.Join(".agents", "plugins", "marketplace.json"))...)
@@ -428,6 +430,21 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 		findings = append(findings, fail("doctor.plugin_list", "codex plugin list failed", "codex plugin list"))
 	}
 	return findings
+}
+
+func validateVersionSourceFile(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	version := strings.TrimSpace(string(raw))
+	if version != toolVersion {
+		return []qaFinding{fail("doctor.version_source", "version source must match embedded CLI version "+toolVersion+", got "+version, path)}
+	}
+	if !isReleaseBaseVersion(version) {
+		return []qaFinding{fail("doctor.version_source", "version source must contain one exact release version", path)}
+	}
+	return nil
 }
 
 func pluginDoctorSnapshot(pluginList string) map[string]any {
@@ -2417,6 +2434,131 @@ func validateManagedListenURLForOS(goos, listen string) error {
 		return exitCodeError(4, "managed app-server unix socket path is too long for %s: %d bytes exceeds %d-byte sockaddr limit; choose a shorter --listen path or use ws://127.0.0.1:<port>/app", goos, len([]byte(socketPath)), limit)
 	}
 	return nil
+}
+
+func runSyncVersionMetadata(args []string) error {
+	fs := flag.NewFlagSet("sync-version-metadata", flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "write JSON status")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return exitCodeError(2, "usage: slidex sync-version-metadata [--json]")
+	}
+	manifestPath := filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")
+	lockPath := filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json")
+	updated, err := syncVersionMetadataFiles(manifestPath, lockPath)
+	if err != nil {
+		return err
+	}
+	status := map[string]any{
+		"toolName":       toolName,
+		"version":        toolVersion,
+		"pluginManifest": filepath.ToSlash(manifestPath),
+		"versionLock":    filepath.ToSlash(lockPath),
+		"updated":        updated,
+		"status":         "synced",
+	}
+	if *jsonOut {
+		return printJSON(status)
+	}
+	fmt.Printf("%s %s version metadata synced\n", toolName, toolVersion)
+	return nil
+}
+
+func syncVersionMetadataFiles(manifestPath, lockPath string) ([]string, error) {
+	updated := []string{}
+	manifest, err := readJSONObjectFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	manifestChanged := false
+	currentVersion := metadataString(manifest["version"])
+	manifestVersion := toolVersion + pluginVersionBuildMetadata(currentVersion)
+	if manifestVersion != currentVersion {
+		manifest["version"] = manifestVersion
+		manifestChanged = true
+	}
+	if metadataString(manifest["name"]) == "" {
+		manifest["name"] = toolName
+		manifestChanged = true
+	}
+	author, _ := manifest["author"].(map[string]any)
+	if author == nil {
+		author = map[string]any{}
+		manifest["author"] = author
+	}
+	if metadataString(author["name"]) != toolDeveloperName {
+		author["name"] = toolDeveloperName
+		manifestChanged = true
+	}
+	if metadataString(manifest["license"]) != toolLicenseIdentifier {
+		manifest["license"] = toolLicenseIdentifier
+		manifestChanged = true
+	}
+	iface, _ := manifest["interface"].(map[string]any)
+	if iface == nil {
+		iface = map[string]any{}
+		manifest["interface"] = iface
+	}
+	if metadataString(iface["developerName"]) != toolDeveloperName {
+		iface["developerName"] = toolDeveloperName
+		manifestChanged = true
+	}
+	if manifestChanged {
+		updated = append(updated, filepath.ToSlash(manifestPath))
+		if err := writeSourceJSONFile(manifestPath, manifest); err != nil {
+			return nil, err
+		}
+	}
+
+	lock, err := readJSONObjectFile(lockPath)
+	if err != nil {
+		return nil, err
+	}
+	lockChanged := false
+	setLock := func(key, value string) {
+		if metadataString(lock[key]) == value {
+			return
+		}
+		lock[key] = value
+		lockChanged = true
+	}
+	setLock("schemaVersion", "slidex.pluginVersionLock.v1")
+	setLock("pluginName", toolName)
+	setLock("pluginVersion", toolVersion)
+	setLock("requiredCodexCliVersion", requiredCodexVersion)
+	setLock("slidexCliVersion", toolVersion)
+	setLock("goVersion", readGoModVersion("go.mod"))
+	setLock("developerName", toolDeveloperName)
+	setLock("license", toolLicenseIdentifier)
+	setLock("marketplaceName", pluginMarketplaceName)
+	if lockChanged {
+		updated = append(updated, filepath.ToSlash(lockPath))
+		if err := writeSourceJSONFile(lockPath, lock); err != nil {
+			return nil, err
+		}
+	}
+	return updated, nil
+}
+
+func readJSONObjectFile(path string) (map[string]any, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
+	}
+	return value, nil
+}
+
+func pluginVersionBuildMetadata(version string) string {
+	if idx := strings.Index(strings.TrimSpace(version), "+"); idx >= 0 {
+		return strings.TrimSpace(version)[idx:]
+	}
+	return "+codex.local"
 }
 
 func unixSocketPathFromListenURL(u *url.URL) (string, error) {

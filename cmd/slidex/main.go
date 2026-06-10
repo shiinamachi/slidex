@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,14 +32,20 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
+//go:embed VERSION
+var embeddedToolVersion string
+
 const (
-	toolName                   = "slidex"
-	toolVersion                = "0.1.0"
-	toolDeveloperName          = "shiinamachi"
-	toolLicenseIdentifier      = "MIT"
-	toolLicenseName            = "MIT License"
-	pluginMarketplaceName      = "shiinamachi"
-	pluginMarketplaceDisplay   = "shiinamachi"
+	toolName                 = "slidex"
+	toolDeveloperName        = "shiinamachi"
+	toolLicenseIdentifier    = "MIT"
+	toolLicenseName          = "MIT License"
+	pluginMarketplaceName    = "shiinamachi"
+	pluginMarketplaceDisplay = "shiinamachi"
+)
+
+var (
+	toolVersion                = mustEmbeddedVersion(embeddedToolVersion)
 	pluginVersionDoctorExample = toolVersion + "+doctor"
 )
 
@@ -46,6 +53,18 @@ const (
 	chromeVersionTimeout = 8 * time.Second
 	chromeCommandTimeout = 45 * time.Second
 )
+
+func mustEmbeddedVersion(raw string) string {
+	version := strings.TrimSpace(raw)
+	if !isReleaseBaseVersion(version) {
+		panic("cmd/slidex/VERSION must contain one exact release version")
+	}
+	return version
+}
+
+func isReleaseBaseVersion(version string) bool {
+	return regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$`).MatchString(strings.TrimSpace(version))
+}
 
 type fileEntry struct {
 	Path    string `json:"path"`
@@ -199,6 +218,8 @@ func main() {
 		err = runRevise(os.Args[2:])
 	case "sync-html-edits":
 		err = runSyncHTMLEdits(os.Args[2:])
+	case "sync-version-metadata":
+		err = runSyncVersionMetadata(os.Args[2:])
 	case "finalize":
 		err = runFinalize(os.Args[2:])
 	case "package":
@@ -255,6 +276,7 @@ Commands:
   review --deck decks/<deck_id> [--stage all|design|html|qa|delivery]
   revise --deck decks/<deck_id>
   sync-html-edits --deck decks/<deck_id>
+  sync-version-metadata [--json]
   finalize --deck decks/<deck_id>
   package --deck decks/<deck_id>
   clean --deck decks/<deck_id> [--logs] [--older-than DURATION]
@@ -4485,6 +4507,15 @@ func writeJSONFile(path string, v any) error {
 	}
 	raw = append(raw, '\n')
 	return secureWriteFile(path, raw, 0o600)
+}
+
+func writeSourceJSONFile(path string, v any) error {
+	raw, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	return os.WriteFile(path, raw, 0o644)
 }
 
 func copyFile(src, dst string) error {

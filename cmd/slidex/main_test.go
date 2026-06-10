@@ -1591,7 +1591,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "go run ./cmd/slidex version", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "cmd/slidex/VERSION", "go run ./cmd/slidex version", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
@@ -1779,6 +1779,9 @@ func TestVersionMetadataContractStaysAligned(t *testing.T) {
 	manifestPath := filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")
 	lockPath := filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json")
 	marketplacePath := filepath.Join(".agents", "plugins", "marketplace.json")
+	if findings := validateVersionSourceFile(filepath.Join("cmd", "slidex", "VERSION")); hasFailures(findings) {
+		t.Fatalf("version source drifted: %#v", findings)
+	}
 	if findings := validatePluginJSONManifest(manifestPath); hasFailures(findings) {
 		t.Fatalf("plugin manifest metadata drifted: %#v", findings)
 	}
@@ -1801,16 +1804,89 @@ func TestVersionMetadataContractStaysAligned(t *testing.T) {
 	if got := metadataString(manifest["license"]); got != toolLicenseIdentifier {
 		t.Fatalf("plugin license = %q, want %q", got, toolLicenseIdentifier)
 	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(root, "cmd", "slidex", "VERSION"))); got != toolVersion {
+		t.Fatalf("cmd/slidex/VERSION = %q, want %q", got, toolVersion)
+	}
 
 	licenseText := readFileOrEmpty(filepath.Join(root, "LICENSE"))
 	if !strings.Contains(licenseText, toolLicenseName) || !strings.Contains(licenseText, toolDeveloperName) {
 		t.Fatal("LICENSE must declare MIT License for shiinamachi")
 	}
 	versioningText := readFileOrEmpty(filepath.Join(root, "VERSIONING.md"))
-	for _, want := range []string{"toolVersion", "version-lock.json", "marketplace.json", "scripts/package-release.sh"} {
+	for _, want := range []string{"cmd/slidex/VERSION", "sync-version-metadata", "version-lock.json", "marketplace.json", "scripts/package-release.sh"} {
 		if !strings.Contains(versioningText, want) {
 			t.Fatalf("VERSIONING.md is missing %q", want)
 		}
+	}
+}
+
+func TestSyncVersionMetadataUsesVersionSource(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "plugin.json")
+	lockPath := filepath.Join(dir, "version-lock.json")
+	if err := os.WriteFile(manifestPath, []byte(`{
+  "name": "slidex",
+  "version": "9.9.9+codex.keep",
+  "author": {"name": "old"},
+  "license": "UNLICENSED",
+  "interface": {"developerName": "old"},
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte(`{
+  "schemaVersion": "slidex.pluginVersionLock.v1",
+  "pluginName": "slidex",
+  "pluginVersion": "9.9.9",
+  "requiredCodexCliVersion": "0.0.0",
+  "slidexCliVersion": "9.9.9",
+  "goVersion": "0.0.0"
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := syncVersionMetadataFiles(manifestPath, lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated files = %#v, want manifest and lock", updated)
+	}
+	var manifest map[string]any
+	readJSONForTest(t, manifestPath, &manifest)
+	if got := metadataString(manifest["version"]); got != toolVersion+"+codex.keep" {
+		t.Fatalf("manifest version = %q", got)
+	}
+	author, _ := manifest["author"].(map[string]any)
+	if got := metadataString(author["name"]); got != toolDeveloperName {
+		t.Fatalf("manifest author = %q", got)
+	}
+	if got := metadataString(manifest["license"]); got != toolLicenseIdentifier {
+		t.Fatalf("manifest license = %q", got)
+	}
+	var lock map[string]any
+	readJSONForTest(t, lockPath, &lock)
+	if got := metadataString(lock["pluginVersion"]); got != toolVersion {
+		t.Fatalf("lock pluginVersion = %q", got)
+	}
+	if got := metadataString(lock["slidexCliVersion"]); got != toolVersion {
+		t.Fatalf("lock slidexCliVersion = %q", got)
+	}
+	if got := metadataString(lock["marketplaceName"]); got != pluginMarketplaceName {
+		t.Fatalf("lock marketplaceName = %q", got)
 	}
 }
 
