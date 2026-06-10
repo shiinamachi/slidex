@@ -28,13 +28,20 @@ Store the chosen extension as `EXT` (`tar.gz` or `zip`).
 
 ## Step 2 — Resolve the latest release tag
 
-Use GitHub CLI if available:
+Verified release installs require GitHub CLI (`gh`) because release integrity and
+artifact attestations are verified with GitHub CLI commands before the package is
+trusted. If `gh` is unavailable or unauthenticated, stop and report that a
+verified release install cannot be completed.
+
+Use GitHub CLI:
 
 ```bash
 gh release view --repo shiinamachi/slidex --json tagName -q .tagName
 ```
 
-If `gh` is not installed, query the GitHub API:
+For diagnostic lookup only, the public GitHub API can show whether a release tag
+exists, but this does not replace GitHub CLI release and attestation
+verification:
 
 ```bash
 curl -sL https://api.github.com/repos/shiinamachi/slidex/releases/latest | grep -Po '"tag_name":\s*"\K[^"]+'
@@ -220,13 +227,17 @@ codex plugin add slidex@shiinamachi --json
 codex plugin list
 ```
 
+After adding or updating the local marketplace/plugin, restart Codex and start a
+new thread before invoking `@slidex` or bundled skills.
+
 ### Option B — Codex App UI
 
 1. Open the Codex App.
 2. Navigate to Settings → Plugins → Add Marketplace.
 3. Point to the `marketplace.json` file inside the install directory.
 4. Install and enable the `slidex` plugin.
-5. Start a **new Codex thread** before invoking `@slidex` or bundled skills.
+5. Restart Codex and start a **new Codex thread** before invoking `@slidex` or
+   bundled skills.
 
 ---
 
@@ -248,7 +259,7 @@ Expected results:
   report `local-development` with automatic updates disabled.
 - `slidex doctor --render` checks the workspace structure and browser
   availability, and exits with code `0`.
-- After registering the plugin, start a new Codex thread and run:
+- After registering the plugin, restart Codex, start a new thread, and run:
 
   ```bash
   slidex codex app-server plugin-smoke --json
@@ -260,8 +271,13 @@ Expected results:
 - If update status reports `restartRequired: true`, restart Codex, start a new
   thread, rerun `slidex codex app-server plugin-smoke --json`, and rerun
   `slidex update verify --json`.
-- Treat bundled skills as active only after plugin smoke and `update verify`
-  report verified plugin and skill state for this install.
+- Treat bundled skills as active only after plugin smoke reports
+  `pluginVerificationStatus: "verified"`, `pluginInstalled: true`,
+  `pluginEnabled: true`, `startSkillFound: true`, `pluginPath` under
+  `<installRoot>/plugins/slidex`, and `startSkillPath` ending in
+  `skills/slidex-start/SKILL.md`, and after `slidex update verify --json`
+  reports `restartRequired: false`, `pluginVerificationStatus: "verified"`,
+  and matching `verifiedPluginPath` / `verifiedStartSkillPath` values.
 
 > If `slidex doctor --render` reports that Chrome is not detected, set one of
 > these environment variables to the browser binary path:
@@ -356,7 +372,13 @@ After any update that may change bundled plugin content:
 1. Restart Codex.
 2. Start a new thread.
 3. Run `slidex codex app-server plugin-smoke --json`.
-4. Run `slidex update verify --json` and confirm `restartRequired` is false.
+4. Confirm plugin smoke reports `pluginVerificationStatus: "verified"`,
+   `pluginInstalled: true`, `pluginEnabled: true`, `startSkillFound: true`,
+   `pluginPath` under `<installRoot>/plugins/slidex`, and `startSkillPath`
+   ending in `skills/slidex-start/SKILL.md`.
+5. Run `slidex update verify --json` and confirm `restartRequired` is false,
+   `pluginVerificationStatus` is `verified`, and `verifiedPluginPath` /
+   `verifiedStartSkillPath` match this install root.
 
 ---
 

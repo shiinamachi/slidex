@@ -2088,7 +2088,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "GitHub artifact attestation", "gh release verify", "gh attestation verify", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "GitHub CLI (`gh`)", "SHA-256", "GitHub artifact attestation", "gh release verify", "gh attestation verify", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
@@ -2130,6 +2130,7 @@ func TestUserFacingInstallDocsExposeCanonicalOneShotPrompt(t *testing.T) {
 		"https://github.com/shiinamachi/slidex",
 		"read INSTALL.md",
 		"detect the local OS and architecture",
+		"GitHub CLI is available",
 		"latest GitHub Release tag",
 		"SHA-256 checksum",
 		"GitHub artifact attestation",
