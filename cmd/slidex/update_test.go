@@ -358,6 +358,9 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	if result.Status != "applied" || !result.RestartRequired {
 		t.Fatalf("apply result = %#v", result)
 	}
+	if result.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("apply plugin status = %q", result.PluginVerificationStatus)
+	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
 		t.Fatalf("activated VERSION = %q", got)
 	}
@@ -529,6 +532,40 @@ func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	err := runUpdateApply([]string{"--install-root", sourceRoot, "--metadata", filepath.Join(sourceRoot, ".slidex", "missing.json"), "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
 	if err == nil || !strings.Contains(err.Error(), "updates are disabled") {
 		t.Fatalf("local-development apply err = %v", err)
+	}
+}
+
+func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	stagedRoot, pendingPath, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stagedRoot, "VERSION")); err != nil {
+		t.Fatalf("staged candidate missing: %v", err)
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("pending update missing: %v", err)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" || status.TargetVersion != "0.2.0" {
+		t.Fatalf("pending handoff update status = %#v", status)
 	}
 }
 

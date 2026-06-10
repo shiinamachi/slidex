@@ -108,20 +108,21 @@ type updateStatus struct {
 }
 
 type updateApplyResult struct {
-	ToolName                string                  `json:"toolName"`
-	CurrentVersion          string                  `json:"currentVersion"`
-	TargetVersion           string                  `json:"targetVersion"`
-	TargetTag               string                  `json:"targetTag,omitempty"`
-	Channel                 string                  `json:"channel"`
-	InstallRoot             string                  `json:"installRoot"`
-	Status                  string                  `json:"status"`
-	StagedRoot              string                  `json:"stagedRoot,omitempty"`
-	BackupRoot              string                  `json:"backupRoot,omitempty"`
-	PendingUpdatePath       string                  `json:"pendingUpdatePath,omitempty"`
-	RestartRequired         bool                    `json:"restartRequired"`
-	NextVerificationCommand string                  `json:"nextVerificationCommand"`
-	Attestation             attestationVerification `json:"attestation"`
-	CandidateValidation     []qaFinding             `json:"candidateValidation,omitempty"`
+	ToolName                 string                  `json:"toolName"`
+	CurrentVersion           string                  `json:"currentVersion"`
+	TargetVersion            string                  `json:"targetVersion"`
+	TargetTag                string                  `json:"targetTag,omitempty"`
+	Channel                  string                  `json:"channel"`
+	InstallRoot              string                  `json:"installRoot"`
+	Status                   string                  `json:"status"`
+	StagedRoot               string                  `json:"stagedRoot,omitempty"`
+	BackupRoot               string                  `json:"backupRoot,omitempty"`
+	PendingUpdatePath        string                  `json:"pendingUpdatePath,omitempty"`
+	RestartRequired          bool                    `json:"restartRequired"`
+	PluginVerificationStatus string                  `json:"pluginVerificationStatus"`
+	NextVerificationCommand  string                  `json:"nextVerificationCommand"`
+	Attestation              attestationVerification `json:"attestation"`
+	CandidateValidation      []qaFinding             `json:"candidateValidation,omitempty"`
 }
 
 type attestationVerification struct {
@@ -950,15 +951,16 @@ func singleExtractedRoot(dest string) string {
 
 func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, targetTag string, attestation attestationVerification) (updateApplyResult, error) {
 	result := updateApplyResult{
-		ToolName:                toolName,
-		CurrentVersion:          status.CurrentVersion,
-		TargetVersion:           targetVersion,
-		TargetTag:               targetTag,
-		Channel:                 status.Channel,
-		InstallRoot:             status.InstallRoot,
-		Status:                  "candidate-invalid",
-		NextVerificationCommand: "slidex codex app-server plugin-smoke --json",
-		Attestation:             attestation,
+		ToolName:                 toolName,
+		CurrentVersion:           status.CurrentVersion,
+		TargetVersion:            targetVersion,
+		TargetTag:                targetTag,
+		Channel:                  status.Channel,
+		InstallRoot:              status.InstallRoot,
+		Status:                   "candidate-invalid",
+		PluginVerificationStatus: status.PluginVerificationStatus,
+		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
+		Attestation:              attestation,
 	}
 	result.CandidateValidation = validateCandidateBundle(candidateRoot, targetVersion)
 	if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
@@ -968,17 +970,15 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		return result, nil
 	}
 	if runtime.GOOS == "windows" {
-		stagedRoot, err := stageCandidateForWindowsHandoff(status.InstallRoot, candidateRoot, targetVersion)
-		if err != nil {
-			return result, err
-		}
-		pendingPath, err := writePendingUpdate(status.InstallRoot, stagedRoot, targetVersion, targetTag)
+		stagedRoot, pendingPath, err := stagePendingUpdateHandoff(status.InstallRoot, candidateRoot, targetVersion, targetTag)
 		if err != nil {
 			return result, err
 		}
 		result.Status = "pending-restart"
 		result.StagedRoot = filepath.ToSlash(stagedRoot)
 		result.PendingUpdatePath = filepath.ToSlash(pendingPath)
+		result.RestartRequired = true
+		result.PluginVerificationStatus = "restart_required"
 		return result, nil
 	}
 	stagedRoot, backupRoot, err := replaceInstallRootWithCandidate(status.InstallRoot, candidateRoot, targetVersion)
@@ -996,7 +996,23 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 	}
 	result.Status = "applied"
 	result.RestartRequired = true
+	result.PluginVerificationStatus = "restart_required"
 	return result, nil
+}
+
+func stagePendingUpdateHandoff(installRoot, candidateRoot, targetVersion, targetTag string) (stagedRoot, pendingPath string, err error) {
+	stagedRoot, err = stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion)
+	if err != nil {
+		return "", "", err
+	}
+	pendingPath, err = writePendingUpdate(installRoot, stagedRoot, targetVersion, targetTag)
+	if err != nil {
+		return stagedRoot, "", err
+	}
+	if err := markPluginRestartRequired(installRoot, targetVersion, targetTag); err != nil {
+		return stagedRoot, pendingPath, err
+	}
+	return stagedRoot, pendingPath, nil
 }
 
 func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion string) (string, error) {
@@ -1099,6 +1115,9 @@ func printUpdateApplyResult(result updateApplyResult) {
 	}
 	if result.Attestation.Policy != "" {
 		fmt.Printf("attestation: %s (%s)\n", result.Attestation.Status, result.Attestation.Policy)
+	}
+	if result.PluginVerificationStatus != "" {
+		fmt.Printf("plugin status: %s\n", result.PluginVerificationStatus)
 	}
 	if result.RestartRequired {
 		fmt.Println("restart required: restart Codex and start a new thread before treating updated plugin skills as active")
