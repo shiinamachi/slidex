@@ -2073,6 +2073,63 @@ func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 	}
 }
 
+func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "final_deck.html")
+	stylesheet := filepath.Join(dir, "style one.css")
+	asset := filepath.Join(dir, "assets", "hero image.png")
+	fileAsset := filepath.Join(dir, "absolute image.png")
+	font := filepath.Join(dir, "fonts", "brand font.woff2")
+	for _, item := range []struct {
+		path string
+		body string
+	}{
+		{stylesheet, "body{}\n"},
+		{asset, "asset\n"},
+		{fileAsset, "file asset\n"},
+		{font, "font\n"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(item.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(item.path, []byte(item.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := fmt.Sprintf(`<!doctype html>
+<link rel="stylesheet" href="style%%20one.css?v=1">
+<img src="assets/hero%%20image.png#view">
+<img src="%s">
+<style>@font-face { font-family: Brand; src: url("fonts/brand%%20font.woff2?x=1"); }</style>`, fileURLFromPath(fileAsset))
+	styles, assets, fonts := collectDependencies(htmlPath, src, "pretendard")
+	for _, path := range []string{stylesheet, asset, fileAsset, font} {
+		dep, ok := findDependencyByPath(append(append(styles, assets...), fonts...), path)
+		if !ok {
+			t.Fatalf("dependency path %q not found\nstyles=%#v\nassets=%#v\nfonts=%#v", path, styles, assets, fonts)
+		}
+		if dep.SHA256 == "" || dep.Risk != "" {
+			t.Fatalf("dependency %q did not resolve cleanly: %#v", path, dep)
+		}
+	}
+}
+
+func TestFillDependencyRejectsUnsupportedURLSchemes(t *testing.T) {
+	dep := dependency{Kind: "asset"}
+	fillDependency(&dep, t.TempDir(), "ftp://example.com/asset.png")
+	if dep.URL != "ftp://example.com/asset.png" || !strings.Contains(dep.Risk, "unsupported") {
+		t.Fatalf("unsupported URL scheme should be recorded as risk, got %#v", dep)
+	}
+}
+
+func findDependencyByPath(deps []dependency, path string) (dependency, bool) {
+	for _, dep := range deps {
+		if dep.Path == path {
+			return dep, true
+		}
+	}
+	return dependency{}, false
+}
+
 func TestRenderManifestPortablePathsRoundTrip(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	outDir := filepath.Join(deck, "out")

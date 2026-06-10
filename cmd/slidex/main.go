@@ -2668,20 +2668,39 @@ func fontPresetDependency(fontPreset string) dependency {
 }
 
 func fillDependency(dep *dependency, base, ref string) {
-	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-		dep.URL = ref
-		dep.Version = inferRemoteVersion(ref)
-		dep.Retrieved = time.Now().UTC().Format(time.RFC3339)
-		if dep.Version == "" {
-			dep.Risk = "remote dependency must use an exact pinned version or be vendored locally"
-		}
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		dep.Risk = "dependency reference is empty"
 		return
 	}
-	cleanRef := strings.Split(ref, "#")[0]
-	cleanRef = strings.Split(cleanRef, "?")[0]
-	path := cleanRef
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(base, filepath.FromSlash(path))
+	if u, err := url.Parse(ref); err == nil && u.Scheme != "" && !windowsDriveURLScheme(u.Scheme) {
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https":
+			dep.URL = ref
+			dep.Version = inferRemoteVersion(ref)
+			dep.Retrieved = time.Now().UTC().Format(time.RFC3339)
+			if dep.Version == "" {
+				dep.Risk = "remote dependency must use an exact pinned version or be vendored locally"
+			}
+			return
+		case "file":
+			path, err := fileURLDependencyPath(u)
+			recordLocalDependency(dep, path, err)
+			return
+		default:
+			dep.URL = ref
+			dep.Risk = "unsupported dependency URL scheme: " + u.Scheme
+			return
+		}
+	}
+	path, err := localDependencyPath(base, ref)
+	recordLocalDependency(dep, path, err)
+}
+
+func recordLocalDependency(dep *dependency, path string, err error) {
+	if err != nil {
+		dep.Risk = err.Error()
+		return
 	}
 	dep.Path = path
 	if hash, err := sha256File(path); err == nil {
@@ -2689,6 +2708,64 @@ func fillDependency(dep *dependency, base, ref string) {
 	} else {
 		dep.Risk = "local dependency missing or unreadable: " + err.Error()
 	}
+}
+
+func localDependencyPath(base, ref string) (string, error) {
+	u, err := url.Parse(ref)
+	var rawPath string
+	if err == nil {
+		if windowsDriveURLScheme(u.Scheme) {
+			rawPath = ref
+		} else {
+			rawPath = u.Path
+		}
+	} else {
+		rawPath = strings.Split(strings.Split(ref, "#")[0], "?")[0]
+	}
+	if rawPath == "" {
+		return "", errors.New("dependency path is empty")
+	}
+	path, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("dependency path has invalid URL escape: %w", err)
+	}
+	path = filepath.FromSlash(path)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, filepath.FromSlash(path))
+	}
+	return path, nil
+}
+
+func fileURLDependencyPath(u *url.URL) (string, error) {
+	if u == nil || strings.ToLower(u.Scheme) != "file" {
+		return "", errors.New("dependency URL is not a file URL")
+	}
+	if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+		if runtime.GOOS != "windows" {
+			return "", fmt.Errorf("file dependency URL host is not local: %s", u.Host)
+		}
+		path, err := url.PathUnescape(u.Path)
+		if err != nil {
+			return "", fmt.Errorf("dependency file URL has invalid escape: %w", err)
+		}
+		return `\\` + u.Host + filepath.FromSlash(path), nil
+	}
+	path, err := url.PathUnescape(u.Path)
+	if err != nil {
+		return "", fmt.Errorf("dependency file URL has invalid escape: %w", err)
+	}
+	if runtime.GOOS == "windows" && len(path) >= 3 && path[0] == '/' && isWindowsDrivePath(path[1:]) {
+		path = path[1:]
+	}
+	return filepath.FromSlash(path), nil
+}
+
+func windowsDriveURLScheme(scheme string) bool {
+	return runtime.GOOS == "windows" && len(scheme) == 1 && ((scheme[0] >= 'A' && scheme[0] <= 'Z') || (scheme[0] >= 'a' && scheme[0] <= 'z'))
+}
+
+func isWindowsDrivePath(path string) bool {
+	return len(path) >= 2 && path[1] == ':' && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'))
 }
 
 func inferRemoteVersion(ref string) string {
