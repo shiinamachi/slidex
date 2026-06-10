@@ -405,7 +405,7 @@ func writeSourceInventory(inv inventory) error {
 			b.WriteString(fmt.Sprintf("- %s\n", w))
 		}
 	}
-	return os.WriteFile(filepath.Join(inv.OutDir, "source_inventory.md"), []byte(b.String()), 0o644)
+	return secureWriteFile(filepath.Join(inv.OutDir, "source_inventory.md"), []byte(b.String()), 0o644)
 }
 
 func runValidateSpec(args []string) error {
@@ -3790,10 +3790,7 @@ func appendNotes(path, heading string, lines []string) error {
 	for _, line := range lines {
 		b.WriteString("- " + line + "\n")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func writeSyncReport(path string, report map[string]any) error {
@@ -3855,10 +3852,7 @@ func writeSyncReport(path string, report map[string]any) error {
 	}
 	b.WriteString("\n## Remaining Risks\n\n")
 	b.WriteString("- Manual review is required for business meaning changes, claim provenance, and visual inspection of the regenerated montage.\n")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func appendSyncFindingsToQAReport(path string, stale []string, accepted []string, corrected []string) error {
@@ -3890,10 +3884,7 @@ func appendSyncFindingsToQAReport(path string, stale []string, accepted []string
 			b.WriteString("- " + item + "\n")
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func runPackage(args []string) error {

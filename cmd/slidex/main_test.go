@@ -2088,6 +2088,95 @@ func TestDeliveryOutputsRejectSymlinkTargets(t *testing.T) {
 	}
 }
 
+func TestTextArtifactsRejectSymlinkTargets(t *testing.T) {
+	t.Chdir(repoRootForTest(t))
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		path  string
+		write func(string) error
+	}{
+		{
+			name: "source_inventory",
+			path: filepath.Join(outDir, "source_inventory.md"),
+			write: func(path string) error {
+				return writeSourceInventory(inventory{ToolName: toolName, Version: toolVersion, DeckDir: deck, OutDir: filepath.Dir(path)})
+			},
+		},
+		{
+			name: "strategy",
+			path: filepath.Join(outDir, "strategy.md"),
+			write: func(string) error {
+				_, err := ensureStrategy(deck, true)
+				return err
+			},
+		},
+		{
+			name: "intake_questions",
+			path: filepath.Join(outDir, "intake_questions.md"),
+			write: func(string) error {
+				return writeIntakeQuestions(deck, []string{"Question?"}, "user_input_required")
+			},
+		},
+		{
+			name: "brief_append",
+			path: filepath.Join(deck, "brief.md"),
+			write: func(string) error {
+				return appendIntakeAnswers(deck, []byte(`{"answers":["A"]}`))
+			},
+		},
+		{
+			name: "notes_append",
+			path: filepath.Join(outDir, "notes.md"),
+			write: func(path string) error {
+				return appendNotes(path, "Test", []string{"change"})
+			},
+		},
+		{
+			name: "sync_report",
+			path: filepath.Join(outDir, "html_edit_sync.md"),
+			write: func(path string) error {
+				return writeSyncReport(path, map[string]any{"comparisonSource": "test", "renderStatus": "not_run", "qaStatus": "not_run"})
+			},
+		},
+		{
+			name: "delivery_summary",
+			path: filepath.Join(outDir, "delivery_summary.md"),
+			write: func(string) error {
+				_, err := writeDeliverySummary(deck)
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.MkdirAll(filepath.Dir(tc.path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), tc.name+".outside")
+			if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(tc.path)
+			if err := os.Symlink(outside, tc.path); err != nil {
+				t.Skipf("symlink unavailable on this platform: %v", err)
+			}
+			err := tc.write(tc.path)
+			if err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Fatalf("expected symlink rejection, got %v", err)
+			}
+			if got := readFileOrEmpty(outside); got != "outside\n" {
+				t.Fatalf("outside target was modified: %q", got)
+			}
+			_ = os.Remove(tc.path)
+		})
+	}
+}
+
 func TestCopyDirPreservesExecutableMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not use Unix executable mode bits")

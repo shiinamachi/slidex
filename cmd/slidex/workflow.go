@@ -4007,7 +4007,7 @@ func ensureStrategy(deck string, force bool) (string, error) {
 			b.WriteString("- Authoring status: `" + escapeMarkdownInline(fmt.Sprint(authoring["status"])) + "`\n")
 			b.WriteString("- Authoring summary: `" + escapeMarkdownInline(fmt.Sprint(authoring["summary"])) + "`\n")
 			b.WriteString("- Claim policy: `" + escapeMarkdownInline(fmt.Sprint(authoring["claimPolicy"])) + "`\n")
-			return path, os.WriteFile(path, []byte(b.String()), 0o644)
+			return path, secureWriteFile(path, []byte(b.String()), 0o644)
 		}
 	}
 	var b strings.Builder
@@ -4021,7 +4021,7 @@ func ensureStrategy(deck string, force bool) (string, error) {
 	b.WriteString("## Brief Summary\n\n")
 	b.WriteString(strings.TrimSpace(firstNRunes(brief, 1200)))
 	b.WriteString("\n")
-	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+	return path, secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func ensureSpec(deck string, force bool) (string, error) {
@@ -4239,7 +4239,7 @@ h2 { font-size: 58px; }
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", err
 	}
-	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+	return path, secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func writeDeliverySummary(deck string) (string, error) {
@@ -4317,11 +4317,11 @@ func writeDeliverySummary(deck string) (string, error) {
 	b.WriteString("## Review Loop\n\n")
 	b.WriteString("- Structured review artifacts are stored under `out/agent_reviews/` when `slidex codex review` or reviewer gates run.\n")
 	if _, err := os.Stat(notesPath); os.IsNotExist(err) {
-		if err := os.WriteFile(notesPath, []byte("# Notes\n\n- No additional delivery notes recorded by deterministic finalize.\n"), 0o644); err != nil {
+		if err := secureWriteFile(notesPath, []byte("# Notes\n\n- No additional delivery notes recorded by deterministic finalize.\n"), 0o644); err != nil {
 			return "", err
 		}
 	}
-	return path, os.WriteFile(path, []byte(b.String()), 0o644)
+	return path, secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func approvedAssumptionsFromSpec(specPath string) []string {
@@ -4541,7 +4541,7 @@ func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[
 			b.WriteString("- `" + f.Severity + "` `" + f.Check + "`: " + f.Message + "\n")
 		}
 	}
-	if err := os.WriteFile(resolutionPath, []byte(b.String()), 0o600); err != nil {
+	if err := secureWriteFile(resolutionPath, []byte(b.String()), 0o600); err != nil {
 		return "", err
 	}
 	return reportPath, nil
@@ -4948,7 +4948,7 @@ func appendIntakeAnswers(deckAbs string, raw []byte) error {
 	if !strings.HasSuffix(b.String(), "\n") {
 		b.WriteString("\n")
 	}
-	return os.WriteFile(briefPath, []byte(b.String()), 0o644)
+	return secureWriteFile(briefPath, []byte(b.String()), 0o644)
 }
 
 func intakeQuestionsForDeck(deckAbs string) []string {
@@ -4994,7 +4994,7 @@ func writeIntakeQuestions(deckAbs string, questions []string, status string) err
 	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "intake_questions.schema.json")); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(outDir, "intake_questions.md"), []byte(b.String()), 0o644)
+	return secureWriteFile(filepath.Join(outDir, "intake_questions.md"), []byte(b.String()), 0o644)
 }
 
 func statusForQuestions(questions []string) string {
