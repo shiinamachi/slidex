@@ -2269,6 +2269,31 @@ func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
 	}
 }
 
+func TestCollectDependenciesFlagsExternalLocalFiles(t *testing.T) {
+	dir := t.TempDir()
+	deck := filepath.Join(dir, "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	external := filepath.Join(dir, "external.png")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(external, []byte("asset\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := fmt.Sprintf(`<!doctype html><img src="%s">`, fileURLFromPath(external))
+	_, assets, _ := collectDependencies(htmlPath, src, "pretendard")
+	dep, ok := findDependencyByPath(assets, external)
+	if !ok {
+		t.Fatalf("external dependency not collected: %#v", assets)
+	}
+	if dep.SHA256 == "" {
+		t.Fatalf("external dependency should still record hash: %#v", dep)
+	}
+	if !strings.Contains(dep.Risk, "outside the deck workspace") {
+		t.Fatalf("external dependency should record portability risk: %#v", dep)
+	}
+}
+
 func TestFillDependencyRejectsUnsupportedURLSchemes(t *testing.T) {
 	dep := dependency{Kind: "asset"}
 	fillDependency(&dep, t.TempDir(), "ftp://example.com/asset.png")

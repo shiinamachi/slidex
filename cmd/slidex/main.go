@@ -2720,7 +2720,7 @@ func fillDependency(dep *dependency, base, ref string) {
 			return
 		case "file":
 			path, err := fileURLDependencyPath(u)
-			recordLocalDependency(dep, path, err)
+			recordLocalDependency(dep, base, path, err)
 			return
 		default:
 			dep.URL = ref
@@ -2729,20 +2729,45 @@ func fillDependency(dep *dependency, base, ref string) {
 		}
 	}
 	path, err := localDependencyPath(base, ref)
-	recordLocalDependency(dep, path, err)
+	recordLocalDependency(dep, base, path, err)
 }
 
-func recordLocalDependency(dep *dependency, path string, err error) {
+func recordLocalDependency(dep *dependency, base, path string, err error) {
 	if err != nil {
 		dep.Risk = err.Error()
 		return
 	}
 	dep.Path = path
+	if risk := localDependencyPortabilityRisk(base, path); risk != "" {
+		dep.Risk = risk
+	}
 	if hash, err := sha256File(path); err == nil {
 		dep.SHA256 = hash
-	} else {
+	} else if dep.Risk == "" {
 		dep.Risk = "local dependency missing or unreadable: " + err.Error()
 	}
+}
+
+func localDependencyPortabilityRisk(base, path string) string {
+	root := localDependencyPortableRoot(base)
+	if root == "" || path == "" {
+		return ""
+	}
+	if filepath.VolumeName(root) != filepath.VolumeName(path) {
+		return "local dependency is outside the deck workspace and will not be portable across machines or operating systems"
+	}
+	if !pathWithin(root, path) {
+		return "local dependency is outside the deck workspace and will not be portable across machines or operating systems"
+	}
+	return ""
+}
+
+func localDependencyPortableRoot(base string) string {
+	base = filepath.Clean(base)
+	if filepath.Base(base) == "out" {
+		return filepath.Dir(base)
+	}
+	return base
 }
 
 func localDependencyPath(base, ref string) (string, error) {
