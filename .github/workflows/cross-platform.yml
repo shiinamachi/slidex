@@ -36,6 +36,11 @@ jobs:
         run: go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
       - name: Run repository doctor
         run: go run ./cmd/slidex doctor --render --json
+      - name: Run deck CLI smoke
+        run: |
+          go run ./cmd/slidex version
+          go run ./cmd/slidex init ci-init-smoke --from-template decks/_template
+          go run ./cmd/slidex inspect --deck decks/ci-init-smoke
       - name: Run workbench save smoke
         run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex-workbench-smoke" --deck-id ci-workbench-smoke
 
