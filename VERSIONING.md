@@ -24,9 +24,15 @@ Codex Plugin. The root `VERSION` file is the single canonical version file.
 3. Refresh only the plugin manifest build metadata cachebuster after plugin
    metadata changes. Do not increment the base version just to force Codex to
    reinstall a local plugin.
-4. Release tags must be `v<VERSION>`. `scripts/package-release.sh` rejects
-   release package names whose version does not match the CLI version, except
-   `dev-*` and `ci-*` smoke packages.
+4. Production release tags must be `v<VERSION>`. Canary release tags are
+   `v<VERSION>-<short-commit-sha>` and their package version is
+   `<VERSION>-<short-commit-sha>`, for example `0.1.0-e9c033e`.
+   `scripts/package-release.sh` rejects release package names whose version
+   does not match the CLI version or that canary pattern, except `dev-*` and
+   `ci-*` smoke packages.
+5. GitHub Actions releases are dispatched manually. Choose `canary` to build
+   the current `develop` branch commit, or `production` to build the current
+   `main` branch commit.
 
 ## Verification
 
@@ -39,6 +45,7 @@ go test ./...
 go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
 go run ./cmd/slidex doctor --json
 SLIDEX_RELEASE_VERSION="v$(cat VERSION)" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
+SLIDEX_RELEASE_VERSION="$(cat VERSION)-$(git rev-parse --short=7 HEAD)" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
 ```
 
 `slidex doctor` validates `VERSION`, the embedded CLI version,

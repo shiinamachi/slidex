@@ -20,7 +20,8 @@ case "$release_version" in
     ;;
   *)
     release_base="${release_version#v}"
-    if [[ "$release_base" != "$tool_version" ]]; then
+    canary_pattern="^${tool_version//./\\.}-[0-9a-f]{7,40}$"
+    if [[ "$release_base" != "$tool_version" && ! "$release_base" =~ $canary_pattern ]]; then
       printf 'release version %s does not match slidex CLI version %s\n' "$release_version" "$tool_version" >&2
       exit 2
     fi

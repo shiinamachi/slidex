@@ -1587,11 +1587,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "cross-platform.yml"),
-			want: []string{"Release Binaries", "scripts/package-release.sh", "gh release create", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "scripts/package-release.sh", "gh release create", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),

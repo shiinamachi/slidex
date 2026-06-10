@@ -1,23 +1,89 @@
 name: Cross Platform
 
 on:
-  push:
-    branches:
-      - "**"
-    tags:
-      - "v*"
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_channel:
+        description: Build channel to publish
+        required: true
+        default: canary
+        type: choice
+        options:
+          - canary
+          - production
+
+run-name: ${{ inputs.build_channel }} build by @${{ github.actor }}
 
 permissions:
   contents: read
+
+concurrency:
+  group: cross-platform-${{ inputs.build_channel }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  release-metadata:
+    name: Resolve Release Metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      build_channel: ${{ steps.metadata.outputs.build_channel }}
+      source_ref: ${{ steps.metadata.outputs.source_ref }}
+      commit_sha: ${{ steps.metadata.outputs.commit_sha }}
+      short_sha: ${{ steps.metadata.outputs.short_sha }}
+      release_version: ${{ steps.metadata.outputs.release_version }}
+      tag_name: ${{ steps.metadata.outputs.tag_name }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - name: Check out selected source branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.build_channel == 'canary' && 'develop' || 'main' }}
+      - name: Resolve release metadata
+        id: metadata
+        env:
+          BUILD_CHANNEL: ${{ inputs.build_channel }}
+        run: |
+          set -euo pipefail
+          base_version="$(tr -d '[:space:]' < VERSION)"
+          commit_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          case "$BUILD_CHANNEL" in
+            canary)
+              source_ref="develop"
+              release_version="${base_version}-${short_sha}"
+              prerelease="true"
+              ;;
+            production)
+              source_ref="main"
+              release_version="${base_version}"
+              prerelease="false"
+              ;;
+            *)
+              printf 'unsupported build channel: %s\n' "$BUILD_CHANNEL" >&2
+              exit 2
+              ;;
+          esac
+          tag_name="v${release_version}"
+          {
+            printf 'build_channel=%s\n' "$BUILD_CHANNEL"
+            printf 'source_ref=%s\n' "$source_ref"
+            printf 'commit_sha=%s\n' "$commit_sha"
+            printf 'short_sha=%s\n' "$short_sha"
+            printf 'release_version=%s\n' "$release_version"
+            printf 'tag_name=%s\n' "$tag_name"
+            printf 'prerelease=%s\n' "$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Resolved %s build from %s at %s as %s\n' "$BUILD_CHANNEL" "$source_ref" "$short_sha" "$release_version"
+
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, ${{ needs.release-metadata.outputs.build_channel }})
     runs-on: ${{ matrix.os }}
+    needs:
+      - release-metadata
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +94,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-metadata.outputs.commit_sha }}
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -71,8 +140,10 @@ jobs:
         run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex workbench smoke" --deck-id ci-workbench-smoke --screenshot
 
   cross-compile:
-    name: Cross Compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    name: Cross Compile (${{ matrix.goos }}/${{ matrix.goarch }}, ${{ needs.release-metadata.outputs.build_channel }})
     runs-on: ubuntu-24.04
+    needs:
+      - release-metadata
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +169,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-metadata.outputs.commit_sha }}
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -121,40 +195,76 @@ jobs:
         run: go test -c ./cmd/slidex -o "${{ runner.temp }}/slidex-${{ matrix.goos }}-${{ matrix.goarch }}.test${{ matrix.ext }}"
 
   release:
-    name: Release Binaries
+    name: Release Binaries (${{ needs.release-metadata.outputs.build_channel }})
     runs-on: ubuntu-24.04
     needs:
+      - release-metadata
       - test
       - cross-compile
-    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-metadata.outputs.commit_sha }}
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
+      - name: Ensure release tag
+        env:
+          COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
+          TAG_NAME: ${{ needs.release-metadata.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "${TAG_NAME}")"
+            if [[ "$tagged_commit" != "$COMMIT_SHA" ]]; then
+              printf 'tag %s already points to %s, not %s\n' "$TAG_NAME" "$tagged_commit" "$COMMIT_SHA" >&2
+              exit 2
+            fi
+          else
+            git tag -a "$TAG_NAME" "$COMMIT_SHA" -m "Release $TAG_NAME"
+            git push origin "refs/tags/${TAG_NAME}"
+          fi
       - name: Build release packages
         env:
-          SLIDEX_RELEASE_VERSION: ${{ github.ref_name }}
+          SLIDEX_RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
           SLIDEX_DIST_DIR: dist
         run: ./scripts/package-release.sh
       - name: Publish GitHub Release
         env:
+          BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
+          COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.release-metadata.outputs.prerelease }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
+          SOURCE_REF: ${{ needs.release-metadata.outputs.source_ref }}
+          TAG_NAME: ${{ needs.release-metadata.outputs.tag_name }}
         run: |
           set -euo pipefail
           notes_file="${RUNNER_TEMP}/slidex-release-notes.md"
-          cat > "$notes_file" <<'NOTES'
+          cat > "$notes_file" <<NOTES
           Release packages are built by GitHub Actions for Linux, macOS, and Windows on amd64 and arm64.
           Each archive includes the slidex CLI binary plus the runtime templates, schemas, Codex plugin package, repo marketplace, and install guide required for local use.
+          Build channel: ${BUILD_CHANNEL}
+          Source branch: ${SOURCE_REF}
+          Source commit: ${COMMIT_SHA}
+          Version: ${RELEASE_VERSION}
           Code signing is deferred and is not part of this release pipeline.
           NOTES
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          release_flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            release_flags+=(--prerelease)
+          fi
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" dist/* --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --title "slidex ${GITHUB_REF_NAME}" --notes-file "$notes_file"
+            gh release create "$TAG_NAME" dist/* --verify-tag --title "slidex ${RELEASE_VERSION}" --notes-file "$notes_file" "${release_flags[@]}"
           fi
