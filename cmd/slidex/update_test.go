@@ -944,6 +944,9 @@ func TestRunUpdateApplyArchiveAttestationFailureJSONReportsFailureContract(t *te
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("invalid attestation failure JSON: %v\n%s", err, output)
 	}
+	if err := validatePayloadAgainstBundledSchema(result, updateApplyResultSchemaFile); err != nil {
+		t.Fatalf("attestation failure JSON should match schema: %v\n%s", err, output)
+	}
 	if result.Status != "failed" || result.Channel != updateChannelProduction || result.TargetVersion != "0.2.0" || result.TargetTag != "v0.2.0" {
 		t.Fatalf("attestation failure fields missing: %#v", result)
 	}
@@ -1180,6 +1183,9 @@ func TestRunUpdateApplyLocalDevelopmentJSONReportsFailureContract(t *testing.T) 
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("invalid local-development apply failure JSON: %v\n%s", err, output)
 	}
+	if err := validatePayloadAgainstBundledSchema(result, updateApplyResultSchemaFile); err != nil {
+		t.Fatalf("local-development apply failure JSON should match schema: %v\n%s", err, output)
+	}
 	if result.Status != "failed" || result.Channel != updateChannelLocalDevelopment || result.TargetVersion != "0.2.0" {
 		t.Fatalf("local-development failure fields missing: %#v", result)
 	}
@@ -1244,6 +1250,9 @@ func TestRunUpdateApplyCandidateRecordsAllowUnverifiedAttestation(t *testing.T) 
 	var result updateApplyResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("invalid candidate apply JSON: %v\n%s", err, output)
+	}
+	if err := validatePayloadAgainstBundledSchema(result, updateApplyResultSchemaFile); err != nil {
+		t.Fatalf("candidate apply JSON should match schema: %v\n%s", err, output)
 	}
 	if result.Attestation.Policy != attestationPolicyAllowUnverified || result.Attestation.Status != "skipped" {
 		t.Fatalf("candidate apply attestation should be explicit skipped: %#v", result.Attestation)
@@ -1660,6 +1669,9 @@ func TestUpdateStatusHumanAndJSONReportPendingActivation(t *testing.T) {
 	var status updateStatus
 	if err := json.Unmarshal([]byte(jsonOutput), &status); err != nil {
 		t.Fatalf("invalid update status JSON: %v\n%s", err, jsonOutput)
+	}
+	if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
+		t.Fatalf("pending activation status JSON should match schema: %v\n%s", err, jsonOutput)
 	}
 	if status.Status != "pending-activation" || !status.PendingActivation || status.PendingActivationCommand == "" {
 		t.Fatalf("pending activation missing from status JSON: %#v", status)
