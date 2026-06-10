@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1301,10 +1302,33 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	if runtime.GOOS == "windows" {
 		binary = "slidex.exe"
 	}
-	if _, err := os.Stat(filepath.Join(root, binary)); err != nil {
-		findings = append(findings, fail("update.candidate_binary", "missing candidate CLI binary: "+err.Error(), filepath.ToSlash(filepath.Join(root, binary))))
+	binaryPath := filepath.Join(root, binary)
+	if _, err := os.Stat(binaryPath); err != nil {
+		findings = append(findings, fail("update.candidate_binary", "missing candidate CLI binary: "+err.Error(), filepath.ToSlash(binaryPath)))
+	} else if version, err := candidateBinaryVersion(binaryPath); err != nil {
+		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version command failed: "+err.Error(), filepath.ToSlash(binaryPath)))
+	} else if version != expectedVersion {
+		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version must be "+expectedVersion+", got "+version, filepath.ToSlash(binaryPath)))
 	}
 	return findings
+}
+
+func candidateBinaryVersion(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "version")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return "", errors.New("empty version output")
+	}
+	return fields[len(fields)-1], nil
 }
 
 func readCandidateJSON(path string) (map[string]any, error) {

@@ -188,6 +188,29 @@ func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 	}
 }
 
+func TestValidateCandidateBundleChecksBinaryVersion(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	writeCandidateBinaryForTest(t, filepath.Join(root, binary), "0.1.0")
+	findings := validateCandidateBundle(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_binary_version") {
+		t.Fatalf("candidate binary version drift should fail: %#v", findings)
+	}
+}
+
+func findingCheckPresent(findings []qaFinding, check string) bool {
+	for _, finding := range findings {
+		if finding.Check == check {
+			return true
+		}
+	}
+	return false
+}
+
 func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	installRoot := t.TempDir()
 	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
@@ -421,7 +444,6 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 	}
 	files := map[string]string{
 		"VERSION": version,
-		binary:    "",
 		".slidex/install.json": `{
 		  "schemaVersion":"slidex.install.v1",
 		  "toolName":"slidex",
@@ -452,6 +474,35 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	writeCandidateBinaryForTest(t, filepath.Join(root, binary), version)
+}
+
+func writeCandidateBinaryForTest(t *testing.T, path, version string) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	code := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("slidex ` + version + `")
+		return
+	}
+	fmt.Println("slidex ` + version + `")
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("candidate test binary build failed: %v\n%s", err, out)
 	}
 }
 
