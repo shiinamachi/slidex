@@ -61,6 +61,20 @@ func TestValidateDeckIDRejectsWindowsReservedNames(t *testing.T) {
 	}
 }
 
+func TestSafeDeckDirRejectsCaseInsensitiveCollisions(t *testing.T) {
+	workspace := t.TempDir()
+	decksRoot := filepath.Join(workspace, "decks")
+	if err := os.MkdirAll(filepath.Join(decksRoot, "Demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeDeckDir(workspace, "demo"); err == nil {
+		t.Fatal("expected deck id differing only by case to be rejected")
+	}
+	if _, err := safeDeckDir(workspace, "Demo"); err != nil {
+		t.Fatalf("expected exact deck id case to pass: %v", err)
+	}
+}
+
 func TestBootstrapDeckUsesRepoTemplateForExternalWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	result, err := bootstrapDeckWorkspace(workspace, "external-template", "decks/_template", true)

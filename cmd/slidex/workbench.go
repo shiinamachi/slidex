@@ -1515,6 +1515,11 @@ func windowsReservedDeckID(deckID string) bool {
 
 func safeDeckDir(root, deckID string) (string, error) {
 	decksRoot := filepath.Join(root, "decks")
+	if collision, err := caseInsensitiveDeckIDCollision(decksRoot, deckID); err != nil {
+		return "", err
+	} else if collision != "" {
+		return "", exitCodeError(2, "deck_id collides with existing deck on case-insensitive file systems: %s", collision)
+	}
 	deckAbs := filepath.Clean(filepath.Join(decksRoot, deckID))
 	if !pathWithin(decksRoot, deckAbs) {
 		return "", fmt.Errorf("deck path escapes decks directory: %s", deckID)
@@ -1523,6 +1528,23 @@ func safeDeckDir(root, deckID string) (string, error) {
 		return "", err
 	}
 	return deckAbs, nil
+}
+
+func caseInsensitiveDeckIDCollision(decksRoot, deckID string) (string, error) {
+	entries, err := os.ReadDir(decksRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != deckID && strings.EqualFold(name, deckID) {
+			return name, nil
+		}
+	}
+	return "", nil
 }
 
 func workspaceRoot(workspace string) string {
