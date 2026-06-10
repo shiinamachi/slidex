@@ -198,7 +198,8 @@ slidex workbench evidence --deck-id customer-retention \
 `--thread-id`는 Codex App에서 thread id를 확인할 수 있을 때 함께 기록합니다. 증거는
 `decks/customer-retention/out/workbench_browser_evidence.json`에 기록됩니다.
 `--screenshot`은 선택이지만 권장되며, Codex App browser/work-surface 캡처 이미지를
-`out/workbench_browser_screenshot.<ext>`로 복사하고 해시를 evidence에 남깁니다.
+디코딩 가능한 nonblank PNG/JPEG로 확인한 뒤 `out/workbench_browser_screenshot.<ext>`로
+복사하고 해시를 evidence에 남깁니다.
 기록된 증거가 현재 `brief.md`, draft, manifest 해시와 계속 일치하는지는 다음
 명령으로 재검증합니다. 결과는
 `decks/customer-retention/out/workbench_browser_evidence_verification.json`에도 저장됩니다.

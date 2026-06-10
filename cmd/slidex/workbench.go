@@ -13,6 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net"
 	"net/http"
@@ -1794,9 +1797,9 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 	}
 	ext := strings.ToLower(filepath.Ext(sourceAbs))
 	switch ext {
-	case ".png", ".jpg", ".jpeg", ".webp":
+	case ".png", ".jpg", ".jpeg":
 	default:
-		return nil, fmt.Errorf("browser screenshot must be .png, .jpg, .jpeg, or .webp: %s", filepath.ToSlash(sourceAbs))
+		return nil, fmt.Errorf("browser screenshot must be .png, .jpg, or .jpeg: %s", filepath.ToSlash(sourceAbs))
 	}
 	f, err := os.Open(sourceAbs)
 	if err != nil {
@@ -1813,6 +1816,11 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 	if len(raw) > workbenchScreenshotMaxBytes {
 		return nil, fmt.Errorf("browser screenshot exceeds %d bytes: %s", workbenchScreenshotMaxBytes, filepath.ToSlash(sourceAbs))
 	}
+	if _, blank, _, err := inspectWorkbenchBrowserScreenshot(raw); err != nil {
+		return nil, fmt.Errorf("browser screenshot must be a decodable PNG or JPEG image: %w", err)
+	} else if blank {
+		return nil, fmt.Errorf("browser screenshot appears blank: %s", filepath.ToSlash(sourceAbs))
+	}
 	target := filepath.Join(deckAbs, "out", workbenchBrowserScreenshot+ext)
 	if err := secureWriteFile(target, raw, 0o600); err != nil {
 		return nil, err
@@ -1820,6 +1828,22 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 	artifact := artifactFromPath(target)
 	artifact.Path = filepath.ToSlash(target)
 	return &artifact, nil
+}
+
+func inspectWorkbenchBrowserScreenshot(raw []byte) (dimension, bool, string, error) {
+	img, format, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return dimension{}, false, "", err
+	}
+	if format != "png" && format != "jpeg" {
+		return dimension{}, false, format, fmt.Errorf("unsupported screenshot image format %q", format)
+	}
+	bounds := img.Bounds()
+	dim := dimension{Width: bounds.Dx(), Height: bounds.Dy()}
+	if dim.Width <= 0 || dim.Height <= 0 {
+		return dim, true, format, errors.New("screenshot image has empty dimensions")
+	}
+	return dim, isBlank(img), format, nil
 }
 
 func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (result workbenchBrowserEvidenceVerification, err error) {
@@ -2004,10 +2028,20 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScree
 			result.VerifiedFiles["browserScreenshot"] = actual
 			if actual.SHA256 == "" || actual.Size <= 0 {
 				addFinding("browser screenshot artifact is missing or empty: %s", filepath.ToSlash(screenshotPath))
-			} else if evidence.BrowserScreenshot.Path != actual.Path ||
-				evidence.BrowserScreenshot.SHA256 != actual.SHA256 ||
-				evidence.BrowserScreenshot.Size != actual.Size {
-				addFinding("browser screenshot evidence is stale")
+			} else {
+				raw, err := os.ReadFile(screenshotPath)
+				if err != nil {
+					addFinding("browser screenshot is missing or unreadable: %s: %v", filepath.ToSlash(screenshotPath), err)
+				} else if _, blank, _, err := inspectWorkbenchBrowserScreenshot(raw); err != nil {
+					addFinding("browser screenshot is not a decodable PNG or JPEG image: %v", err)
+				} else if blank {
+					addFinding("browser screenshot appears blank")
+				}
+				if evidence.BrowserScreenshot.Path != actual.Path ||
+					evidence.BrowserScreenshot.SHA256 != actual.SHA256 ||
+					evidence.BrowserScreenshot.Size != actual.Size {
+					addFinding("browser screenshot evidence is stale")
+				}
 			}
 		}
 	}

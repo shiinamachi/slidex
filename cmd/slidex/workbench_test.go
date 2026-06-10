@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -660,9 +661,7 @@ func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	screenshot := filepath.Join(workspace, "codex-browser.png")
-	if err := os.WriteFile(screenshot, []byte("fake png screenshot"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSolidPNGForTest(t, screenshot, color.RGBA{R: 12, G: 34, B: 56, A: 255})
 
 	evidence, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
 		Inspector:          "QA",
@@ -714,6 +713,45 @@ func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
 	public := publicWorkbenchStatus(status)
 	if public["browserEvidence"] != filepath.ToSlash(evidencePath) {
 		t.Fatalf("status omitted browser evidence path: %#v", public)
+	}
+}
+
+func TestWorkbenchBrowserEvidenceRejectsInvalidBrowserScreenshot(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	input := workbenchSaveInput{Title: "Demo", Audience: "Board", DecisionGoal: "Approve pilot"}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 43210, 123, "running")
+	if _, err := writeWorkbenchDraft(deck, input, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkbenchBrief(deck, input); err != nil {
+		t.Fatal(err)
+	}
+	manifest.InputSavedAt = "2026-06-09T00:00:00Z"
+	manifest.BriefPath = filepath.ToSlash(filepath.Join(deck, "brief.md"))
+	manifest.DraftPath = filepath.ToSlash(filepath.Join(deck, "out", workbenchDraftName))
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	screenshot := filepath.Join(workspace, "codex-browser.png")
+	if err := os.WriteFile(screenshot, []byte("fake png screenshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
+		Inspector:          "QA",
+		Surface:            "codex_app_in_app_browser",
+		Invocation:         "@slidex create a deck called demo",
+		URL:                manifest.URL,
+		WorkbenchVisible:   true,
+		SavedInputVerified: true,
+		ScreenshotPath:     screenshot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "decodable PNG or JPEG") {
+		t.Fatalf("invalid screenshot should fail, got %v", err)
 	}
 }
 
@@ -808,9 +846,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleBrowserScreenshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	screenshot := filepath.Join(workspace, "codex-browser.png")
-	if err := os.WriteFile(screenshot, []byte("before"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSolidPNGForTest(t, screenshot, color.RGBA{R: 12, G: 34, B: 56, A: 255})
 	if _, err := recordWorkbenchBrowserEvidence(workspace, "demo", "", workbenchBrowserEvidenceInput{
 		Inspector:          "QA",
 		Surface:            "codex_app_in_app_browser",
@@ -823,9 +859,7 @@ func TestWorkbenchVerifyEvidenceDetectsStaleBrowserScreenshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	copied := filepath.Join(deck, "out", "workbench_browser_screenshot.png")
-	if err := os.WriteFile(copied, []byte("after"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSolidPNGForTest(t, copied, color.RGBA{R: 90, G: 20, B: 10, A: 255})
 
 	result, err := verifyWorkbenchBrowserEvidence(workspace, "demo", "", false)
 	if err != nil {
