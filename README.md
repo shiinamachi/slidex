@@ -1,229 +1,206 @@
 # slidex
 
-[Korean documentation](README.ko.md)
+[한국어 문서 →](README.ko.md)
 
-`slidex` is a local CLI and Codex Plugin workflow for producing HTML-first
-business documents and page-style PDFs. It keeps each document project in its
-own deck workspace, builds static HTML slides, renders slide PNGs and a PDF,
-and checks that the delivery artifacts are fresh enough to share.
+**Local CLI and Codex Plugin for producing HTML-first business documents and
+page-style PDFs.**
 
-The editable visual source of truth is:
+`slidex` manages each document project as an isolated deck workspace, builds
+static HTML slides with design tokens and Korean-safe typography, renders slide
+PNGs and a final PDF, and verifies that every delivery artifact is fresh before
+sharing.
 
-```text
-decks/<deck_id>/out/final_deck.html
-```
+---
 
-The primary delivery file is:
+## ⚡ Install with Codex App
 
-```text
-decks/<deck_id>/out/final_deck.pdf
-```
-
-## What slidex is for
-
-Use `slidex` when you need a local, reproducible workflow for business
-presentations, proposals, executive reports, investor materials, government
-review documents, or customer decision decks.
-
-`slidex` is not a hosted web app. It writes files on your machine under
-`decks/<deck_id>/`, and the final package is made from local HTML, PNG, PDF,
-JSON, and Markdown artifacts.
-
-## Install
+Paste the following prompt into a **Codex App** chat. Codex will automatically
+install the CLI, register the plugin, and verify the setup:
 
 ```text
-Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete the install, Codex plugin setup, and verification.
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, and run "slidex --help" and "slidex doctor --render" to confirm success. Report each step's result.
 ```
+
+> See [CODEX_INSTALL_PROMPT.md](CODEX_INSTALL_PROMPT.md) for details on what
+> this prompt does, or [INSTALL.md](INSTALL.md) for the full internal install
+> reference.
+
+---
+
+## What is slidex?
+
+Use `slidex` when you need a **local, reproducible workflow** for:
+
+- 📊 Business presentations and investor decks
+- 📝 Executive reports and proposals
+- 🏛️ Government review documents
+- 🤝 Customer decision materials
+
+`slidex` is **not** a hosted web app. Everything runs on your machine —
+the editable source is an HTML file, and the delivery artifact is a PDF.
+
+### Key files
+
+| File | Role |
+|------|------|
+| `decks/<deck_id>/out/final_deck.html` | Editable visual source of truth |
+| `decks/<deck_id>/out/final_deck.pdf` | Primary delivery file |
+
+---
+
+## Features
+
+| | Feature | Description |
+|---|---------|-------------|
+| 🗂️ | **Deck Workspaces** | Each project gets its own isolated directory under `decks/` |
+| 🏗️ | **HTML-first Build** | Static HTML slides with CSS design tokens, 16:9 widescreen, Korean-capable fonts |
+| 🖼️ | **Automated Rendering** | Slide PNGs and paginated PDF via headless Chrome/Chromium/Edge |
+| ✅ | **Quality Assurance** | QA montage, QA report, and freshness checks before delivery |
+| 📦 | **Package Verification** | Validates all required artifacts exist and match current HTML |
+| 🔌 | **Codex Plugin** | Interactive workbench for deck creation via Codex App browser |
+| 📋 | **Evidence-aware** | Every claim must be sourced, confirmed, or marked as an assumption |
+
+---
 
 ## Quick Start
 
-Create a new deck workspace:
+### 1. Create a deck
 
 ```bash
 slidex init customer-retention
 ```
 
-Edit the generated brief:
+### 2. Write the brief
+
+Edit the generated brief with your document goals, audience, and source
+material:
 
 ```text
 decks/customer-retention/brief.md
 ```
 
-Add any source material, brand files, images, spreadsheets, and notes under the
-same deck directory. Then run the standard workflow:
+### 3. Add supporting material
+
+Place logos, data files, reference documents, and brand guidelines into the
+deck workspace directories (`assets/`, `brand/`, `data/`, `source/`).
+
+### 4. Run the workflow
 
 ```bash
 slidex run --deck decks/customer-retention
 ```
 
-When the run completes, open the delivery summary:
+This runs the full pipeline: intake → strategy → spec → HTML build → render →
+QA → delivery summary → package check.
+
+### 5. Review the output
 
 ```text
-decks/customer-retention/out/delivery_summary.md
+decks/customer-retention/out/final_deck.html    ← editable HTML
+decks/customer-retention/out/final_deck.pdf     ← delivery PDF
+decks/customer-retention/out/qa_montage.png     ← visual QA overview
+decks/customer-retention/out/qa_report.md       ← QA details
+decks/customer-retention/out/delivery_summary.md ← delivery checklist
 ```
 
-The files most users review are:
+---
 
-```text
-decks/customer-retention/out/final_deck.html
-decks/customer-retention/out/final_deck.pdf
-decks/customer-retention/out/qa_montage.png
-decks/customer-retention/out/qa_report.md
-decks/customer-retention/out/delivery_summary.md
-```
+## Deck Workspace Structure
 
-## Deck Workspaces
-
-Every document project lives under `decks/<deck_id>/`.
+Every document project lives under `decks/<deck_id>/`:
 
 ```text
 decks/<deck_id>/
-  brief.md
-  DESIGN.md
-  assets/
+  brief.md              ← document goal, audience, constraints
+  DESIGN.md             ← deck-specific visual direction
+  assets/               ← logos, product images, reference files
     reference_docs/
     images/
-  brand/
-    guidelines.md
-    colors.json
-  data/
-  source/
-  out/
+  brand/                ← brand guidelines, colors, fonts
+  data/                 ← CSV, XLSX, chart/table source data
+  source/               ← PDFs, DOCX, screenshots, meeting notes
+  out/                  ← generated outputs (see below)
 ```
 
-Input files:
+### Generated outputs
 
-- `brief.md`: document goal, audience, decision context, constraints, and source
-  notes
-- `DESIGN.md`: deck-specific visual direction
-- `assets/`: logos, product images, reference images, and supporting files
-- `brand/`: brand guidelines, colors, fonts, and related rules
-- `data/`: CSV, XLSX, and other chart or table source data
-- `source/`: PDFs, DOCX files, screenshots, meeting notes, and other evidence
+| File | Description |
+|------|-------------|
+| `out/strategy.md` | Content strategy |
+| `out/deck_spec.json` | Structured slide spec |
+| `out/final_deck.html` | Editable HTML slides |
+| `out/final_deck.generated_baseline.html` | Baseline for diff |
+| `out/rendered_slides/*.png` | Individual slide PNGs |
+| `out/final_deck.pdf` | Paginated PDF |
+| `out/render_manifest.json` | Render metadata and hashes |
+| `out/qa_montage.png` | Visual QA montage |
+| `out/qa_report.md` | QA findings |
+| `out/notes.md` | Presenter notes |
+| `out/delivery_summary.md` | Final delivery checklist |
 
-Generated files:
+---
 
-- `out/strategy.md`
-- `out/deck_spec.json`
-- `out/final_deck.html`
-- `out/final_deck.generated_baseline.html`
-- `out/rendered_slides/*.png`
-- `out/final_deck.pdf`
-- `out/render_manifest.json`
-- `out/qa_montage.png`
-- `out/qa_report.md`
-- `out/notes.md`
-- `out/delivery_summary.md`
-
-Use a portable deck ID. It must start with a letter or number and may contain
-letters, numbers, `_`, `-`, and `.`. Avoid names that are reserved device names
-on Windows, such as `CON`, `NUL`, `COM1`, and `LPT1`.
-
-## Prepare Inputs
-
-Start with a clear `brief.md`. At minimum, include:
-
-- the business question the document must answer
-- the audience and decision owner
-- the desired decision or next step
-- the required language, tone, length, and format
-- facts that are approved to use
-- claims that need source evidence or should be treated as assumptions
-
-Place supporting material in the deck workspace before running `slidex run`.
-Every material claim should be sourced, confirmed by the user, or labeled as an
-assumption. Unsupported claims about ROI, market leadership, customer counts,
-certifications, security, patents, guarantees, or outcomes should be removed or
-rewritten before delivery.
-
-## Run The Workflow
-
-The standard command is:
-
-```bash
-slidex run --deck decks/customer-retention
-```
-
-This runs intake, strategy, spec, HTML build, baseline creation, rendering, QA,
-delivery summary, and package checks.
-
-If the available material is not enough, `slidex` stops with exit code `3` and
-writes questions to:
+## Workflow Pipeline
 
 ```text
-decks/customer-retention/out/intake_questions.md
+  init ──→ intake ──→ strategy ──→ spec ──→ build ──→ render ──→ qa ──→ finalize ──→ package
+  │                                                                                    │
+  └──── slidex run --deck decks/<deck_id> ─────────────────────────────────────────────┘
 ```
 
-Answer the questions by adding detail to `brief.md`, then run the same command
-again.
-
-Use stage commands only when you need to inspect or repair one part of the
-workflow:
+Use `slidex run` for the standard end-to-end workflow. Use individual stage
+commands only for inspection or repair:
 
 ```bash
-slidex inspect --deck decks/customer-retention --write
-slidex intake --deck decks/customer-retention
-slidex strategy --deck decks/customer-retention
-slidex spec --deck decks/customer-retention
-slidex build --deck decks/customer-retention
-slidex render --deck decks/customer-retention
-slidex qa --deck decks/customer-retention
-slidex finalize --deck decks/customer-retention
-slidex package --deck decks/customer-retention
+slidex inspect --deck decks/<deck_id> --write
+slidex intake --deck decks/<deck_id>
+slidex strategy --deck decks/<deck_id>
+slidex spec --deck decks/<deck_id>
+slidex build --deck decks/<deck_id>
+slidex render --deck decks/<deck_id>
+slidex qa --deck decks/<deck_id>
+slidex finalize --deck decks/<deck_id>
+slidex package --deck decks/<deck_id>
 ```
 
-## Review The Output
+If source material is insufficient, `slidex` stops with exit code `3` and
+writes questions to `out/intake_questions.md`. Answer them in `brief.md` and
+run again.
 
-Before sharing a deck, inspect:
+---
 
-- `out/final_deck.pdf`
-- `out/qa_montage.png`
-- `out/rendered_slides/*.png`
-- `out/qa_report.md`
-- `out/delivery_summary.md`
+## Editing HTML Directly
 
-`slidex package --deck decks/<deck_id>` verifies that required delivery files
-exist and that rendered artifacts still match the current HTML.
-
-If you edit `out/final_deck.html` by hand, sync the edit before claiming the PDF
-or PNGs are current:
+If you edit `out/final_deck.html` by hand, sync and re-render before claiming
+the PDF is current:
 
 ```bash
-slidex sync-html-edits --deck decks/customer-retention
-slidex render --deck decks/customer-retention
-slidex qa --deck decks/customer-retention
-slidex package --deck decks/customer-retention
+slidex sync-html-edits --deck decks/<deck_id>
+slidex render --deck decks/<deck_id>
+slidex qa --deck decks/<deck_id>
+slidex package --deck decks/<deck_id>
 ```
 
-## Optional: Codex Plugin Workbench
+---
 
-The repository includes a local Codex Plugin in `plugins/slidex`. The plugin is
-a front door for creating a deck brief through a local loopback workbench. The
-CLI remains the source of truth for build, render, QA, and package stages.
+## Codex Plugin Workbench
 
-Install with the one-shot prompt above so the `slidex` binary and plugin
-marketplace are current.
-
-Start a workbench:
+The repository includes a Codex Plugin at `plugins/slidex/` — an interactive
+workbench for creating deck briefs through the Codex App in-app browser.
 
 ```bash
 slidex workbench start --deck-id customer-retention
 ```
 
-Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the Codex
-App browser. Saving the workbench writes:
-
-```text
-decks/customer-retention/brief.md
-decks/customer-retention/out/workbench_draft.json
-decks/customer-retention/out/workbench_manifest.json
-```
-
-Then run the normal workflow:
+Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
+Codex App browser. Saving writes `brief.md` and workbench artifacts to the
+deck's `out/` directory. Then run the normal workflow:
 
 ```bash
 slidex run --deck decks/customer-retention
 ```
+
+---
 
 ## Troubleshooting
 
@@ -233,47 +210,49 @@ Check the CLI and render environment:
 slidex doctor --render
 ```
 
-If Chrome is not detected, set one of these environment variables to the browser
-binary path:
+If Chrome is not detected, set one of these environment variables:
 
 ```text
-CHROME_BIN
-GOOGLE_CHROME_BIN
-CHROMIUM_BIN
-MSEDGE_BIN
-CHROME_FOR_TESTING_BIN
-PLAYWRIGHT_CHROMIUM_BIN
-PLAYWRIGHT_CHROME_BIN
-PUPPETEER_EXECUTABLE_PATH
+CHROME_BIN · GOOGLE_CHROME_BIN · CHROMIUM_BIN · MSEDGE_BIN
+CHROME_FOR_TESTING_BIN · PLAYWRIGHT_CHROMIUM_BIN
+PLAYWRIGHT_CHROME_BIN · PUPPETEER_EXECUTABLE_PATH
 ```
 
-For a deck-specific check:
+Deck-specific diagnostics:
 
 ```bash
-slidex doctor --deck decks/customer-retention --render
-slidex inspect --deck decks/customer-retention
+slidex doctor --deck decks/<deck_id> --render
+slidex inspect --deck decks/<deck_id>
 ```
 
-For schema validation:
+Schema validation:
 
 ```bash
-slidex validate-spec --spec decks/customer-retention/out/deck_spec.json
+slidex validate-spec --spec decks/<deck_id>/out/deck_spec.json
 ```
+
+---
 
 ## Command Reference
 
-Common commands:
+| Command | Description |
+|---------|-------------|
+| `slidex init <deck_id>` | Create a new deck workspace |
+| `slidex run --deck decks/<deck_id>` | Run the full workflow |
+| `slidex render --deck decks/<deck_id>` | Render PNGs and PDF |
+| `slidex qa --deck decks/<deck_id>` | Run quality assurance |
+| `slidex package --deck decks/<deck_id>` | Verify delivery artifacts |
+| `slidex sync-html-edits --deck decks/<deck_id>` | Sync manual HTML edits |
+| `slidex doctor --render` | Check CLI and render environment |
+| `slidex workbench start --deck-id <deck_id>` | Start the Codex workbench |
+| `slidex validate-spec --spec <path>` | Validate a deck spec JSON |
 
-```text
-slidex init <deck_id>
-slidex run --deck decks/<deck_id>
-slidex render --deck decks/<deck_id>
-slidex qa --deck decks/<deck_id>
-slidex package --deck decks/<deck_id>
-slidex sync-html-edits --deck decks/<deck_id>
-slidex doctor --deck decks/<deck_id> --render
-slidex workbench start --deck-id <deck_id>
-```
+Run `slidex --help` for the full command list. See
+[commands.md](commands.md) for advanced examples including render overrides and
+Codex-specific commands.
 
-Run `slidex --help` for the full command list. See `commands.md` for additional
-examples, including advanced render overrides and Codex-specific commands.
+---
+
+## License
+
+See the repository for license details.
