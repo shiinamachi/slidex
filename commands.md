@@ -71,6 +71,8 @@ mise exec -- slidex package --deck decks/customer-retention
 
 ## Advanced Render Override
 
+Bash:
+
 ```bash
 mise exec -- slidex render \
   --html decks/customer-retention/out/final_deck.html \
@@ -84,7 +86,43 @@ mise exec -- slidex render \
   --font-preset pretendard
 ```
 
+PowerShell:
+
+```powershell
+$env:CHROME_BIN = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+mise exec -- slidex render `
+  --html decks/customer-retention/out/final_deck.html `
+  --out decks/customer-retention/out/rendered_slides `
+  --pdf decks/customer-retention/out/final_deck.pdf `
+  --manifest decks/customer-retention/out/render_manifest.json `
+  --pdf-mode paginated `
+  --selector .slide `
+  --width 1920 `
+  --height 1080 `
+  --font-preset pretendard
+Remove-Item Env:\CHROME_BIN
+```
+
+Windows `cmd.exe`:
+
+```bat
+set "CHROME_BIN=C:\Program Files\Google\Chrome\Application\chrome.exe"
+mise exec -- slidex render ^
+  --html decks/customer-retention/out/final_deck.html ^
+  --out decks/customer-retention/out/rendered_slides ^
+  --pdf decks/customer-retention/out/final_deck.pdf ^
+  --manifest decks/customer-retention/out/render_manifest.json ^
+  --pdf-mode paginated ^
+  --selector .slide ^
+  --width 1920 ^
+  --height 1080 ^
+  --font-preset pretendard
+set "CHROME_BIN="
+```
+
 ## Codex, Goal, Migration
+
+Bash:
 
 ```bash
 mise exec -- slidex doctor --deck decks/customer-retention --codex --render --json
@@ -94,6 +132,24 @@ mise exec -- slidex codex review --deck decks/customer-retention --stage deliver
 mise exec -- slidex goal set --deck decks/customer-retention --objective "현재 HTML/PDF 산출물의 package gate 통과"
 mise exec -- slidex goal status --deck decks/customer-retention
 mise exec -- slidex migrate --deck decks/customer-retention --from html-pdf
+```
+
+PowerShell:
+
+```powershell
+mise exec -- slidex doctor --deck decks/customer-retention --codex --render --json
+mise exec -- slidex workbench start --deck-id customer-retention
+mise exec -- slidex goal set --deck decks/customer-retention --objective "현재 HTML/PDF 산출물의 package gate 통과"
+mise exec -- slidex goal status --deck decks/customer-retention
+```
+
+Windows `cmd.exe`:
+
+```bat
+mise exec -- slidex doctor --deck decks/customer-retention --codex --render --json
+mise exec -- slidex workbench start --deck-id customer-retention
+mise exec -- slidex goal set --deck decks/customer-retention --objective "현재 HTML/PDF 산출물의 package gate 통과"
+mise exec -- slidex goal status --deck decks/customer-retention
 ```
 
 `/goal`은 Codex TUI slash command이고, `slidex goal`은 deck state와 App Server
