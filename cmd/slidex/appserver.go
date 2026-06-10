@@ -1443,6 +1443,41 @@ func postRestartPluginVerificationStatus(result appServerPluginSmokeResult, inst
 	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
 		return "drift"
 	}
+	if status := postRestartPluginMetadataStatus(pluginRoot, result.PluginVersion); status != "verified" {
+		return status
+	}
+	return "verified"
+}
+
+func postRestartPluginMetadataStatus(pluginRoot, visiblePluginVersion string) string {
+	manifestPath := filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
+	manifest, err := readCandidateJSON(manifestPath)
+	if err != nil {
+		return "not_verified"
+	}
+	if got := metadataString(manifest["name"]); got != toolName {
+		return "drift"
+	}
+	manifestVersion := metadataString(manifest["version"])
+	if pluginVersionBase(manifestVersion) != toolVersion {
+		return "drift"
+	}
+	if strings.TrimSpace(visiblePluginVersion) != "" && manifestVersion != visiblePluginVersion {
+		return "drift"
+	}
+	lockPath := filepath.Join(pluginRoot, ".codex-plugin", "version-lock.json")
+	lock, err := readCandidateJSON(lockPath)
+	if err != nil {
+		return "not_verified"
+	}
+	for _, key := range []string{"pluginVersion", "slidexCliVersion"} {
+		if got := metadataString(lock[key]); got != toolVersion {
+			return "drift"
+		}
+	}
+	if metadataString(lock["requiredCodexCliVersion"]) == "" {
+		return "drift"
+	}
 	return "verified"
 }
 

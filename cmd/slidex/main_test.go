@@ -1269,6 +1269,7 @@ func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
 		t.Fatal(err)
 	}
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
 	t.Setenv(updateInstallRootEnv, installRoot)
 	t.Setenv(updateInstallMetadataEnv, metadataPath)
 
@@ -1313,6 +1314,7 @@ func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
 		t.Fatal(err)
 	}
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
 	t.Setenv(updateInstallRootEnv, installRoot)
 	t.Setenv(updateInstallMetadataEnv, metadataPath)
 
@@ -1349,6 +1351,7 @@ func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 
 func TestPostRestartPluginVerificationRequiresInstalledEnabledPlugin(t *testing.T) {
 	installRoot := t.TempDir()
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
 	result := appServerPluginSmokeResult{
 		Status:                  "pass",
 		PluginReadOK:            true,
@@ -1367,6 +1370,58 @@ func TestPostRestartPluginVerificationRequiresInstalledEnabledPlugin(t *testing.
 	result.PluginInstalled = false
 	if got := postRestartPluginVerificationStatus(result, installRoot); got != "not_verified" {
 		t.Fatalf("uninstalled plugin verification status = %q", got)
+	}
+}
+
+func TestPostRestartPluginVerificationDetectsManifestDrift(t *testing.T) {
+	installRoot := t.TempDir()
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.other", toolVersion)
+	result := appServerPluginSmokeResult{
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           true,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+	}
+	if got := postRestartPluginVerificationStatus(result, installRoot); got != "drift" {
+		t.Fatalf("manifest drift verification status = %q", got)
+	}
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", "0.0.0")
+	if got := postRestartPluginVerificationStatus(result, installRoot); got != "drift" {
+		t.Fatalf("version lock drift verification status = %q", got)
+	}
+}
+
+func writePostRestartPluginFilesForTest(t *testing.T, installRoot, manifestVersion, lockVersion string) {
+	t.Helper()
+	pluginRoot := filepath.Join(installRoot, "plugins", "slidex")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".codex-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "slidex-start"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "skills", "slidex-start", "SKILL.md"), []byte("# slidex-start\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]any{
+		"name":    toolName,
+		"version": manifestVersion,
+	}
+	if err := writeSourceJSONFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	lock := map[string]any{
+		"pluginVersion":           lockVersion,
+		"slidexCliVersion":        lockVersion,
+		"requiredCodexCliVersion": requiredCodexVersion,
+	}
+	if err := writeSourceJSONFile(filepath.Join(pluginRoot, ".codex-plugin", "version-lock.json"), lock); err != nil {
+		t.Fatal(err)
 	}
 }
 
