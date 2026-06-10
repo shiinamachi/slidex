@@ -2,6 +2,10 @@ name: Cross Platform
 
 on:
   push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
   pull_request:
 
 permissions:
@@ -104,8 +108,53 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build -o "${{ runner.temp }}/slidex-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/slidex
+      - name: Build release package smoke
+        env:
+          SLIDEX_RELEASE_VERSION: ci-${{ matrix.goos }}-${{ matrix.goarch }}
+          SLIDEX_DIST_DIR: ${{ runner.temp }}/slidex-dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          SLIDEX_TARGETS: ${{ matrix.goos }}/${{ matrix.goarch }}
+        run: ./scripts/package-release.sh
       - name: Build test binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go test -c ./cmd/slidex -o "${{ runner.temp }}/slidex-${{ matrix.goos }}-${{ matrix.goarch }}.test${{ matrix.ext }}"
+
+  release:
+    name: Release Binaries
+    runs-on: ubuntu-24.04
+    needs:
+      - test
+      - cross-compile
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build release packages
+        env:
+          SLIDEX_RELEASE_VERSION: ${{ github.ref_name }}
+          SLIDEX_DIST_DIR: dist
+        run: ./scripts/package-release.sh
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes_file="${RUNNER_TEMP}/slidex-release-notes.md"
+          cat > "$notes_file" <<'NOTES'
+          Release packages are built by GitHub Actions for Linux, macOS, and Windows on amd64 and arm64.
+          Each archive includes the slidex CLI binary plus the runtime templates, schemas, Codex plugin package, repo marketplace, and install guide required for local use.
+          Code signing is deferred and is not part of this release pipeline.
+          NOTES
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --title "slidex ${GITHUB_REF_NAME}" --notes-file "$notes_file"
+          fi

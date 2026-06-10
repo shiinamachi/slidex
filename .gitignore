@@ -10,3 +10,6 @@
 /brand/
 /data/
 /out/
+
+# Local release package output.
+/dist/

@@ -34,16 +34,34 @@ Markdown artifact로 구성됩니다.
 ### 요구 사항
 
 - Windows, macOS, Linux 중 하나
-- Git
-- `mise`
 - HTML을 PNG/PDF로 렌더링하기 위한 Chrome, Chromium, 또는 Microsoft Edge
 - 선택 사항: bundled Codex Plugin을 사용할 경우 Codex App 또는 Codex CLI
+- source build 전용: Git과 `mise`
 
-이 저장소는 `.mise.toml`과 `go.mod`에서 Go 버전을 정확히 pin합니다. 설치 명령은
-저장소 root에서 실행합니다. 먼저 운영체제에 맞는 공식 안내에 따라 `mise`를
-설치하면, 이 저장소가 `mise`를 통해 pin된 Go runtime을 설치합니다.
+### 권장: GitHub Release package로 설치
 
-### 이 저장소에서 설치하기
+일반 사용자는 packaged release를 사용합니다. package에는 `slidex` binary,
+deck template, schema, Codex plugin file, repo marketplace가 함께 들어 있습니다.
+Release package는 GitHub Actions에서 빌드합니다. code signing은 이후 작업으로
+미룹니다.
+
+설치 절차는 다음 파일을 따릅니다.
+
+```text
+INSTALL.md
+```
+
+Codex App one-shot prompt:
+
+```text
+Install slidex from https://github.com/shiinamachi/slidex. Follow INSTALL.md in that repository: resolve the published GitHub Release tag first, use that exact tag's package for this OS/CPU, verify the SHA-256 checksum, add slidex to PATH, install the included Codex plugin with `codex plugin marketplace add <install-dir>` and `codex plugin add slidex@slidex-local` when Codex CLI is available, run `slidex --help` and `slidex doctor --render`, then report any manual follow-up.
+```
+
+### Source build fallback
+
+개발 중이거나 대상 platform용 release package가 없을 때만 이 경로를 사용합니다. 이
+저장소는 `.mise.toml`과 `go.mod`에서 Go 버전을 정확히 pin합니다. source build
+명령은 저장소 root에서 실행합니다.
 
 ```bash
 git clone https://github.com/shiinamachi/slidex.git
@@ -90,6 +108,11 @@ mise exec -- go env GOPATH
 ```
 
 ### 기존 설치 업데이트
+
+Release package 설치는 `INSTALL.md`의 release package 절차를 새 release tag에 대해
+반복합니다.
+
+Source build 설치는 다음을 실행합니다.
 
 ```bash
 git pull

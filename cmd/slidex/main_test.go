@@ -1579,6 +1579,50 @@ func TestRuntimeReferenceDocsAvoidRangeVersionLanguage(t *testing.T) {
 	}
 }
 
+func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
+	root := repoRootForTest(t)
+	checks := []struct {
+		path string
+		want []string
+	}{
+		{
+			path: filepath.Join(root, ".github", "workflows", "cross-platform.yml"),
+			want: []string{"Release Binaries", "scripts/package-release.sh", "gh release create", "contents: write"},
+		},
+		{
+			path: filepath.Join(root, "scripts", "package-release.sh"),
+			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "checksums.txt"},
+		},
+		{
+			path: filepath.Join(root, "INSTALL.md"),
+			want: []string{"GitHub Release", "SHA-256", "Code signing is deferred", "Codex App one-shot"},
+		},
+		{
+			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
+			want: []string{"https://github.com/shiinamachi/slidex", "INSTALL.md", "SHA-256", "slidex doctor --render"},
+		},
+	}
+	for _, check := range checks {
+		raw, err := os.ReadFile(check.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		for _, want := range check.want {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s does not contain %q", filepath.ToSlash(check.path), want)
+			}
+		}
+	}
+	info, err := os.Stat(filepath.Join(root, "scripts", "package-release.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatal("scripts/package-release.sh must be executable")
+	}
+}
+
 func TestDoctorGoalMethodsAndRequiredMCPGates(t *testing.T) {
 	protocol := map[string]any{
 		"ok": true,

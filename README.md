@@ -34,17 +34,34 @@ JSON, and Markdown artifacts.
 ### Requirements
 
 - Windows, macOS, or Linux
-- Git
-- `mise`
 - Chrome, Chromium, or Microsoft Edge for rendering HTML to PNG/PDF
 - Optional: Codex App or Codex CLI if you want to use the bundled Codex Plugin
+- Source build only: Git and `mise`
 
-The repository pins Go exactly in `.mise.toml` and `go.mod`. Run all install
-commands from the repository root. Install `mise` first using the official
-instructions for your operating system; the repository then uses `mise` to
-install the pinned Go runtime.
+### Recommended: install from GitHub Releases
 
-### Install from this repository
+Use the packaged release for normal installation. It includes the `slidex`
+binary, deck template, schemas, Codex plugin files, and repo marketplace needed
+for local use. Release packages are built by GitHub Actions; code signing is
+deferred.
+
+Follow:
+
+```text
+INSTALL.md
+```
+
+Codex App one-shot prompt:
+
+```text
+Install slidex from https://github.com/shiinamachi/slidex. Follow INSTALL.md in that repository: resolve the published GitHub Release tag first, use that exact tag's package for this OS/CPU, verify the SHA-256 checksum, add slidex to PATH, install the included Codex plugin with `codex plugin marketplace add <install-dir>` and `codex plugin add slidex@slidex-local` when Codex CLI is available, run `slidex --help` and `slidex doctor --render`, then report any manual follow-up.
+```
+
+### Source build fallback
+
+Use this path for development or when a release package is unavailable for the
+target platform. The repository pins Go exactly in `.mise.toml` and `go.mod`.
+Run all source build commands from the repository root.
 
 ```bash
 git clone https://github.com/shiinamachi/slidex.git
@@ -91,6 +108,11 @@ mise exec -- go env GOPATH
 ```
 
 ### Update an existing install
+
+For release package installs, repeat the `INSTALL.md` release package steps for
+the new release tag.
+
+For source builds:
 
 ```bash
 git pull

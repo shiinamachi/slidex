@@ -160,6 +160,11 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 
 ## 설치와 배포
 
+일반 사용자는 GitHub Release package를 설치합니다. package에는 `slidex` binary와
+실행에 필요한 `decks/_template`, `schemas`, Codex plugin package, repo marketplace가
+함께 들어 있습니다. 자세한 절차와 Codex App one-shot prompt는 `INSTALL.md`와
+`CODEX_INSTALL_PROMPT.md`를 따릅니다.
+
 ```bash
 mise exec -- go install ./cmd/slidex
 export PATH="$(mise exec -- go env GOPATH)/bin:$PATH"
@@ -186,4 +191,5 @@ companion skill/plugin package, hook manifest, README/commands 문서, shell com
 
 GitHub Actions `Cross Platform` workflow는 `ubuntu-24.04`, `macos-15`,
 `windows-2025` 테스트와 Linux/macOS/Windows `amd64`, `arm64` cross-compile을
-실행합니다.
+실행합니다. `v*` tag push에서는 같은 workflow의 `Release Binaries` job이 release
+package와 SHA-256 checksum file을 만들고 GitHub Release asset으로 업로드합니다.
