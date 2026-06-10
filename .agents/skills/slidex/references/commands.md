@@ -1,67 +1,11 @@
 # slidex Command Reference
 
-Primary workflow:
+The authoritative command guide is the repository-root `commands.md` file.
+This skill reference intentionally avoids duplicating command lists so the
+packaged skill does not drift from the CLI documentation.
 
-```bash
-mise exec -- go install ./cmd/slidex
-slidex workbench start --deck-id <deck_id>
-slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id> --screenshot
-slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified
-slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
-slidex run --deck decks/<deck_id>
-```
+Relative path from this file:
 
-Platform support:
-
-Windows, Linux, and macOS are supported targets. Use `<tmp-workspace>` as an
-OS-appropriate temporary directory. Browser discovery checks common Chrome,
-Chromium, and Microsoft Edge locations on each OS, with `CHROME_BIN` or
-`--chrome` available as explicit overrides.
-
-Stage commands:
-
-```bash
-slidex inspect --deck decks/<deck_id> --write
-slidex intake --deck decks/<deck_id>
-slidex strategy --deck decks/<deck_id>
-slidex spec --deck decks/<deck_id>
-slidex build --deck decks/<deck_id>
-slidex render --deck decks/<deck_id>
-slidex qa --deck decks/<deck_id>
-slidex revise --deck decks/<deck_id>
-slidex finalize --deck decks/<deck_id>
-slidex package --deck decks/<deck_id>
-```
-
-Codex checks:
-
-The repository vendors and tests against exact Codex protocol schema `0.138.0`;
-use the exact Codex CLI/runtime version recorded in the repository lock and
-doctor output.
-
-```bash
-slidex codex doctor --json
-slidex codex schema refresh --codex-version 0.138.0
-slidex codex app-server probe
-slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id skill-smoke
-```
-
-`slidex codex app-server skill-smoke` is a headless pre-GUI App Server check.
-It verifies the installed `slidex:slidex-start` skill can start the loopback
-workbench and persist initial deck creation input through that same workbench
-session. `slidex workbench save-smoke` is a local HTTP pre-GUI check. It
-verifies workbench HTML bootstrap, draft/save persistence, token redaction, and
-deck-local artifact hashes. With `--screenshot`, it also captures a nonblank
-headless Chrome workbench render under `out/workbench_save_smoke.png`, but
-neither smoke is Codex App GUI/browser evidence. Browser evidence screenshots
-must be decodable nonblank PNG/JPEG files. `slidex workbench verify-evidence`
-persists its audit result to
-`out/workbench_browser_evidence_verification.json`.
-
-Goal mirror:
-
-```bash
-slidex goal set --deck decks/<deck_id> --objective "..."
-slidex goal status --deck decks/<deck_id>
-slidex goal complete --deck decks/<deck_id>
+```text
+../../../../commands.md
 ```

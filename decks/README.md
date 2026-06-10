@@ -57,9 +57,9 @@ slidex init <deck_id>
 slidex run --deck decks/customer-retention
 ```
 
-## 공유 자료
+## 자료 범위
 
-여러 작업이 같은 브랜드나 공통 이미지를 써야 하면 `shared/brand/`,
-`shared/assets/`, `shared/data/`를 둘 수 있습니다. 덱별 파일이 있으면 덱별
-파일을 우선하고, 공유 자료를 사용할 때는 `${OUT_DIR}/notes.md`에 사용 이유와
-출처를 기록합니다.
+새 작업의 입력과 산출물은 해당 `decks/<deck_id>/` 아래에 둡니다. 여러 작업이
+같은 브랜드, 이미지, 데이터, 원문 자료를 사용하더라도 현재 작업에서 필요한
+파일은 그 deck의 `brand/`, `assets/`, `data/`, `source/` 아래에 두고,
+생성된 `${OUT_DIR}/notes.md`에 출처와 사용 이유를 기록합니다.
