@@ -148,6 +148,69 @@ func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T
 	}
 }
 
+func TestUpdateStatusDisablesInconsistentReleaseMetadata(t *testing.T) {
+	temp := t.TempDir()
+	metadataPath := filepath.Join(temp, "install.json")
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion + "-abcdef0",
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+
+	status, err := currentUpdateStatus(filepath.Join(temp, "slidex"), metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled || status.Status != "disabled" {
+		t.Fatalf("inconsistent release metadata should disable updates: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "update is disabled fail-closed") || !strings.Contains(status.Reason, "channel must match") {
+		t.Fatalf("inconsistent release metadata reason missing: %#v", status)
+	}
+}
+
+func TestUpdateCheckInconsistentReleaseMetadataDoesNotFetchReleaseAPI(t *testing.T) {
+	temp := t.TempDir()
+	metadataPath := filepath.Join(temp, "install.json")
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		Tag:           "v9.9.9",
+		InstallMode:   installModeReleasePackage,
+	})
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateCheck([]string{"--install-root", filepath.Join(temp, "slidex"), "--metadata", metadataPath, "--api-url", server.URL, "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("inconsistent release metadata check failed: %v\n%s", runErr, output)
+	}
+	if called {
+		t.Fatal("inconsistent release metadata should not fetch release metadata")
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid inconsistent metadata check JSON: %v\n%s", err, output)
+	}
+	if status.Status != "disabled" || status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled {
+		t.Fatalf("inconsistent release metadata check should be disabled: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "tag must resolve") {
+		t.Fatalf("inconsistent release metadata reason missing: %#v", status)
+	}
+}
+
 func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
 	  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":true,"assets":[

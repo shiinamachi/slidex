@@ -723,7 +723,7 @@ func TestWorkbenchHTMLStatusBannersDoNotOverlapDeckForm(t *testing.T) {
 	writeInstallMetadataForTest(t, metadataPath, installMetadata{
 		SchemaVersion: installMetadataSchemaVersion,
 		ToolName:      toolName,
-		Version:       toolVersion,
+		Version:       toolVersion + "-abcdef0",
 		Channel:       updateChannelCanary,
 		InstallMode:   installModeReleasePackage,
 	})
@@ -952,7 +952,7 @@ func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	writeInstallMetadataForTest(t, metadataPath, installMetadata{
 		SchemaVersion: installMetadataSchemaVersion,
 		ToolName:      toolName,
-		Version:       toolVersion,
+		Version:       toolVersion + "-abcdef0",
 		Channel:       updateChannelCanary,
 		InstallMode:   installModeReleasePackage,
 	})

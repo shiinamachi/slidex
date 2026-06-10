@@ -553,6 +553,13 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 
 	metadata, metadataErr := readInstallMetadata(metadataPath)
 	channel, mode, reason := inferUpdateChannel(installRoot, metadata, metadataErr)
+	if metadata != nil && (channel == updateChannelProduction || channel == updateChannelCanary) {
+		if issue := installedReleaseMetadataIssue(metadata); issue != "" {
+			channel = updateChannelLocalDevelopment
+			mode = firstNonEmpty(metadata.InstallMode, installModeUnknown)
+			reason = "install metadata is inconsistent; update is disabled fail-closed: " + issue
+		}
+	}
 	state, statePath, stateErr := readUpdateState(installRoot)
 	pending, pendingPath, _ := readPendingUpdate(installRoot)
 	status := updateStatus{
@@ -1475,6 +1482,46 @@ func inferUpdateChannel(installRoot string, metadata *installMetadata, metadataE
 		return updateChannelLocalDevelopment, installModeUnknown, "install metadata could not be read; update is disabled fail-closed: " + metadataErr.Error()
 	}
 	return updateChannelLocalDevelopment, installModeGoInstall, "install metadata is absent; treating this as a go install or development binary"
+}
+
+func installedReleaseMetadataIssue(metadata *installMetadata) string {
+	if metadata == nil {
+		return ""
+	}
+	if metadata.Version != "" {
+		versionChannel := channelFromPackageVersion(metadata.Version)
+		if versionChannel != updateChannelProduction && versionChannel != updateChannelCanary {
+			return "install metadata version must resolve to production or canary, got " + metadata.Version
+		}
+		if metadata.Channel != "" && metadata.Channel != versionChannel {
+			return "install metadata channel must match package version channel " + versionChannel + ", got " + metadata.Channel
+		}
+		if metadata.Tag != "" {
+			tagVersion, err := releasePackageVersionFromTag(metadata.Tag)
+			if err != nil || tagVersion != metadata.Version {
+				return "install metadata tag must resolve to " + metadata.Version + ", got " + metadata.Tag
+			}
+		}
+		if metadata.ReleaseAssetName != "" {
+			contract, err := releaseAssetContractFor("v"+metadata.Version, runtime.GOOS, runtime.GOARCH)
+			if err != nil {
+				return err.Error()
+			}
+			if metadata.ReleaseAssetName != contract.ArchiveName {
+				return "install metadata releaseAssetName must be " + contract.ArchiveName + ", got " + metadata.ReleaseAssetName
+			}
+		}
+	}
+	if metadata.InstallMode != "" && metadata.InstallMode != installModeReleasePackage {
+		return "install metadata installMode must be " + installModeReleasePackage + ", got " + metadata.InstallMode
+	}
+	if metadata.OS != "" && metadata.OS != runtime.GOOS {
+		return "install metadata os must be " + runtime.GOOS + ", got " + metadata.OS
+	}
+	if metadata.Arch != "" && metadata.Arch != runtime.GOARCH {
+		return "install metadata arch must be " + runtime.GOARCH + ", got " + metadata.Arch
+	}
+	return ""
 }
 
 func defaultInstallRoot() string {
