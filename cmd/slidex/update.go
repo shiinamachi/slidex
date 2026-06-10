@@ -127,6 +127,7 @@ type updateApplyResult struct {
 	NextVerificationCommand  string                  `json:"nextVerificationCommand"`
 	Attestation              attestationVerification `json:"attestation"`
 	CandidateValidation      []qaFinding             `json:"candidateValidation,omitempty"`
+	Error                    string                  `json:"error,omitempty"`
 }
 
 type attestationVerification struct {
@@ -312,10 +313,12 @@ func runUpdateApply(args []string) error {
 		return err
 	}
 	if !status.UpdatesEnabled {
-		return exitCodeError(4, "updates are disabled for channel %s: %s", status.Channel, firstNonEmpty(status.Guidance, status.Reason))
+		err := exitCodeError(4, "updates are disabled for channel %s: %s", status.Channel, firstNonEmpty(status.Guidance, status.Reason))
+		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}, err)
 	}
 	if *candidate != "" && *attestationPolicy != attestationPolicyAllowUnverified {
-		return exitCodeError(2, "--candidate bypasses release archive attestation and requires --attestation-policy allow-unverified")
+		err := exitCodeError(2, "--candidate bypasses release archive attestation and requires --attestation-policy allow-unverified")
+		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}, err)
 	}
 	candidateRoot := *candidate
 	attestation := attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}
@@ -329,7 +332,13 @@ func runUpdateApply(args []string) error {
 	if *candidate == "" && *archive == "" {
 		downloadedRoot, downloadedVersion, downloadedTag, downloadedAttestation, err := downloadAndStageReleaseCandidate(context.Background(), status, *apiURL, *attestationPolicy)
 		if err != nil {
-			return err
+			if *targetVersion == "" {
+				*targetVersion = downloadedVersion
+			}
+			if *targetTag == "" {
+				*targetTag = downloadedTag
+			}
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, downloadedAttestation, err)
 		}
 		candidateRoot = downloadedRoot
 		attestation = downloadedAttestation
@@ -341,30 +350,34 @@ func runUpdateApply(args []string) error {
 		}
 	} else if *archive != "" {
 		if *checksums == "" {
-			return exitCodeError(2, "--checksums is required with --archive")
+			err := exitCodeError(2, "--checksums is required with --archive")
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
 		}
 		if *targetVersion == "" {
-			return exitCodeError(2, "--target-version is required with --archive")
+			err := exitCodeError(2, "--target-version is required with --archive")
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
 		}
 		if *targetTag == "" && *attestationPolicy == attestationPolicyRequire {
-			return exitCodeError(2, "--target-tag is required with --archive when attestation verification is required")
+			err := exitCodeError(2, "--target-tag is required with --archive when attestation verification is required")
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
 		}
 		if err := verifyArchiveCandidateSHA256(*archive, *checksums); err != nil {
-			return err
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
 		}
 		archiveAttestation, err := verifyReleaseAttestation(*archive, *targetTag, *attestationPolicy)
 		if err != nil {
-			return err
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, archiveAttestation, err)
 		}
 		extracted, err := extractArchiveCandidate(*archive, *targetVersion, status.InstallRoot)
 		if err != nil {
-			return err
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, archiveAttestation, err)
 		}
 		attestation = archiveAttestation
 		candidateRoot = extracted
 	}
 	if *targetVersion == "" {
-		return exitCodeError(2, "--target-version is required with --candidate")
+		err := exitCodeError(2, "--target-version is required with --candidate")
+		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
 	}
 	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag, attestation)
 	if *jsonOut {
@@ -468,6 +481,37 @@ func runUpdateActivatePending(args []string) error {
 		return exitCodeError(4, "pending candidate bundle validation failed")
 	}
 	return nil
+}
+
+func maybePrintUpdateApplyFailure(jsonOut bool, status updateStatus, targetVersion, targetTag string, attestation attestationVerification, err error) error {
+	if !jsonOut {
+		return err
+	}
+	result := updateApplyFailureResult(status, targetVersion, targetTag, attestation, err)
+	if printErr := printJSON(result); printErr != nil {
+		return printErr
+	}
+	return err
+}
+
+func updateApplyFailureResult(status updateStatus, targetVersion, targetTag string, attestation attestationVerification, err error) updateApplyResult {
+	if attestation.Status == "" {
+		attestation.Status = "not_applicable"
+	}
+	return updateApplyResult{
+		ToolName:                 toolName,
+		CurrentVersion:           status.CurrentVersion,
+		TargetVersion:            targetVersion,
+		TargetTag:                targetTag,
+		Channel:                  status.Channel,
+		InstallRoot:              status.InstallRoot,
+		Status:                   "failed",
+		RestartRequired:          status.RestartRequired,
+		PluginVerificationStatus: status.PluginVerificationStatus,
+		NextVerificationCommand:  firstNonEmpty(status.NextVerificationCommand, "slidex update verify --json"),
+		Attestation:              attestation,
+		Error:                    err.Error(),
+	}
 }
 
 func updateVerificationFindings(status updateStatus) []qaFinding {

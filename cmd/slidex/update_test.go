@@ -688,6 +688,78 @@ func TestRunUpdateApplyRequiresAttestationBeforeActivation(t *testing.T) {
 	}
 }
 
+func TestRunUpdateApplyArchiveAttestationFailureJSONReportsFailureContract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksumPath := filepath.Join(parent, contract.ChecksumName)
+	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", installMetadataPath(installRoot),
+			"--archive", archivePath,
+			"--checksums", checksumPath,
+			"--target-version", "0.2.0",
+			"--target-tag", "v0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "attestation") {
+		t.Fatalf("expected attestation failure, got %v\n%s", runErr, output)
+	}
+	var result updateApplyResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid attestation failure JSON: %v\n%s", err, output)
+	}
+	if result.Status != "failed" || result.Channel != updateChannelProduction || result.TargetVersion != "0.2.0" || result.TargetTag != "v0.2.0" {
+		t.Fatalf("attestation failure fields missing: %#v", result)
+	}
+	if result.Attestation.Policy != attestationPolicyRequire || result.Attestation.Status != "fail" || !strings.Contains(result.Attestation.Error, "GitHub CLI") {
+		t.Fatalf("attestation failure details missing: %#v", result.Attestation)
+	}
+	if result.PluginVerificationStatus != "not_verified" || result.NextVerificationCommand != "slidex update verify --json" || result.RestartRequired {
+		t.Fatalf("attestation failure plugin/restart fields missing: %#v", result)
+	}
+	if !strings.Contains(result.Error, "GitHub CLI") {
+		t.Fatalf("attestation failure error missing: %#v", result)
+	}
+}
+
 func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
@@ -885,6 +957,51 @@ func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	err := runUpdateApply([]string{"--install-root", sourceRoot, "--metadata", filepath.Join(sourceRoot, ".slidex", "missing.json"), "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
 	if err == nil || !strings.Contains(err.Error(), "updates are disabled") {
 		t.Fatalf("local-development apply err = %v", err)
+	}
+}
+
+func TestRunUpdateApplyLocalDevelopmentJSONReportsFailureContract(t *testing.T) {
+	sourceRoot := t.TempDir()
+	for _, dir := range []string{".git", filepath.Join("cmd", "slidex")} {
+		if err := os.MkdirAll(filepath.Join(sourceRoot, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{"go.mod", filepath.Join("cmd", "slidex", "main.go")} {
+		if err := os.WriteFile(filepath.Join(sourceRoot, file), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", sourceRoot,
+			"--metadata", filepath.Join(sourceRoot, ".slidex", "missing.json"),
+			"--candidate", candidate,
+			"--target-version", "0.2.0",
+			"--attestation-policy", attestationPolicyAllowUnverified,
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "updates are disabled") {
+		t.Fatalf("local-development apply JSON err = %v\n%s", runErr, output)
+	}
+	var result updateApplyResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid local-development apply failure JSON: %v\n%s", err, output)
+	}
+	if result.Status != "failed" || result.Channel != updateChannelLocalDevelopment || result.TargetVersion != "0.2.0" {
+		t.Fatalf("local-development failure fields missing: %#v", result)
+	}
+	if result.PluginVerificationStatus != "not_verified" || result.NextVerificationCommand != "slidex update verify --json" {
+		t.Fatalf("local-development plugin fields missing: %#v", result)
+	}
+	if !strings.Contains(result.Error, "updates are disabled") {
+		t.Fatalf("local-development failure error missing: %#v", result)
 	}
 }
 
