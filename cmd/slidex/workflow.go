@@ -407,7 +407,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 		path string
 		kind string
 	}{
-		{filepath.Join("cmd", "slidex", "VERSION"), "version source"},
+		{"VERSION", "version source"},
 		{filepath.Join(".agents", "plugins", "marketplace.json"), "repo marketplace"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"), "plugin manifest"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"), "plugin version lock"},
@@ -420,7 +420,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 			findings = append(findings, fail("doctor.plugin_package", "missing "+check.kind+": "+err.Error(), check.path))
 		}
 	}
-	findings = append(findings, validateVersionSourceFile(filepath.Join("cmd", "slidex", "VERSION"))...)
+	findings = append(findings, validateVersionSourceFile("VERSION")...)
 	findings = append(findings, validatePluginJSONManifest(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"))...)
 	findings = append(findings, validatePluginVersionLock(filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"))...)
 	findings = append(findings, validateMarketplaceManifest(filepath.Join(".agents", "plugins", "marketplace.json"))...)

@@ -1591,7 +1591,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "cmd/slidex/VERSION", "go run ./cmd/slidex version", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
@@ -1779,7 +1779,7 @@ func TestVersionMetadataContractStaysAligned(t *testing.T) {
 	manifestPath := filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")
 	lockPath := filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json")
 	marketplacePath := filepath.Join(".agents", "plugins", "marketplace.json")
-	if findings := validateVersionSourceFile(filepath.Join("cmd", "slidex", "VERSION")); hasFailures(findings) {
+	if findings := validateVersionSourceFile("VERSION"); hasFailures(findings) {
 		t.Fatalf("version source drifted: %#v", findings)
 	}
 	if findings := validatePluginJSONManifest(manifestPath); hasFailures(findings) {
@@ -1804,8 +1804,8 @@ func TestVersionMetadataContractStaysAligned(t *testing.T) {
 	if got := metadataString(manifest["license"]); got != toolLicenseIdentifier {
 		t.Fatalf("plugin license = %q, want %q", got, toolLicenseIdentifier)
 	}
-	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(root, "cmd", "slidex", "VERSION"))); got != toolVersion {
-		t.Fatalf("cmd/slidex/VERSION = %q, want %q", got, toolVersion)
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(root, "VERSION"))); got != toolVersion {
+		t.Fatalf("VERSION = %q, want %q", got, toolVersion)
 	}
 
 	licenseText := readFileOrEmpty(filepath.Join(root, "LICENSE"))
@@ -1813,7 +1813,7 @@ func TestVersionMetadataContractStaysAligned(t *testing.T) {
 		t.Fatal("LICENSE must declare MIT License for shiinamachi")
 	}
 	versioningText := readFileOrEmpty(filepath.Join(root, "VERSIONING.md"))
-	for _, want := range []string{"cmd/slidex/VERSION", "sync-version-metadata", "version-lock.json", "marketplace.json", "scripts/package-release.sh"} {
+	for _, want := range []string{"`VERSION`", "sync-version-metadata", "version-lock.json", "marketplace.json", "scripts/package-release.sh"} {
 		if !strings.Contains(versioningText, want) {
 			t.Fatalf("VERSIONING.md is missing %q", want)
 		}

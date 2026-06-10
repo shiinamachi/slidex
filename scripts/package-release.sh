@@ -40,7 +40,7 @@ runtime_paths=(
   "README.ko.md"
   "README.md"
   "VERSIONING.md"
-  "cmd/slidex/VERSION"
+  "VERSION"
   "commands.md"
   "decks/README.md"
   "decks/_template"

@@ -5,7 +5,6 @@ import (
 	"compress/zlib"
 	"context"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,11 +28,10 @@ import (
 	"strings"
 	"time"
 
+	slidexmeta "slidex"
+
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
-
-//go:embed VERSION
-var embeddedToolVersion string
 
 const (
 	toolName                 = "slidex"
@@ -45,7 +43,7 @@ const (
 )
 
 var (
-	toolVersion                = mustEmbeddedVersion(embeddedToolVersion)
+	toolVersion                = slidexmeta.Version()
 	pluginVersionDoctorExample = toolVersion + "+doctor"
 )
 
@@ -54,16 +52,8 @@ const (
 	chromeCommandTimeout = 45 * time.Second
 )
 
-func mustEmbeddedVersion(raw string) string {
-	version := strings.TrimSpace(raw)
-	if !isReleaseBaseVersion(version) {
-		panic("cmd/slidex/VERSION must contain one exact release version")
-	}
-	return version
-}
-
 func isReleaseBaseVersion(version string) bool {
-	return regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$`).MatchString(strings.TrimSpace(version))
+	return slidexmeta.IsReleaseBaseVersion(version)
 }
 
 type fileEntry struct {
