@@ -193,7 +193,7 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 		t.Skipf("Chrome/Chromium is not available: %v", err)
 	}
 
-	deck := filepath.Join(t.TempDir(), "minimal_deck")
+	deck := filepath.Join(t.TempDir(), "workspace with spaces", "minimal_deck")
 	if err := copyDir(filepath.Join(root, "fixtures", "minimal_deck"), deck); err != nil {
 		t.Fatal(err)
 	}
