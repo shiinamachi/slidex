@@ -154,6 +154,9 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	defer func() { _ = os.Chdir(oldWD) }()
 
 	if _, err := resolveChrome(""); err != nil {
+		if renderSmokeRequired() {
+			t.Fatalf("Chrome/Chromium is required for cross-platform render smoke: %v", err)
+		}
 		t.Skipf("Chrome/Chromium is not available: %v", err)
 	}
 
@@ -193,6 +196,9 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	manifest, err := renderHTML(cfg)
 	if err != nil {
 		if isChromeSandboxEnvironmentFailure(err) {
+			if renderSmokeRequired() {
+				t.Fatalf("Chrome render smoke is required but Chrome could not render in this sandbox: %v", err)
+			}
 			t.Skipf("Chrome cannot render in this sandbox: %v", err)
 		}
 		t.Fatal(err)
@@ -420,6 +426,10 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if !errors.As(err, &coded) || coded.ExitCode() != 5 {
 		t.Fatalf("runPackage stale exit code = %v, %v; want 5", coded, err)
 	}
+}
+
+func renderSmokeRequired() bool {
+	return os.Getenv("SLIDEX_REQUIRE_RENDER_SMOKE") == "1"
 }
 
 func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {

@@ -29,11 +29,13 @@ jobs:
       - name: Show Go version
         run: go version
       - name: Run tests
+        env:
+          SLIDEX_REQUIRE_RENDER_SMOKE: "1"
         run: go test ./...
       - name: Validate sample deck spec
         run: go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
       - name: Run repository doctor
-        run: go run ./cmd/slidex doctor --json
+        run: go run ./cmd/slidex doctor --render --json
       - name: Run workbench save smoke
         run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex-workbench-smoke" --deck-id ci-workbench-smoke
 
