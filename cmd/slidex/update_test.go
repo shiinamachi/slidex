@@ -402,6 +402,28 @@ func findingCheckPresent(findings []qaFinding, check string) bool {
 	return false
 }
 
+func candidateExtractedUnderForTest(t *testing.T, root string) bool {
+	t.Helper()
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	found := false
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		if entry.Name() == "VERSION" {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
 func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	installRoot := t.TempDir()
 	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
@@ -661,6 +683,9 @@ func TestRunUpdateApplyRequiresAttestationBeforeActivation(t *testing.T) {
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
 		t.Fatalf("install root should not activate without attestation, got VERSION %q", got)
 	}
+	if candidateExtractedUnderForTest(t, filepath.Join(installRoot, ".slidex", "staged")) {
+		t.Fatal("archive should not be extracted before required attestation passes")
+	}
 }
 
 func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
@@ -703,6 +728,69 @@ func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(installRoot, ".slidex", "staged")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("archive should not be extracted before required target tag is present, stat err = %v", err)
+	}
+}
+
+func TestRunUpdateApplyDownloadRequiresAttestationBeforeExtraction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
+	archivePayload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archivePayload)
+	digest := hex.EncodeToString(sum[:])
+	checksumText := digest + "  " + contract.ArchiveName + "\n"
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `[{"tag_name":"v0.2.0","draft":false,"prerelease":false,"assets":[{"name":%q,"browser_download_url":%q,"digest":%q},{"name":%q,"browser_download_url":%q}]}]`,
+				contract.ArchiveName,
+				server.URL+"/assets/"+contract.ArchiveName,
+				"sha256:"+digest,
+				contract.ChecksumName,
+				server.URL+"/assets/"+contract.ChecksumName,
+			)
+		case "/assets/" + contract.ArchiveName:
+			_, _ = w.Write(archivePayload)
+		case "/assets/" + contract.ChecksumName:
+			_, _ = w.Write([]byte(checksumText))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("PATH", t.TempDir())
+
+	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "attestation") {
+		t.Fatalf("expected downloaded release attestation failure, got %v", err)
+	}
+	if candidateExtractedUnderForTest(t, filepath.Join(installRoot, ".slidex", "downloads")) {
+		t.Fatal("downloaded archive should not be extracted before required attestation passes")
 	}
 }
 

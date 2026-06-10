@@ -349,11 +349,14 @@ func runUpdateApply(args []string) error {
 		if *targetTag == "" && *attestationPolicy == attestationPolicyRequire {
 			return exitCodeError(2, "--target-tag is required with --archive when attestation verification is required")
 		}
-		extracted, err := stageArchiveCandidate(*archive, *checksums, *targetVersion, status.InstallRoot)
-		if err != nil {
+		if err := verifyArchiveCandidateSHA256(*archive, *checksums); err != nil {
 			return err
 		}
 		archiveAttestation, err := verifyReleaseAttestation(*archive, *targetTag, *attestationPolicy)
+		if err != nil {
+			return err
+		}
+		extracted, err := extractArchiveCandidate(*archive, *targetVersion, status.InstallRoot)
 		if err != nil {
 			return err
 		}
@@ -736,18 +739,22 @@ func markPluginDrift(installRoot, pluginVersion, skillPath string) error {
 	return writeUpdateState(installRoot, *state)
 }
 
-func stageArchiveCandidate(archivePath, checksumsPath, targetVersion, installRoot string) (string, error) {
+func verifyArchiveCandidateSHA256(archivePath, checksumsPath string) error {
 	payload, err := os.ReadFile(archivePath)
 	if err != nil {
-		return "", err
+		return err
 	}
 	checksumText, err := os.ReadFile(checksumsPath)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if _, err := verifyReleaseAssetSHA256(filepath.Base(archivePath), payload, string(checksumText), ""); err != nil {
-		return "", err
+		return err
 	}
+	return nil
+}
+
+func extractArchiveCandidate(archivePath, targetVersion, installRoot string) (string, error) {
 	stageParent := filepath.Join(installRoot, ".slidex", "staged", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
 	if err := os.MkdirAll(stageParent, 0o755); err != nil {
 		return "", err
@@ -780,11 +787,15 @@ func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, 
 	if err != nil {
 		return "", "", "", attestationVerification{}, err
 	}
-	candidateRoot, archivePath, err := stageDownloadedArchiveCandidate(status.InstallRoot, contract.Version, archive, archivePayload, checksum, checksumPayload)
+	stageParent, archivePath, err := stageDownloadedReleaseArchive(status.InstallRoot, contract.Version, archive, archivePayload, checksum, checksumPayload)
 	if err != nil {
 		return "", "", "", attestationVerification{}, err
 	}
 	attestation, err = verifyReleaseAttestation(archivePath, release.TagName, attestationPolicy)
+	if err != nil {
+		return "", "", "", attestation, err
+	}
+	candidateRoot, err = extractDownloadedReleaseArchive(stageParent, archivePath)
 	if err != nil {
 		return "", "", "", attestation, err
 	}
@@ -813,11 +824,11 @@ func downloadUpdateAsset(ctx context.Context, asset updateAsset) ([]byte, error)
 	return io.ReadAll(io.LimitReader(resp.Body, 512<<20))
 }
 
-func stageDownloadedArchiveCandidate(installRoot, targetVersion string, archive updateAsset, archivePayload []byte, checksum updateAsset, checksumPayload []byte) (candidateRoot, archivePath string, err error) {
+func stageDownloadedReleaseArchive(installRoot, targetVersion string, archive updateAsset, archivePayload []byte, checksum updateAsset, checksumPayload []byte) (stageParent, archivePath string, err error) {
 	if _, err := verifyReleaseAssetSHA256(archive.Name, archivePayload, string(checksumPayload), archive.Digest); err != nil {
 		return "", "", err
 	}
-	stageParent := filepath.Join(installRoot, ".slidex", "downloads", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	stageParent = filepath.Join(installRoot, ".slidex", "downloads", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
 	if err := os.MkdirAll(stageParent, 0o755); err != nil {
 		return "", "", err
 	}
@@ -829,12 +840,15 @@ func stageDownloadedArchiveCandidate(installRoot, targetVersion string, archive 
 	if err := os.WriteFile(checksumPath, checksumPayload, 0o644); err != nil {
 		return "", "", err
 	}
+	return stageParent, archivePath, nil
+}
+
+func extractDownloadedReleaseArchive(stageParent, archivePath string) (candidateRoot string, err error) {
 	extractRoot := filepath.Join(stageParent, "extract")
 	if err := os.MkdirAll(extractRoot, 0o755); err != nil {
-		return "", "", err
+		return "", err
 	}
-	candidateRoot, err = extractReleaseArchive(archivePath, extractRoot)
-	return candidateRoot, archivePath, err
+	return extractReleaseArchive(archivePath, extractRoot)
 }
 
 func extractReleaseArchive(archivePath, dest string) (string, error) {
