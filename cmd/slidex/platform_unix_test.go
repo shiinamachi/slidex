@@ -11,7 +11,12 @@ import (
 )
 
 func TestManagedAppServerDefaultListenUnix(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	runtimeDir, err := os.MkdirTemp("/tmp", "slidex-runtime-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	listen, err := normalizeManagedListenURL("")
 	if err != nil {
 		t.Fatal(err)
