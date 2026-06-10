@@ -202,6 +202,20 @@ func TestValidateCandidateBundleChecksBinaryVersion(t *testing.T) {
 	}
 }
 
+func TestValidateCandidateBundleChecksDoctorStatus(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	writeCandidateBinaryForTestWithDoctorStatus(t, filepath.Join(root, binary), "0.2.0", "fail")
+	findings := validateCandidateBundle(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_doctor") {
+		t.Fatalf("candidate doctor failure should fail: %#v", findings)
+	}
+}
+
 func findingCheckPresent(findings []qaFinding, check string) bool {
 	for _, finding := range findings {
 		if finding.Check == check {
@@ -551,6 +565,11 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 
 func writeCandidateBinaryForTest(t *testing.T, path, version string) {
 	t.Helper()
+	writeCandidateBinaryForTestWithDoctorStatus(t, path, version, "pass")
+}
+
+func writeCandidateBinaryForTestWithDoctorStatus(t *testing.T, path, version, doctorStatus string) {
+	t.Helper()
 	dir := t.TempDir()
 	source := filepath.Join(dir, "main.go")
 	code := `package main
@@ -563,6 +582,10 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Println("slidex ` + version + `")
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		fmt.Println(` + "`" + `{"status":"` + doctorStatus + `"}` + "`" + `)
 		return
 	}
 	fmt.Println("slidex ` + version + `")

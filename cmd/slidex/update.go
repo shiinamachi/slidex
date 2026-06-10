@@ -1472,6 +1472,10 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version command failed: "+err.Error(), filepath.ToSlash(binaryPath)))
 	} else if version != expectedVersion {
 		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version must be "+expectedVersion+", got "+version, filepath.ToSlash(binaryPath)))
+	} else if doctorStatus, err := candidateDoctorStatus(root, binaryPath); err != nil {
+		findings = append(findings, fail("update.candidate_doctor", "candidate doctor failed: "+err.Error(), filepath.ToSlash(binaryPath)))
+	} else if doctorStatus != "pass" {
+		findings = append(findings, fail("update.candidate_doctor", "candidate doctor status must be pass, got "+doctorStatus, filepath.ToSlash(binaryPath)))
 	}
 	return findings
 }
@@ -1492,6 +1496,25 @@ func candidateBinaryVersion(path string) (string, error) {
 		return "", errors.New("empty version output")
 	}
 	return fields[len(fields)-1], nil
+}
+
+func candidateDoctorStatus(root, binaryPath string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, "doctor", "--json")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	var report map[string]any
+	if err := json.Unmarshal(out, &report); err != nil {
+		return "", err
+	}
+	return metadataString(report["status"]), nil
 }
 
 func readCandidateJSON(path string) (map[string]any, error) {
