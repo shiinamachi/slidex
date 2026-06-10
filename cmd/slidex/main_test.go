@@ -1962,8 +1962,8 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	tokenHash := sha256Bytes([]byte("token"))
 	err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash})
 	if runtime.GOOS == "windows" {
-		if err == nil || !strings.Contains(err.Error(), "tunnel") {
-			t.Fatalf("expected Windows public token file to pass mode check and fail tunnel ack, got %v", err)
+		if err == nil || (!strings.Contains(err.Error(), "tunnel") && !strings.Contains(err.Error(), "ACL")) {
+			t.Fatalf("expected Windows public token file to fail ACL check or tunnel ack, got %v", err)
 		}
 	} else if err == nil {
 		t.Fatal("expected public token file to fail")
@@ -1971,6 +1971,7 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	if err := os.Chmod(token, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	makeTestPrivateFile(t, token)
 	if err := validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{}); err != nil {
 		t.Fatalf("loopback websocket without auth should pass: %v", err)
 	}
@@ -1998,6 +1999,7 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	makeTestPrivateFile(t, secret)
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "")
 	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30})
 	if err == nil {

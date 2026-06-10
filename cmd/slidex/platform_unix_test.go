@@ -45,3 +45,7 @@ func TestAppServerClientCommandUsesProcessGroupUnix(t *testing.T) {
 		t.Fatalf("stdio app-server command should start in its own process group: %#v", cmd.SysProcAttr)
 	}
 }
+
+func makeTestPrivateFile(t *testing.T, path string) {
+	t.Helper()
+}

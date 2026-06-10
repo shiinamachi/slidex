@@ -2733,6 +2733,9 @@ func requirePrivateFile(path, flagName string) error {
 	if !privateFileModeAllowed(runtime.GOOS, info.Mode().Perm()) {
 		return exitCodeError(4, "%s must be private mode 0600 or stricter", flagName)
 	}
+	if err := requirePlatformPrivateFile(path, flagName); err != nil {
+		return err
+	}
 	return nil
 }
 

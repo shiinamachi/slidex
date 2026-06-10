@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestManagedAppServerDefaultListenWindows(t *testing.T) {
@@ -67,5 +69,87 @@ func TestRejectSymlinkEscapeRejectsWindowsJunction(t *testing.T) {
 	}
 	if err := rejectSymlinkAncestors(filepath.Join(junction, "out", "final_deck.html")); err == nil || !strings.Contains(strings.ToLower(err.Error()), "reparse") {
 		t.Fatalf("expected secure write ancestor reparse rejection, got %v", err)
+	}
+}
+
+func TestRequirePlatformPrivateFileAllowsCurrentUserWindowsACL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userSID, err := windowsCurrentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setWindowsTestDACL(t, path, []windows.EXPLICIT_ACCESS{
+		windowsTestAccessEntry(userSID, windows.GENERIC_ALL, windows.TRUSTEE_IS_USER),
+	})
+	if err := requirePlatformPrivateFile(path, "--ws-token-file"); err != nil {
+		t.Fatalf("expected current-user-only Windows ACL to pass: %v", err)
+	}
+}
+
+func TestRequirePlatformPrivateFileRejectsBroadWindowsACL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userSID, err := windowsCurrentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worldSID, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setWindowsTestDACL(t, path, []windows.EXPLICIT_ACCESS{
+		windowsTestAccessEntry(userSID, windows.GENERIC_ALL, windows.TRUSTEE_IS_USER),
+		windowsTestAccessEntry(worldSID, windows.GENERIC_READ, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
+	})
+	err = requirePlatformPrivateFile(path, "--ws-token-file")
+	if err == nil || !strings.Contains(err.Error(), "ACL grants file access") {
+		t.Fatalf("expected broad Windows ACL to fail, got %v", err)
+	}
+}
+
+func makeTestPrivateFile(t *testing.T, path string) {
+	t.Helper()
+	userSID, err := windowsCurrentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setWindowsTestDACL(t, path, []windows.EXPLICIT_ACCESS{
+		windowsTestAccessEntry(userSID, windows.GENERIC_ALL, windows.TRUSTEE_IS_USER),
+	})
+}
+
+func setWindowsTestDACL(t *testing.T, path string, entries []windows.EXPLICIT_ACCESS) {
+	t.Helper()
+	acl, err := windows.ACLFromEntries(entries, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		acl,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func windowsTestAccessEntry(sid *windows.SID, permissions windows.ACCESS_MASK, trusteeType windows.TRUSTEE_TYPE) windows.EXPLICIT_ACCESS {
+	return windows.EXPLICIT_ACCESS{
+		AccessPermissions: permissions,
+		AccessMode:        windows.GRANT_ACCESS,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  trusteeType,
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
 	}
 }

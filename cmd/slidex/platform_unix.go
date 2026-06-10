@@ -85,6 +85,10 @@ func isReparsePoint(string) bool {
 	return false
 }
 
+func requirePlatformPrivateFile(string, string) error {
+	return nil
+}
+
 func replaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }
