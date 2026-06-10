@@ -1124,6 +1124,9 @@ func saveAppServerSkillSmokeInput(deckAbs string, manifest workbenchManifest) (w
 		"manifest": artifactFromPath(manifestPath),
 	}
 	tokenCheckPaths := []string{briefPath, draftPath, manifestPath}
+	if pathExists(workbenchControlPath(deckAbs)) {
+		tokenCheckPaths = append(tokenCheckPaths, workbenchControlPath(deckAbs))
+	}
 	if pathExists(logPath) {
 		tokenCheckPaths = append(tokenCheckPaths, logPath)
 	}

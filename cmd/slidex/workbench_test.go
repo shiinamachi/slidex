@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -194,6 +196,70 @@ func TestWorkbenchDraftRequiresTokenAndPersistsRecovery(t *testing.T) {
 	}
 }
 
+func TestWorkbenchShutdownRequiresDedicatedTokenAndSameOrigin(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeToken := "write-token"
+	shutdownToken := "shutdown-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", writeToken, 43210, 123, "running")
+	var called atomic.Bool
+	server := &workbenchHTTPServer{
+		deckAbs:       deck,
+		sessionID:     "session-1",
+		token:         writeToken,
+		shutdownToken: shutdownToken,
+		manifest:      manifest,
+		shutdown:      func() { called.Store(true) },
+	}
+
+	badOrigin := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/shutdown", nil)
+	badOrigin.Header.Set("Origin", "http://evil.example")
+	badOrigin.Header.Set("X-Slidex-Workbench-Shutdown-Token", shutdownToken)
+	badOriginRecorder := httptest.NewRecorder()
+	server.handleShutdown(badOriginRecorder, badOrigin)
+	if badOriginRecorder.Code != http.StatusForbidden {
+		t.Fatalf("bad origin shutdown status = %d, want %d", badOriginRecorder.Code, http.StatusForbidden)
+	}
+
+	badToken := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/shutdown", nil)
+	badToken.Header.Set("Origin", "http://127.0.0.1:43210")
+	badToken.Header.Set("X-Slidex-Workbench-Token", writeToken)
+	badTokenRecorder := httptest.NewRecorder()
+	server.handleShutdown(badTokenRecorder, badToken)
+	if badTokenRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("bad shutdown token status = %d, want %d", badTokenRecorder.Code, http.StatusUnauthorized)
+	}
+
+	good := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/shutdown", nil)
+	good.Header.Set("Origin", "http://127.0.0.1:43210")
+	good.Header.Set("X-Slidex-Workbench-Shutdown-Token", shutdownToken)
+	goodRecorder := httptest.NewRecorder()
+	server.handleShutdown(goodRecorder, good)
+	if goodRecorder.Code != http.StatusOK {
+		t.Fatalf("good shutdown status = %d body=%s", goodRecorder.Code, goodRecorder.Body.String())
+	}
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for !called.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !called.Load() {
+		t.Fatal("shutdown callback was not called")
+	}
+	manifestRaw := readFileOrEmpty(filepath.Join(deck, "out", workbenchManifestName))
+	if strings.Contains(manifestRaw, writeToken) || strings.Contains(manifestRaw, shutdownToken) {
+		t.Fatalf("shutdown manifest leaked raw token: %s", manifestRaw)
+	}
+	var stopped workbenchManifest
+	if err := json.Unmarshal([]byte(manifestRaw), &stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Status != "stopping" {
+		t.Fatalf("manifest status = %q, want stopping", stopped.Status)
+	}
+}
+
 func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
@@ -340,6 +406,108 @@ func TestWorkbenchRawTokenCheckIncludesServerLog(t *testing.T) {
 	}
 	if rawTokenAbsentFromFiles(token, []string{brief, draft, manifest, logPath}) {
 		t.Fatal("server log containing raw token should fail absence check")
+	}
+}
+
+func TestWorkbenchControlFileStoresShutdownKeySeparately(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeToken := "write-token"
+	shutdownKey := "shutdown-key"
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", writeToken, 43210, 123, "running")
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, shutdownKey)); err != nil {
+		t.Fatal(err)
+	}
+	raw := readFileOrEmpty(workbenchControlPath(deck))
+	if strings.Contains(raw, writeToken) {
+		t.Fatalf("workbench control file leaked write token: %s", raw)
+	}
+	if !strings.Contains(raw, shutdownKey) {
+		t.Fatalf("workbench control file omitted shutdown key: %s", raw)
+	}
+	info, err := os.Stat(workbenchControlPath(deck))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !privateFileModeAllowed(runtime.GOOS, info.Mode().Perm()) {
+		t.Fatalf("workbench control file should satisfy platform private-file policy: %s", info.Mode().Perm())
+	}
+	control, ok := readWorkbenchControl(deck)
+	if !ok {
+		t.Fatal("expected workbench control file to be readable")
+	}
+	if !workbenchControlMatchesManifest(control, manifest) {
+		t.Fatalf("control file did not match manifest: control=%#v manifest=%#v", control, manifest)
+	}
+	removeWorkbenchControl(deck)
+	if _, err := os.Stat(workbenchControlPath(deck)); !os.IsNotExist(err) {
+		t.Fatalf("control file should be removed, stat err=%v", err)
+	}
+}
+
+func TestStopWorkbenchProcessUsesHTTPShutdownBeforeSignalFallback(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "write-token", port, 999999, "running")
+	var stopped atomic.Bool
+	var shutdownCalls atomic.Int32
+	handler := &workbenchHTTPServer{
+		deckAbs:       deck,
+		sessionID:     "session-1",
+		token:         "write-token",
+		shutdownToken: "shutdown-key",
+		manifest:      manifest,
+		shutdown: func() {
+			shutdownCalls.Add(1)
+			stopped.Store(true)
+		},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if stopped.Load() {
+			http.Error(w, "stopped", http.StatusServiceUnavailable)
+			return
+		}
+		_ = writeJSONResponse(w, map[string]any{
+			"status":    "ready",
+			"sessionId": manifest.SessionID,
+			"deckDir":   manifest.DeckDir,
+			"pid":       manifest.PID,
+		})
+	})
+	mux.HandleFunc("/workbench/session-1/api/shutdown", handler.handleShutdown)
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+		t.Fatal(err)
+	}
+
+	stopWorkbenchProcess(manifest)
+	if shutdownCalls.Load() != 1 {
+		t.Fatalf("shutdown calls = %d, want 1", shutdownCalls.Load())
+	}
+	if !stopped.Load() {
+		t.Fatal("workbench should be stopped through HTTP shutdown")
 	}
 }
 
@@ -1139,7 +1307,7 @@ func TestWorkbenchServeMarksManifestStaleOnPortCollision(t *testing.T) {
 		t.Fatalf("workbench must not bind to all interfaces by default: %s", workbenchListenAddr(port))
 	}
 
-	err = serveWorkbench(deck, workspace, "session-1", "token", port)
+	err = serveWorkbench(deck, workspace, "session-1", "token", "shutdown-token", port)
 	if err == nil {
 		t.Fatal("expected occupied port to fail")
 	}
