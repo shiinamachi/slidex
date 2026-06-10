@@ -15,9 +15,8 @@ mise exec -- slidex init customer-retention
 
 ## 런타임 준비
 
-Go와 Node 런타임 및 tombstoned desktop prototype용 pnpm은 mise로 exact pin합니다.
-현재 Go 핀은 `.mise.toml`과 `go.mod`의 `go` 지시문에 기록된 `1.26.3`이고,
-Node 핀은 `.mise.toml`의 `24.16.0`, pnpm 핀은 `11.5.2`입니다.
+Go 런타임은 mise로 exact pin합니다. 현재 Go 핀은 `.mise.toml`과 `go.mod`의
+`go` 지시문에 기록된 `1.26.3`입니다.
 
 ```bash
 mise install
@@ -94,12 +93,6 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 사용합니다.
 
 문서와 acceptance 기준의 canonical 이름은 `slidex`입니다.
-
-## Desktop Tombstone
-
-`apps/desktop/`은 과거 Electron prototype이며 canonical workflow가 아닙니다. 새 UX와
-검증은 `plugins/slidex`, `slidex workbench`, `slidex mcp-server`, Go CLI tests, doctor
-checks에 구현합니다.
 
 ## 설치와 배포
 

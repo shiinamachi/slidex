@@ -109,7 +109,7 @@ The resulting editorial design principles to enforce are:
 - Keep the canonical CLI entry point under `cmd/slidex`.
 - Keep deck-specific inputs and outputs under `decks/<deck_id>/`.
 - Do not create root-level `brief.md`, `assets/`, `brand/`, `data/`, or `out/` for new work.
-- Do not commit ignored local deck outputs, generated delivery artifacts, `apps/desktop/node_modules/`, or `apps/desktop/dist/`.
+- Do not commit ignored local deck outputs or generated delivery artifacts.
 - Do not add floating dependency versions. Pin any added runtime/library/version exactly and update lockfiles, manifests, docs, and validation checks in the same coherent change.
 - Do not restore legacy standalone instruction-file workflows or direct execution fallback paths.
 - Preserve `slidex run --deck decks/<deck_id>` as the standard workflow.

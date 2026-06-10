@@ -1,4 +1,0 @@
-allowBuilds:
-  electron-winstaller: true
-overrides:
-  yauzl: 3.4.0

@@ -10,8 +10,3 @@
 /brand/
 /data/
 /out/
-
-# Electron desktop app local dependencies and build artifacts.
-/apps/desktop/node_modules/
-/apps/desktop/dist/
-/apps/desktop/release/

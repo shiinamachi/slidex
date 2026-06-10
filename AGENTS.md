@@ -27,9 +27,8 @@ artifact is a deck-local `out/final_deck.pdf`.
 - Keep deck-specific inputs and outputs scoped under `decks/<deck_id>/`.
 - Root-level `brief.md`, `assets/`, `brand/`, `data/`, and `out/` are legacy
   migration inputs only. Do not create them for new work.
-- Do not commit ignored local deck outputs, `apps/desktop/node_modules/`,
-  `apps/desktop/dist/`, or generated delivery artifacts unless the user
-  explicitly asks for that artifact to be versioned.
+- Do not commit ignored local deck outputs or generated delivery artifacts
+  unless the user explicitly asks for that artifact to be versioned.
 
 ## Important Paths
 
@@ -42,9 +41,6 @@ artifact is a deck-local `out/final_deck.pdf`.
 - `plugins/slidex/` and `.agents/skills/slidex/`: companion plugin, skill, hook,
   and local agent guidance package checked by `slidex doctor`.
 - `internal/codex/protocol/codex-cli-0.138.0/`: vendored Codex protocol bundle.
-- `apps/desktop/`: tombstoned Electron prototype kept as migration reference
-  only. It is not the canonical UX or a future product path; new UX belongs in
-  `plugins/slidex`, `slidex workbench`, MCP, and Go CLI paths.
 
 ## Git Workflow
 
@@ -81,8 +77,6 @@ artifact is a deck-local `out/final_deck.pdf`.
   remove that deck afterward.
 - For render or PDF changes, verify current HTML renders to PNG/PDF and that
   `slidex qa` / `slidex package` still reflect freshness accurately.
-- For desktop changes, run the relevant `apps/desktop` pnpm typecheck/build
-  commands with mise.
 
 ## CLI Product Contract
 
