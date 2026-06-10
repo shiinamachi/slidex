@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -5058,7 +5059,7 @@ func readMiseGoVersion(path string) string {
 }
 
 func installedCodexVersion() string {
-	out, err := exec.Command("codex", "--version").CombinedOutput()
+	out, err := runBufferedCommand(8*time.Second, "codex", "--version")
 	if err != nil {
 		return ""
 	}
@@ -5121,13 +5122,41 @@ func dottedVersionParts(value string) ([]int, bool) {
 }
 
 func commandOutput(timeout time.Duration, name string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := runBufferedCommand(timeout, name, args...)
 	if err != nil {
 		return strings.TrimSpace(string(out) + "\n" + err.Error())
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func runBufferedCommand(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.Command(name, args...)
+	configureProcessGroupCommand(cmd)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		return output.Bytes(), err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return output.Bytes(), err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			killManagedProcess(cmd.Process.Pid)
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		return output.Bytes(), fmt.Errorf("%s timed out after %s", name, timeout)
+	}
 }
 
 func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bool, resumeTarget string, images []string) (string, map[string]any, error) {
@@ -7065,9 +7094,7 @@ func printCommandJSON(tool, action, output string) error {
 }
 
 func runCommandJSON(action string, timeout time.Duration, name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := runBufferedCommand(timeout, name, args...)
 	payload := map[string]any{"toolName": toolName, "action": action, "output": strings.TrimSpace(string(out))}
 	if err != nil {
 		payload["status"] = "fail"

@@ -71,6 +71,19 @@ func TestParseInitArgsRejectsAmbiguousInput(t *testing.T) {
 	}
 }
 
+func TestRunBufferedCommandReportsTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX shell")
+	}
+	out, err := runBufferedCommand(50*time.Millisecond, "sh", "-c", "printf ready; sleep 5")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got out=%q err=%v", out, err)
+	}
+	if !strings.Contains(string(out), "ready") {
+		t.Fatalf("expected buffered output before timeout, got %q", out)
+	}
+}
+
 func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()
