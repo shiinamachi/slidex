@@ -50,7 +50,16 @@ func killManagedProcess(pid int) {
 }
 
 func killProcess(pid int) {
+	for _, treePID := range windowsProcessTreePIDs(pid) {
+		killSingleProcess(treePID)
+	}
+}
+
+func killSingleProcess(pid int) {
 	if pid <= 0 {
+		return
+	}
+	if pid == os.Getpid() {
 		return
 	}
 	proc, err := os.FindProcess(pid)
@@ -58,6 +67,77 @@ func killProcess(pid int) {
 		return
 	}
 	_ = proc.Kill()
+}
+
+type windowsProcessEntry struct {
+	pid    uint32
+	parent uint32
+}
+
+func windowsProcessTreePIDs(root int) []int {
+	if root <= 0 {
+		return nil
+	}
+	entries, err := windowsProcessEntries()
+	if err != nil {
+		return []int{root}
+	}
+	order := windowsProcessTreeOrder(uint32(root), entries)
+	if len(order) == 0 {
+		return []int{root}
+	}
+	return order
+}
+
+func windowsProcessEntries() ([]windowsProcessEntry, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snapshot)
+	var procEntry windows.ProcessEntry32
+	procEntry.Size = uint32(unsafe.Sizeof(procEntry))
+	if err := windows.Process32First(snapshot, &procEntry); err != nil {
+		return nil, err
+	}
+	var entries []windowsProcessEntry
+	for {
+		entries = append(entries, windowsProcessEntry{pid: procEntry.ProcessID, parent: procEntry.ParentProcessID})
+		err = windows.Process32Next(snapshot, &procEntry)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			break
+		}
+		return nil, err
+	}
+	return entries, nil
+}
+
+func windowsProcessTreeOrder(root uint32, entries []windowsProcessEntry) []int {
+	childrenByParent := make(map[uint32][]uint32)
+	for _, entry := range entries {
+		if entry.pid == 0 || entry.pid == entry.parent {
+			continue
+		}
+		childrenByParent[entry.parent] = append(childrenByParent[entry.parent], entry.pid)
+	}
+	visited := map[uint32]bool{}
+	var order []int
+	var visit func(uint32)
+	visit = func(pid uint32) {
+		if visited[pid] {
+			return
+		}
+		visited[pid] = true
+		for _, child := range childrenByParent[pid] {
+			visit(child)
+		}
+		order = append(order, int(pid))
+	}
+	visit(root)
+	return order
 }
 
 func processAlive(pid int) bool {

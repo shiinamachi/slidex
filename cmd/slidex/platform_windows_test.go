@@ -72,6 +72,25 @@ func TestRejectSymlinkEscapeRejectsWindowsJunction(t *testing.T) {
 	}
 }
 
+func TestWindowsProcessTreeOrderKillsChildrenBeforeRoot(t *testing.T) {
+	got := windowsProcessTreeOrder(10, []windowsProcessEntry{
+		{pid: 10, parent: 1},
+		{pid: 11, parent: 10},
+		{pid: 12, parent: 10},
+		{pid: 13, parent: 11},
+		{pid: 20, parent: 1},
+	})
+	want := []int{13, 11, 12, 10}
+	if len(got) != len(want) {
+		t.Fatalf("tree order length = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tree order = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestRequirePlatformPrivateFileAllowsCurrentUserWindowsACL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(path, []byte("token"), 0o600); err != nil {
