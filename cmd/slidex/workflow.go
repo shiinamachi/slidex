@@ -6037,23 +6037,9 @@ func openSecureTruncateFile(path string, mode os.FileMode) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	pathInfo, err := os.Lstat(path)
-	if err != nil {
+	if err := verifySecureOpenFile(path, f); err != nil {
 		_ = f.Close()
 		return nil, err
-	}
-	if pathInfo.Mode()&os.ModeSymlink != 0 {
-		_ = f.Close()
-		return nil, fmt.Errorf("secure write target must not be a symlink: %s", filepath.ToSlash(path))
-	}
-	fileInfo, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	if !os.SameFile(pathInfo, fileInfo) {
-		_ = f.Close()
-		return nil, fmt.Errorf("secure write target changed while opening: %s", filepath.ToSlash(path))
 	}
 	return f, nil
 }
@@ -6070,25 +6056,29 @@ func openSecureAppendFile(path string, mode os.FileMode) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	pathInfo, err := os.Lstat(path)
-	if err != nil {
+	if err := verifySecureOpenFile(path, f); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
-	if pathInfo.Mode()&os.ModeSymlink != 0 {
-		_ = f.Close()
-		return nil, fmt.Errorf("secure write target must not be a symlink: %s", filepath.ToSlash(path))
+	return f, nil
+}
+
+func verifySecureOpenFile(path string, f *os.File) error {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if isSymlinkOrReparsePoint(path, pathInfo) {
+		return fmt.Errorf("secure write target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
 	}
 	fileInfo, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, err
+		return err
 	}
 	if !os.SameFile(pathInfo, fileInfo) {
-		_ = f.Close()
-		return nil, fmt.Errorf("secure write target changed while opening: %s", filepath.ToSlash(path))
+		return fmt.Errorf("secure write target changed while opening: %s", filepath.ToSlash(path))
 	}
-	return f, nil
+	return nil
 }
 
 func ensureSecureDir(path string) error {

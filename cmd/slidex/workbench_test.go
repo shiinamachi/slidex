@@ -832,6 +832,26 @@ func TestSecureTruncateRejectsSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestVerifySecureOpenFileRejectsSymlinkAfterOpen(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.log")
+	if err := os.WriteFile(target, []byte("target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.log")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	f, err := os.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := verifySecureOpenFile(link, f); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected post-open symlink rejection, got %v", err)
+	}
+}
+
 func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
