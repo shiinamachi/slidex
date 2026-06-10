@@ -2946,7 +2946,7 @@ func writePDFObjects(path string, objects [][]byte) error {
 		fmt.Fprintf(&b, "%010d 00000 n \n", offsets[i])
 	}
 	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
-	return os.WriteFile(path, b.Bytes(), 0o644)
+	return secureWriteFile(path, b.Bytes(), 0o644)
 }
 
 func pdfPageSizePoints(width, height int) (float64, float64) {
@@ -2990,15 +2990,11 @@ func createMontage(outPath string, paths []string) (dimension, error) {
 		scaled := scaleNearest(img, thumbW, thumbH)
 		draw.Draw(dst, image.Rect(x, y, x+thumbW, y+thumbH), scaled, image.Point{}, draw.Src)
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	var out bytes.Buffer
+	if err := png.Encode(&out, dst); err != nil {
 		return dimension{}, err
 	}
-	f, err := os.Create(outPath)
-	if err != nil {
-		return dimension{}, err
-	}
-	defer f.Close()
-	if err := png.Encode(f, dst); err != nil {
+	if err := secureWriteFile(outPath, out.Bytes(), 0o644); err != nil {
 		return dimension{}, err
 	}
 	return dimension{Width: canvasW, Height: canvasH}, nil
@@ -3317,10 +3313,7 @@ func writeQAReport(path string, result qaResult) error {
 	}
 	b.WriteString("\n## Visual Inspection\n\n")
 	b.WriteString("- Manual inspection of rendered slides and montage must be recorded by the Codex workflow before final delivery.\n")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return secureWriteFile(path, []byte(b.String()), 0o644)
 }
 
 func qaRuntimeForDeck(deckAbs string) (string, string) {

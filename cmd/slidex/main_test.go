@@ -2030,6 +2030,64 @@ func TestSecureWriteFileReplacesExistingFile(t *testing.T) {
 	}
 }
 
+func TestDeliveryOutputsRejectSymlinkTargets(t *testing.T) {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "deck", "out")
+	renderedDir := filepath.Join(outDir, "rendered_slides")
+	if err := os.MkdirAll(renderedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pngPath := filepath.Join(renderedDir, "slide_01.png")
+	writeSolidPNGForTest(t, pngPath, color.RGBA{R: 255, A: 255})
+
+	cases := []struct {
+		name  string
+		path  string
+		write func(string) error
+	}{
+		{
+			name: "pdf",
+			path: filepath.Join(outDir, "final_deck.pdf"),
+			write: func(path string) error {
+				return writePDFFromPNGs(path, []string{pngPath}, 540, 540)
+			},
+		},
+		{
+			name: "montage",
+			path: filepath.Join(outDir, "qa_montage.png"),
+			write: func(path string) error {
+				_, err := createMontage(path, []string{pngPath})
+				return err
+			},
+		},
+		{
+			name: "qa_report",
+			path: filepath.Join(outDir, "qa_report.md"),
+			write: func(path string) error {
+				return writeQAReport(path, qaResult{ToolName: toolName, Version: toolVersion, DeckDir: filepath.Dir(outDir), Status: "pass"})
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			outside := filepath.Join(t.TempDir(), tc.name+".outside")
+			if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, tc.path); err != nil {
+				t.Skipf("symlink unavailable on this platform: %v", err)
+			}
+			err := tc.write(tc.path)
+			if err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Fatalf("expected symlink rejection, got %v", err)
+			}
+			if got := readFileOrEmpty(outside); got != "outside\n" {
+				t.Fatalf("outside target was modified: %q", got)
+			}
+		})
+	}
+}
+
 func TestCopyDirPreservesExecutableMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not use Unix executable mode bits")
