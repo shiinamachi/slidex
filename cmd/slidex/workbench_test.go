@@ -753,6 +753,25 @@ func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {
 	if result.Status != "pass" {
 		t.Fatalf("fresh evidence should pass: %#v", result.Findings)
 	}
+	verificationPath := filepath.Join(deck, "out", workbenchBrowserVerifyName)
+	raw := readFileOrEmpty(verificationPath)
+	if !strings.Contains(raw, "slidex.workbenchBrowserEvidenceVerification.v1") {
+		t.Fatalf("verification result was not written: %s", raw)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePayloadAgainstSchema(payload, filepath.Join(repoRootForTest(t), "schemas", "workbench_browser_evidence_verification.schema.json")); err != nil {
+		t.Fatal(err)
+	}
+	status, err := workbenchStatus(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if public := publicWorkbenchStatus(status); public["browserEvidenceVerification"] != filepath.ToSlash(verificationPath) {
+		t.Fatalf("status omitted browser evidence verification path: %#v", public)
+	}
 
 	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("changed after evidence\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -763,6 +782,10 @@ func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {
 	}
 	if result.Status != "fail" || !strings.Contains(strings.Join(result.Findings, "\n"), "verifiedFiles.brief is stale") {
 		t.Fatalf("stale brief should fail verification: %#v", result.Findings)
+	}
+	raw = readFileOrEmpty(verificationPath)
+	if !strings.Contains(raw, `"status": "fail"`) || !strings.Contains(raw, "verifiedFiles.brief is stale") {
+		t.Fatalf("stale verification result was not written: %s", raw)
 	}
 }
 

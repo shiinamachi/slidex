@@ -772,6 +772,30 @@ func doctorWorkbenchFindings() []qaFinding {
 	if err := validatePayloadAgainstSchema(evidence, schemaPath); err != nil {
 		findings = append(findings, fail("doctor.workbench_browser_evidence_schema", err.Error(), schemaPath))
 	}
+	verifySchemaPath := filepath.Join("schemas", "workbench_browser_evidence_verification.schema.json")
+	verification := workbenchBrowserEvidenceVerification{
+		SchemaVersion:     "slidex.workbenchBrowserEvidenceVerification.v1",
+		ToolName:          toolName,
+		ToolVersion:       toolVersion,
+		Status:            "pass",
+		CheckedAt:         time.Now().UTC().Format(time.RFC3339),
+		RequireScreenshot: true,
+		DeckID:            manifest.DeckID,
+		DeckDir:           manifest.DeckDir,
+		EvidencePath:      filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchBrowserEvidenceName)),
+		VerificationPath:  filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchBrowserVerifyName)),
+		ManifestPath:      filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName)),
+		Findings:          []string{},
+		VerifiedFiles: map[string]artifact{
+			"brief":             {Path: filepath.ToSlash(filepath.Join(deckAbs, "brief.md")), SHA256: strings.Repeat("a", 64), Size: 1},
+			"draft":             {Path: filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName)), SHA256: strings.Repeat("b", 64), Size: 1},
+			"manifest":          {Path: filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName)), SHA256: strings.Repeat("c", 64), Size: 1},
+			"browserScreenshot": {Path: filepath.ToSlash(filepath.Join(deckAbs, "out", "workbench_browser_screenshot.png")), SHA256: strings.Repeat("d", 64), Size: 1},
+		},
+	}
+	if err := validatePayloadAgainstSchema(verification, verifySchemaPath); err != nil {
+		findings = append(findings, fail("doctor.workbench_browser_evidence_verification_schema", err.Error(), verifySchemaPath))
+	}
 	skillSmokeSchemaPath := filepath.Join("schemas", "app_server_skill_smoke.schema.json")
 	skillSmoke := doctorAppServerSkillSmokeEvidence(deckAbs, manifest)
 	if err := validatePayloadAgainstSchema(skillSmoke, skillSmokeSchemaPath); err != nil {

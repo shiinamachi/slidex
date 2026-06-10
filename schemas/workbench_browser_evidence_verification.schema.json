@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.workbench_browser_evidence_verification.schema.json",
+  "title": "slidex Workbench Browser Evidence Verification",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "toolName",
+    "toolVersion",
+    "status",
+    "checkedAt",
+    "requireScreenshot",
+    "deckId",
+    "deckDir",
+    "evidencePath",
+    "verificationPath",
+    "manifestPath",
+    "findings",
+    "verifiedFiles"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "slidex.workbenchBrowserEvidenceVerification.v1"
+    },
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "toolVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "checkedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requireScreenshot": {
+      "type": "boolean"
+    },
+    "deckId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deckDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidencePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verificationPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifestPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verifiedFiles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/artifact"
+      },
+      "properties": {
+        "brief": {
+          "$ref": "#/$defs/artifact"
+        },
+        "draft": {
+          "$ref": "#/$defs/artifact"
+        },
+        "manifest": {
+          "$ref": "#/$defs/artifact"
+        },
+        "browserScreenshot": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "pass"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "maxItems": 0
+          },
+          "verifiedFiles": {
+            "required": ["brief", "draft", "manifest"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "pass"
+          },
+          "requireScreenshot": {
+            "const": true
+          }
+        },
+        "required": ["status", "requireScreenshot"]
+      },
+      "then": {
+        "properties": {
+          "verifiedFiles": {
+            "required": ["brief", "draft", "manifest", "browserScreenshot"]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["path", "sha256", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

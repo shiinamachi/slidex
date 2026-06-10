@@ -31,6 +31,7 @@ const (
 	workbenchManifestName        = "workbench_manifest.json"
 	workbenchDraftName           = "workbench_draft.json"
 	workbenchBrowserEvidenceName = "workbench_browser_evidence.json"
+	workbenchBrowserVerifyName   = "workbench_browser_evidence_verification.json"
 	workbenchSaveSmokeName       = "workbench_save_smoke.json"
 	workbenchSaveSmokeScreenshot = "workbench_save_smoke.png"
 	workbenchBrowserScreenshot   = "workbench_browser_screenshot"
@@ -129,6 +130,7 @@ type workbenchBrowserEvidenceVerification struct {
 	DeckID            string              `json:"deckId"`
 	DeckDir           string              `json:"deckDir"`
 	EvidencePath      string              `json:"evidencePath"`
+	VerificationPath  string              `json:"verificationPath"`
 	ManifestPath      string              `json:"manifestPath"`
 	Findings          []string            `json:"findings"`
 	VerifiedFiles     map[string]artifact `json:"verifiedFiles"`
@@ -1820,14 +1822,15 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 	return &artifact, nil
 }
 
-func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (workbenchBrowserEvidenceVerification, error) {
+func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (result workbenchBrowserEvidenceVerification, err error) {
 	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
 	if err != nil {
 		return workbenchBrowserEvidenceVerification{}, err
 	}
 	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
 	evidencePath := filepath.Join(deckAbs, "out", workbenchBrowserEvidenceName)
-	result := workbenchBrowserEvidenceVerification{
+	verificationPath := filepath.Join(deckAbs, "out", workbenchBrowserVerifyName)
+	result = workbenchBrowserEvidenceVerification{
 		SchemaVersion:     "slidex.workbenchBrowserEvidenceVerification.v1",
 		ToolName:          toolName,
 		ToolVersion:       toolVersion,
@@ -1837,10 +1840,16 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScree
 		DeckID:            filepath.Base(deckAbs),
 		DeckDir:           filepath.ToSlash(deckAbs),
 		EvidencePath:      filepath.ToSlash(evidencePath),
+		VerificationPath:  filepath.ToSlash(verificationPath),
 		ManifestPath:      filepath.ToSlash(manifestPath),
 		Findings:          []string{},
 		VerifiedFiles:     map[string]artifact{},
 	}
+	defer func() {
+		if writeErr := secureWriteJSON(verificationPath, result); writeErr != nil && err == nil {
+			err = writeErr
+		}
+	}()
 	addFinding := func(format string, args ...any) {
 		result.Findings = append(result.Findings, fmt.Sprintf(format, args...))
 	}
@@ -2075,6 +2084,10 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 	evidencePath := filepath.Join(manifest.OutDir, workbenchBrowserEvidenceName)
 	if _, err := os.Stat(evidencePath); err == nil {
 		status["browserEvidence"] = filepath.ToSlash(evidencePath)
+	}
+	verificationPath := filepath.Join(manifest.OutDir, workbenchBrowserVerifyName)
+	if _, err := os.Stat(verificationPath); err == nil {
+		status["browserEvidenceVerification"] = filepath.ToSlash(verificationPath)
 	}
 	return status
 }

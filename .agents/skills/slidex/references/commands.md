@@ -45,7 +45,9 @@ session. `slidex workbench save-smoke` is a local HTTP pre-GUI check. It
 verifies workbench HTML bootstrap, draft/save persistence, token redaction, and
 deck-local artifact hashes. With `--screenshot`, it also captures a nonblank
 headless Chrome workbench render under `out/workbench_save_smoke.png`, but
-neither smoke is Codex App GUI/browser evidence.
+neither smoke is Codex App GUI/browser evidence. `slidex workbench
+verify-evidence` persists its audit result to
+`out/workbench_browser_evidence_verification.json`.
 
 Goal mirror:
 
