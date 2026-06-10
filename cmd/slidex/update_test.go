@@ -470,8 +470,37 @@ func TestVerifyReleaseAssetSHA256FailsClosed(t *testing.T) {
 	if _, err := verifyReleaseAssetSHA256("slidex_0.1.0_linux_amd64.tar.gz", payload, strings.Repeat("0", 64)+"  slidex_0.1.0_linux_amd64.tar.gz\n", ""); err == nil {
 		t.Fatal("checksum mismatch should fail")
 	}
+	if got, err := verifyReleaseAssetSHA256("slidex_0.1.0_linux_amd64.tar.gz", payload, actual+"  slidex_0.1.0_linux_amd64.tar.gz\n", ""); err != nil || got != actual {
+		t.Fatalf("checksum-only verification should pass for local archives, got %q err=%v", got, err)
+	}
 	if got, err := verifyReleaseAssetSHA256("slidex_0.1.0_linux_amd64.tar.gz", payload, actual+"  slidex_0.1.0_linux_amd64.tar.gz\n", "sha256:"+actual); err != nil || got != actual {
 		t.Fatalf("verified digest = %q, err = %v", got, err)
+	}
+}
+
+func TestStageDownloadedReleaseArchiveRequiresGitHubDigest(t *testing.T) {
+	payload := []byte("release archive")
+	sum := sha256.Sum256(payload)
+	actual := hex.EncodeToString(sum[:])
+	archive := updateAsset{Name: "slidex_0.1.0_linux_amd64.tar.gz"}
+	checksum := updateAsset{Name: "slidex_0.1.0_checksums.txt"}
+	checksumPayload := []byte(actual + "  " + archive.Name + "\n")
+
+	_, _, err := stageDownloadedReleaseArchive(t.TempDir(), "0.1.0", archive, payload, checksum, checksumPayload)
+	if err == nil || !strings.Contains(err.Error(), "GitHub release asset digest is required") {
+		t.Fatalf("downloaded archive without GitHub digest err = %v", err)
+	}
+
+	archive.Digest = "sha256:" + actual
+	stageParent, archivePath, err := stageDownloadedReleaseArchive(t.TempDir(), "0.1.0", archive, payload, checksum, checksumPayload)
+	if err != nil {
+		t.Fatalf("downloaded archive with GitHub digest failed: %v", err)
+	}
+	if _, err := os.Stat(archivePath); err != nil {
+		t.Fatalf("staged archive missing: %v", err)
+	}
+	if !strings.Contains(filepath.ToSlash(stageParent), ".slidex/downloads/0.1.0-") {
+		t.Fatalf("unexpected stage parent: %s", stageParent)
 	}
 }
 

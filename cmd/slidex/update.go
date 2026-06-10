@@ -877,6 +877,9 @@ func downloadUpdateAsset(ctx context.Context, asset updateAsset) ([]byte, error)
 }
 
 func stageDownloadedReleaseArchive(installRoot, targetVersion string, archive updateAsset, archivePayload []byte, checksum updateAsset, checksumPayload []byte) (stageParent, archivePath string, err error) {
+	if normalizeGitHubSHA256Digest(archive.Digest) == "" {
+		return "", "", fmt.Errorf("GitHub release asset digest is required for downloaded archive %s", archive.Name)
+	}
 	if _, err := verifyReleaseAssetSHA256(archive.Name, archivePayload, string(checksumPayload), archive.Digest); err != nil {
 		return "", "", err
 	}
