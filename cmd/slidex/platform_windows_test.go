@@ -76,6 +76,39 @@ func TestPluginDoctorHelperWindowsInvokesSlidexDoctor(t *testing.T) {
 	}
 }
 
+func TestPluginDoctorHelperPowerShellInvokesSlidexDoctor(t *testing.T) {
+	root := repoRootForTest(t)
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "args.log")
+	fakeSlidex := filepath.Join(binDir, "slidex.cmd")
+	if err := os.WriteFile(fakeSlidex, []byte("@echo off\r\n"+
+		"type nul > \"%SLIDEX_HELPER_LOG%\"\r\n"+
+		":loop\r\n"+
+		"if \"%~1\"==\"\" exit /b 0\r\n"+
+		"echo %~1>>\"%SLIDEX_HELPER_LOG%\"\r\n"+
+		"shift\r\n"+
+		"goto loop\r\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SLIDEX_HELPER_LOG", logPath)
+	deckPath := filepath.Join(t.TempDir(), "deck with spaces")
+	script := filepath.Join(root, "plugins", "slidex", "scripts", "slidex-doctor.ps1")
+	cmd := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "--deck", deckPath, "--probe")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("PowerShell helper failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(raw), "\r\n", "\n")), "\n")
+	want := []string{"doctor", "--codex", "--render", "--json", "--deck", deckPath, "--probe"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("PowerShell helper args = %#v, want %#v", got, want)
+	}
+}
+
 func TestRejectSymlinkEscapeRejectsWindowsJunction(t *testing.T) {
 	workspace := t.TempDir()
 	decksRoot := filepath.Join(workspace, "decks")

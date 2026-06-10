@@ -162,22 +162,22 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 
 ```bash
 mise exec -- go install ./cmd/slidex
-export PATH="$(go env GOPATH)/bin:$PATH"
+export PATH="$(mise exec -- go env GOPATH)/bin:$PATH"
 mise exec -- go test ./...
 ```
 
 Windows PowerShell에서는 `export` 대신 다음 형태를 사용합니다.
 
 ```powershell
-$env:Path = "$(go env GOPATH)\bin;$env:Path"
-go test ./...
+$env:Path = "$(mise exec -- go env GOPATH)\bin;$env:Path"
+mise exec -- go test ./...
 ```
 
 Windows `cmd.exe`에서는 다음 형태를 사용합니다.
 
 ```bat
-for /f "delims=" %G in ('go env GOPATH') do set "PATH=%G\bin;%PATH%"
-go test ./...
+for /f "delims=" %G in ('mise exec -- go env GOPATH') do set "PATH=%G\bin;%PATH%"
+mise exec -- go test ./...
 ```
 
 배포 전에는 Go/Codex exact pin, `go.sum`, vendored App Server protocol schema,

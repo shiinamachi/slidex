@@ -40,4 +40,4 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 ## References
 
 - Command reference: `references/commands.md`
-- Local doctor helpers: `scripts/slidex-doctor.sh` and `scripts/slidex-doctor.cmd`
+- Local doctor helpers: `scripts/slidex-doctor.sh`, `scripts/slidex-doctor.ps1`, and `scripts/slidex-doctor.cmd`
