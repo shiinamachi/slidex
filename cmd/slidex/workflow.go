@@ -311,6 +311,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
 	findings = append(findings, doctorProtocolBundleFindings(protocol)...)
 	findings = append(findings, doctorWorkbenchFindings()...)
+	findings = append(findings, doctorUpdateSchemaFindings()...)
 	if checkCodex {
 		codexVersion = installedCodexVersion()
 		if !codexVersionAtLeast(codexVersion, requiredCodexVersion) {

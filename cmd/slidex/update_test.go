@@ -1752,6 +1752,32 @@ func captureStdoutForTest(t *testing.T, fn func()) string {
 	return string(raw)
 }
 
+func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
+	if findings := doctorUpdateSchemaFindings(); len(findings) > 0 {
+		t.Fatalf("doctor update schema samples should pass: %#v", findings)
+	}
+
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	metadata.InstallRoot = filepath.ToSlash(t.TempDir())
+	metadata.InstalledAt = "2026-06-10T00:00:00Z"
+	if err := validatePayloadAgainstBundledSchema(metadata, installMetadataSchemaFile); err != nil {
+		t.Fatalf("install metadata schema should accept release metadata: %v", err)
+	}
+
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invalid map[string]any
+	if err := json.Unmarshal(raw, &invalid); err != nil {
+		t.Fatal(err)
+	}
+	invalid["unexpectedField"] = true
+	if err := validatePayloadAgainstBundledSchema(invalid, installMetadataSchemaFile); err == nil {
+		t.Fatal("install metadata schema should reject additional fields")
+	}
+}
+
 func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell release smoke uses the Unix package path")
@@ -1774,6 +1800,9 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	}
 	archive := filepath.Join(dist, "slidex_"+toolVersion+"_linux_amd64.tar.gz")
 	metadata := readInstallMetadataFromTarGzForTest(t, archive, "slidex_"+toolVersion+"_linux_amd64/.slidex/install.json")
+	if err := validatePayloadAgainstBundledSchema(metadata, installMetadataSchemaFile); err != nil {
+		t.Fatalf("packaged install metadata should match schema: %v", err)
+	}
 	if metadata.Channel != updateChannelProduction {
 		t.Fatalf("metadata channel = %q", metadata.Channel)
 	}
@@ -1821,6 +1850,9 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	}
 	canaryArchive := filepath.Join(canaryDist, "slidex_"+canaryVersion+"_linux_amd64.tar.gz")
 	canaryMetadata := readInstallMetadataFromTarGzForTest(t, canaryArchive, "slidex_"+canaryVersion+"_linux_amd64/.slidex/install.json")
+	if err := validatePayloadAgainstBundledSchema(canaryMetadata, installMetadataSchemaFile); err != nil {
+		t.Fatalf("packaged canary install metadata should match schema: %v", err)
+	}
 	if canaryMetadata.Channel != updateChannelCanary {
 		t.Fatalf("canary metadata channel = %q", canaryMetadata.Channel)
 	}
@@ -1924,7 +1956,9 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 		  "tag":"v` + version + `",
 		  "commit":"0123456789abcdef",
 		  "buildTime":"2026-06-10T00:00:00Z",
+		  "installRoot":"",
 		  "releaseAssetName":"` + contract.ArchiveName + `",
+		  "installedAt":"",
 		  "os":"` + runtime.GOOS + `",
 		  "arch":"` + runtime.GOARCH + `",
 		  "installMode":"release-package"

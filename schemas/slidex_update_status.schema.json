@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.update_status.schema.json",
+  "title": "slidex Update Status",
+  "type": "object",
+  "required": [
+    "toolName",
+    "currentVersion",
+    "channel",
+    "installMode",
+    "installRoot",
+    "metadataPath",
+    "updatesEnabled",
+    "status",
+    "restartRequired",
+    "pluginVerificationStatus",
+    "nextVerificationCommand"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "currentVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["production", "canary", "local-development"]
+    },
+    "installMode": {
+      "type": "string",
+      "enum": ["release-package", "source-checkout", "go-install", "unknown"]
+    },
+    "installRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "metadataPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updatesEnabled": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "disabled",
+        "available",
+        "current",
+        "candidate-invalid",
+        "candidate-valid",
+        "verification-failed",
+        "verified",
+        "pending-activation"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "guidance": {
+      "type": "string"
+    },
+    "targetVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetTag": {
+      "type": "string",
+      "minLength": 1
+    },
+    "releaseAssetName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "checksumAssetName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "restartRequired": {
+      "type": "boolean"
+    },
+    "pluginVerificationStatus": {
+      "type": "string",
+      "enum": ["not_verified", "restart_required", "verified", "drift"]
+    },
+    "nextVerificationCommand": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verificationFindings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "discoveredRelease": {
+      "$ref": "#/$defs/release"
+    },
+    "candidateValidation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "installedMetadata": {
+      "$ref": "#/$defs/installMetadata"
+    },
+    "pendingActivation": {
+      "type": "boolean"
+    },
+    "pendingActivationCommand": {
+      "type": "string"
+    },
+    "pendingUpdatePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pendingUpdate": {
+      "$ref": "#/$defs/pendingUpdate"
+    },
+    "persistedRestartStatePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedPluginVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedPluginPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedStartSkillPath": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "required": ["name", "browserDownloadUrl"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "browserDownloadUrl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["severity", "check", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["pass", "warn", "fail"]
+        },
+        "check": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "installMetadata": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "toolName",
+        "version",
+        "channel",
+        "tag",
+        "commit",
+        "buildTime",
+        "installRoot",
+        "releaseAssetName",
+        "installedAt",
+        "installMode",
+        "os",
+        "arch"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "slidex.install.v1"
+        },
+        "toolName": {
+          "type": "string",
+          "const": "slidex"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["production", "canary", "local-development"]
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^(unknown|[a-f0-9]{7,40})$"
+        },
+        "buildTime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "installRoot": {
+          "type": "string"
+        },
+        "releaseAssetName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "installedAt": {
+          "type": "string"
+        },
+        "installMode": {
+          "type": "string",
+          "enum": ["release-package", "source-checkout", "go-install", "unknown"]
+        },
+        "os": {
+          "type": "string",
+          "enum": ["linux", "darwin", "windows"]
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["amd64", "arm64"]
+        }
+      }
+    },
+    "pendingUpdate": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "toolName",
+        "targetVersion",
+        "installRoot",
+        "stagedRoot",
+        "reason",
+        "createdAt"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "slidex.pendingUpdate.v1"
+        },
+        "toolName": {
+          "type": "string",
+          "const": "slidex"
+        },
+        "targetVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetTag": {
+          "type": "string"
+        },
+        "installRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stagedRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activatorPath": {
+          "type": "string"
+        },
+        "activationCommand": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": ["tagName", "version", "prerelease", "draft", "assets"],
+      "additionalProperties": false,
+      "properties": {
+        "tagName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prerelease": {
+          "type": "boolean"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "publishedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset"
+          }
+        }
+      }
+    }
+  }
+}

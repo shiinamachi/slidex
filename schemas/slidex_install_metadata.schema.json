@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.install_metadata.schema.json",
+  "title": "slidex Install Metadata",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "toolName",
+    "version",
+    "channel",
+    "tag",
+    "commit",
+    "buildTime",
+    "installRoot",
+    "releaseAssetName",
+    "installedAt",
+    "installMode",
+    "os",
+    "arch"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "slidex.install.v1"
+    },
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["production", "canary", "local-development"]
+    },
+    "tag": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^(unknown|[a-f0-9]{7,40})$"
+    },
+    "buildTime": {
+      "type": "string",
+      "minLength": 1
+    },
+    "installRoot": {
+      "type": "string"
+    },
+    "releaseAssetName": {
+      "type": "string",
+      "pattern": "^slidex_.+_(linux|darwin|windows)_(amd64|arm64)\\.(tar\\.gz|zip)$"
+    },
+    "installedAt": {
+      "type": "string"
+    },
+    "installMode": {
+      "type": "string",
+      "enum": ["release-package", "source-checkout", "go-install", "unknown"]
+    },
+    "os": {
+      "type": "string",
+      "enum": ["linux", "darwin", "windows"]
+    },
+    "arch": {
+      "type": "string",
+      "enum": ["amd64", "arm64"]
+    }
+  }
+}

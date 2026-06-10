@@ -39,6 +39,12 @@ const (
 	updateGitHubReleasesAPI      = "https://api.github.com/repos/shiinamachi/slidex/releases"
 	updateGitHubRepo             = "shiinamachi/slidex"
 
+	installMetadataSchemaFile   = "slidex_install_metadata.schema.json"
+	updateStateSchemaFile       = "slidex_update_state.schema.json"
+	pendingUpdateSchemaFile     = "slidex_pending_update.schema.json"
+	updateStatusSchemaFile      = "slidex_update_status.schema.json"
+	updateApplyResultSchemaFile = "slidex_update_apply_result.schema.json"
+
 	attestationPolicyRequire         = "require"
 	attestationPolicyAllowUnverified = "allow-unverified"
 
@@ -746,6 +752,116 @@ func updateStatusBanners(status updateStatus) []statusBanner {
 	return banners
 }
 
+func doctorUpdateSchemaFindings() []qaFinding {
+	now := time.Now().UTC().Format(time.RFC3339)
+	installRoot := filepath.ToSlash(filepath.Join(mustAbs("."), "doctor-update-install"))
+	pluginPath := filepath.ToSlash(filepath.Join(filepath.FromSlash(installRoot), "plugins", "slidex"))
+	skillPath := filepath.ToSlash(filepath.Join(filepath.FromSlash(pluginPath), "skills", "slidex-start", "SKILL.md"))
+	activatorBinary := "slidex"
+	if runtime.GOOS == "windows" {
+		activatorBinary = "slidex.exe"
+	}
+	contract, err := releaseAssetContractFor("v"+toolVersion, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return []qaFinding{fail("doctor.update_schema", err.Error(), "schemas")}
+	}
+	metadata := installMetadata{
+		SchemaVersion:    installMetadataSchemaVersion,
+		ToolName:         toolName,
+		Version:          toolVersion,
+		Channel:          updateChannelProduction,
+		Tag:              "v" + toolVersion,
+		Commit:           strings.Repeat("a", 40),
+		BuildTime:        now,
+		InstallRoot:      installRoot,
+		ReleaseAssetName: contract.ArchiveName,
+		InstalledAt:      now,
+		InstallMode:      installModeReleasePackage,
+		OS:               runtime.GOOS,
+		Arch:             runtime.GOARCH,
+	}
+	pending := pendingUpdate{
+		SchemaVersion:     pendingUpdateSchemaVersion,
+		ToolName:          toolName,
+		TargetVersion:     toolVersion,
+		TargetTag:         "v" + toolVersion,
+		InstallRoot:       installRoot,
+		StagedRoot:        filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.staged-"+toolVersion)),
+		ActivatorPath:     filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.activator-"+toolVersion, activatorBinary)),
+		ActivationCommand: "slidex update activate-pending --yes --json",
+		Reason:            "doctor schema contract sample",
+		CreatedAt:         now,
+	}
+	state := updateState{
+		SchemaVersion:          updateStateSchemaVersion,
+		ToolName:               toolName,
+		CurrentVersion:         toolVersion,
+		TargetVersion:          toolVersion,
+		TargetTag:              "v" + toolVersion,
+		Channel:                updateChannelProduction,
+		RestartRequired:        false,
+		VerificationStatus:     "verified",
+		VerificationCommand:    "slidex update verify --json",
+		VerifiedPluginVersion:  toolVersion,
+		VerifiedPluginPath:     pluginPath,
+		VerifiedStartSkillPath: skillPath,
+		UpdatedAt:              now,
+	}
+	status := updateStatus{
+		ToolName:                 toolName,
+		CurrentVersion:           toolVersion,
+		Channel:                  updateChannelProduction,
+		InstallMode:              installModeReleasePackage,
+		InstallRoot:              installRoot,
+		MetadataPath:             filepath.ToSlash(filepath.Join(filepath.FromSlash(installRoot), ".slidex", "install.json")),
+		UpdatesEnabled:           true,
+		Status:                   "verified",
+		TargetVersion:            toolVersion,
+		TargetTag:                "v" + toolVersion,
+		RestartRequired:          false,
+		PluginVerificationStatus: "verified",
+		NextVerificationCommand:  "slidex update verify --json",
+		InstalledMetadata:        &metadata,
+		PendingActivation:        false,
+		VerifiedPluginVersion:    toolVersion,
+		VerifiedPluginPath:       pluginPath,
+		VerifiedStartSkillPath:   skillPath,
+	}
+	result := updateApplyResult{
+		ToolName:                 toolName,
+		CurrentVersion:           toolVersion,
+		TargetVersion:            toolVersion,
+		TargetTag:                "v" + toolVersion,
+		Channel:                  updateChannelProduction,
+		InstallRoot:              installRoot,
+		Status:                   "applied",
+		StagedRoot:               filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.staged-"+toolVersion)),
+		BackupRoot:               filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.backup-"+toolVersion)),
+		RestartRequired:          true,
+		PluginVerificationStatus: "restart_required",
+		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
+		Attestation:              attestationVerification{Policy: attestationPolicyRequire, Status: "verified", Command: "gh attestation verify"},
+	}
+	samples := []struct {
+		schema  string
+		payload any
+	}{
+		{installMetadataSchemaFile, metadata},
+		{updateStateSchemaFile, state},
+		{pendingUpdateSchemaFile, pending},
+		{updateStatusSchemaFile, status},
+		{updateApplyResultSchemaFile, result},
+	}
+	var findings []qaFinding
+	for _, sample := range samples {
+		path := bundledSchemaPath(sample.schema)
+		if err := validatePayloadAgainstSchema(sample.payload, path); err != nil {
+			findings = append(findings, fail("doctor.update_schema", err.Error(), path))
+		}
+	}
+	return findings
+}
+
 func markPluginRestartRequired(installRoot, targetVersion, targetTag string) error {
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
@@ -1289,6 +1405,9 @@ func readPendingUpdate(installRoot string) (*pendingUpdate, string, error) {
 	if pending.ToolName != "" && pending.ToolName != toolName {
 		return nil, path, fmt.Errorf("%s: toolName must be %s", filepath.ToSlash(path), toolName)
 	}
+	if err := validatePayloadAgainstBundledSchema(pending, pendingUpdateSchemaFile); err != nil {
+		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
+	}
 	return &pending, path, nil
 }
 
@@ -1307,6 +1426,9 @@ func writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, t
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := validatePayloadAgainstBundledSchema(pending, pendingUpdateSchemaFile); err != nil {
 		return "", err
 	}
 	return path, writeSourceJSONFile(path, pending)
@@ -1457,6 +1579,9 @@ func updateInstallMetadataAfterActivation(installRoot, targetVersion, targetTag,
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	if err := validatePayloadAgainstBundledSchema(*metadata, installMetadataSchemaFile); err != nil {
+		return err
+	}
 	return writeSourceJSONFile(path, metadata)
 }
 
@@ -1583,6 +1708,21 @@ func updateStatePath(installRoot string) string {
 	return filepath.Join(installRoot, ".slidex", "update_state.json")
 }
 
+func bundledSchemaPath(schemaName string) string {
+	rel := filepath.Join("schemas", filepath.FromSlash(schemaName))
+	if installRoot := defaultInstallRoot(); installRoot != "" {
+		candidate := filepath.Join(installRoot, rel)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return repoRelativePath(rel)
+}
+
+func validatePayloadAgainstBundledSchema(payload any, schemaName string) error {
+	return validatePayloadAgainstSchema(payload, bundledSchemaPath(schemaName))
+}
+
 func readInstallMetadata(path string) (*installMetadata, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -1675,6 +1815,12 @@ func writeUpdateState(installRoot string, state updateState) error {
 	path := updateStatePath(installRoot)
 	state.SchemaVersion = updateStateSchemaVersion
 	state.ToolName = toolName
+	if state.CurrentVersion == "" {
+		state.CurrentVersion = toolVersion
+	}
+	if state.Channel == "" {
+		state.Channel = channelFromPackageVersion(firstNonEmpty(state.TargetVersion, state.CurrentVersion))
+	}
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if state.VerificationCommand == "" {
 		state.VerificationCommand = "slidex update verify --json"
@@ -1683,6 +1829,9 @@ func writeUpdateState(installRoot string, state updateState) error {
 		state.VerificationStatus = "restart_required"
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := validatePayloadAgainstBundledSchema(state, updateStateSchemaFile); err != nil {
 		return err
 	}
 	return writeSourceJSONFile(path, state)
@@ -2142,6 +2291,9 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	if metadata, err := readInstallMetadata(metadataPath); err != nil {
 		findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
 	} else {
+		if err := validatePayloadAgainstBundledSchema(*metadata, installMetadataSchemaFile); err != nil {
+			findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
+		}
 		if metadata.Version != expectedVersion {
 			findings = append(findings, fail("update.candidate_install_metadata", "install metadata version must be "+expectedVersion+", got "+metadata.Version, filepath.ToSlash(metadataPath)))
 		}
