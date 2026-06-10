@@ -760,6 +760,32 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	}
 }
 
+func TestActivateStagedInstallRootRollsBackWhenActivationFails(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	missingStagedRoot := filepath.Join(parent, "missing-candidate")
+	backupRoot, err := activateStagedInstallRoot(installRoot, missingStagedRoot, "0.2.0")
+	if err == nil {
+		t.Fatal("expected activation failure for missing staged root")
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("rollback did not restore install root VERSION, got %q", got)
+	}
+	if _, err := os.Stat(installRoot); err != nil {
+		t.Fatalf("rollback did not restore install root: %v", err)
+	}
+	if _, err := os.Stat(backupRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup root should be moved back after rollback, stat err = %v", err)
+	}
+}
+
 func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")
