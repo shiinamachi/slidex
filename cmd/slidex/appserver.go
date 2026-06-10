@@ -151,7 +151,7 @@ func newUnixAppServerClient(sock string) (*appServerClient, error) {
 }
 
 func newAppServerClientCommand(name string, args ...string) (*appServerClient, error) {
-	cmd := exec.Command(name, args...)
+	cmd := appServerClientExecCommand(name, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -179,6 +179,12 @@ func newAppServerClientCommand(name string, args ...string) (*appServerClient, e
 	return client, nil
 }
 
+func appServerClientExecCommand(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	configureManagedAppServerCommand(cmd)
+	return cmd
+}
+
 func (c *appServerClient) scanStdout(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
 	buf := make([]byte, 0, 1024*1024)
@@ -200,11 +206,34 @@ func (c *appServerClient) close() {
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
+	if c.cmd == nil {
+		return
 	}
-	if c.cmd != nil {
+	if c.cmd.Process == nil {
 		_ = c.cmd.Wait()
+		return
+	}
+	pid := c.cmd.Process.Pid
+	done := make(chan struct{})
+	go func() {
+		_ = c.cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(2 * time.Second):
+		signalManagedProcess(pid)
+	}
+	select {
+	case <-done:
+		return
+	case <-time.After(3 * time.Second):
+		killManagedProcess(pid)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
 	}
 }
 

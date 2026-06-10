@@ -2090,6 +2090,13 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	startedPID := cmd.Process.Pid
+	startCommitted := false
+	defer func() {
+		if !startCommitted {
+			terminateManagedProcess(startedPID, 2*time.Second)
+		}
+	}()
 	decks := []string{}
 	if deck != "" {
 		decks = append(decks, mustAbs(deck))
@@ -2119,7 +2126,23 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 			return err
 		}
 	}
+	startCommitted = true
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
+}
+
+func terminateManagedProcess(pid int, grace time.Duration) {
+	if pid <= 0 {
+		return
+	}
+	signalManagedProcess(pid)
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	killManagedProcess(pid)
 }
 
 func recordWebSocketTransportRisk(deckAbs, risk, metadataPath string) error {

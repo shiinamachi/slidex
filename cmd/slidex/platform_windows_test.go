@@ -35,6 +35,13 @@ func TestManagedAppServerCommandUsesProcessGroupWindows(t *testing.T) {
 	}
 }
 
+func TestAppServerClientCommandUsesProcessGroupWindows(t *testing.T) {
+	cmd := appServerClientExecCommand("codex", "app-server", "--listen", "stdio://")
+	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&windowsCreateNewProcessGroup == 0 {
+		t.Fatalf("stdio app-server command should start in a new Windows process group: %#v", cmd.SysProcAttr)
+	}
+}
+
 func TestRejectSymlinkEscapeRejectsWindowsJunction(t *testing.T) {
 	workspace := t.TempDir()
 	decksRoot := filepath.Join(workspace, "decks")

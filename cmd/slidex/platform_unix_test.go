@@ -38,3 +38,10 @@ func TestManagedAppServerCommandUsesProcessGroupUnix(t *testing.T) {
 		t.Fatalf("managed app-server command should start in its own process group: %#v", cmd.SysProcAttr)
 	}
 }
+
+func TestAppServerClientCommandUsesProcessGroupUnix(t *testing.T) {
+	cmd := appServerClientExecCommand("codex", "app-server", "--listen", "stdio://")
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatalf("stdio app-server command should start in its own process group: %#v", cmd.SysProcAttr)
+	}
+}
