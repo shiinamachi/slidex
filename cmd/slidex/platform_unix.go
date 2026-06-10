@@ -104,3 +104,7 @@ func applyPlatformDirMode(string, os.FileMode) error {
 func replaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }
+
+func executableProductVersion(string) string {
+	return ""
+}

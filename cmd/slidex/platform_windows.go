@@ -206,6 +206,29 @@ func applyPlatformFileMode(path string, mode os.FileMode) error {
 	return windowsApplyPrivateDACL(path, false)
 }
 
+func executableProductVersion(path string) string {
+	var zero windows.Handle
+	infoSize, err := windows.GetFileVersionInfoSize(path, &zero)
+	if err != nil || infoSize == 0 {
+		return ""
+	}
+	versionInfo := make([]byte, infoSize)
+	if err := windows.GetFileVersionInfo(path, 0, infoSize, unsafe.Pointer(&versionInfo[0])); err != nil {
+		return ""
+	}
+	var fixedInfo *windows.VS_FIXEDFILEINFO
+	fixedInfoLen := uint32(unsafe.Sizeof(*fixedInfo))
+	if err := windows.VerQueryValue(unsafe.Pointer(&versionInfo[0]), `\`, unsafe.Pointer(&fixedInfo), &fixedInfoLen); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d.%d",
+		(fixedInfo.FileVersionMS>>16)&0xffff,
+		fixedInfo.FileVersionMS&0xffff,
+		(fixedInfo.FileVersionLS>>16)&0xffff,
+		fixedInfo.FileVersionLS&0xffff,
+	)
+}
+
 func applyPlatformDirMode(path string, mode os.FileMode) error {
 	if mode&0o077 != 0 {
 		return nil

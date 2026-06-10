@@ -2490,10 +2490,24 @@ func chromeManagedInstallCandidates(goos string) []string {
 
 func chromeVersion(chromePath string) string {
 	out, err := runChromeCommand(chromeVersionTimeout, chromePath, "--version")
+	version := strings.TrimSpace(string(out))
+	if err == nil && hasExactVersionToken(version) {
+		return version
+	}
+	if fallback := executableProductVersion(chromePath); fallback != "" {
+		label := version
+		if label == "" || strings.HasPrefix(label, "unknown:") {
+			label = filepath.Base(chromePath)
+		}
+		return strings.TrimSpace(label + " " + fallback)
+	}
 	if err != nil {
+		if version != "" {
+			return "unknown: " + err.Error() + ": " + version
+		}
 		return "unknown: " + err.Error()
 	}
-	return strings.TrimSpace(string(out))
+	return version
 }
 
 func runChromeCommand(timeout time.Duration, chromePath string, args ...string) ([]byte, error) {
