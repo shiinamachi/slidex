@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -1396,6 +1397,98 @@ func TestPostRestartPluginVerificationDetectsManifestDrift(t *testing.T) {
 	}
 }
 
+func TestAppServerPluginSmokeUsesDocumentedPluginSurfaces(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
+		t.Fatal(err)
+	}
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	fakeBin := buildFakeCodexAppServerForTest(t)
+	logPath := filepath.Join(t.TempDir(), "fake-codex-transcript.jsonl")
+	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
+	skillPath := filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")
+	t.Setenv("PATH", filepath.Dir(fakeBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_CODEX_LOG", logPath)
+	t.Setenv("FAKE_CODEX_PLUGIN_VERSION", toolVersion+"+codex.test")
+	t.Setenv("FAKE_CODEX_PLUGIN_PATH", pluginPath)
+	t.Setenv("FAKE_CODEX_SKILL_PATH", skillPath)
+
+	result, err := appServerWorkbenchPluginSmoke(t.TempDir(), "plugin-smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "pass" || result.PluginVerificationStatus != "verified" || result.RestartRequiredAfter {
+		t.Fatalf("plugin smoke result should pass post-restart verification: %#v", result)
+	}
+	if !result.PluginInstalled || !result.PluginEnabled || !result.StartSkillFound {
+		t.Fatalf("plugin install/skill evidence missing: %#v", result)
+	}
+
+	entries := readFakeCodexTranscriptForTest(t, logPath)
+	methods := transcriptMethodsForTest(entries)
+	wantMethods := []string{
+		"initialize",
+		"initialized",
+		"plugin/read",
+		"skills/list",
+		"thread/start",
+		"mcpServerStatus/list",
+		"mcpServer/tool/call",
+		"mcpServer/tool/call",
+		"mcpServer/tool/call",
+	}
+	if !reflect.DeepEqual(methods, wantMethods) {
+		t.Fatalf("App Server method transcript = %#v, want %#v", methods, wantMethods)
+	}
+	pluginRead := transcriptEntryForMethodForTest(t, entries, "plugin/read")
+	pluginParams, _ := pluginRead["params"].(map[string]any)
+	if pluginParams["pluginName"] != "slidex" || !strings.HasSuffix(filepath.ToSlash(metadataString(pluginParams["marketplacePath"])), filepath.ToSlash(filepath.Join(".agents", "plugins", "marketplace.json"))) {
+		t.Fatalf("plugin/read params should use bundled marketplace: %#v", pluginParams)
+	}
+	skillsList := transcriptEntryForMethodForTest(t, entries, "skills/list")
+	skillsParams, _ := skillsList["params"].(map[string]any)
+	if skillsParams["forceReload"] != true {
+		t.Fatalf("skills/list must force reload bundled skills: %#v", skillsParams)
+	}
+	var tools []string
+	for _, entry := range entries {
+		if entry["method"] != "mcpServer/tool/call" {
+			continue
+		}
+		params, _ := entry["params"].(map[string]any)
+		tools = append(tools, metadataString(params["tool"]))
+	}
+	if !reflect.DeepEqual(tools, []string{"workbench.start", "workbench.status", "workbench.stop"}) {
+		t.Fatalf("unexpected workbench tool calls: %#v", tools)
+	}
+	for _, method := range methods {
+		if method == "plugin/install" || method == "plugin/uninstall" {
+			t.Fatalf("plugin smoke should not mutate plugin installs through %s", method)
+		}
+	}
+}
+
 func writePostRestartPluginFilesForTest(t *testing.T, installRoot, manifestVersion, lockVersion string) {
 	t.Helper()
 	pluginRoot := filepath.Join(installRoot, "plugins", "slidex")
@@ -1423,6 +1516,167 @@ func writePostRestartPluginFilesForTest(t *testing.T, installRoot, manifestVersi
 	if err := writeSourceJSONFile(filepath.Join(pluginRoot, ".codex-plugin", "version-lock.json"), lock); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func buildFakeCodexAppServerForTest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "fake_codex.go")
+	code := `package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("codex 0.138.0")
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	buffer := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buffer, 16*1024*1024)
+	for scanner.Scan() {
+		var req map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			continue
+		}
+		appendTranscript(req)
+		id, ok := req["id"]
+		if !ok {
+			continue
+		}
+		method, _ := req["method"].(string)
+		params, _ := req["params"].(map[string]any)
+		result := resultFor(method, params)
+		raw, _ := json.Marshal(map[string]any{"id": id, "result": result})
+		fmt.Println(string(raw))
+	}
+}
+
+func appendTranscript(req map[string]any) {
+	path := os.Getenv("FAKE_CODEX_LOG")
+	if path == "" {
+		return
+	}
+	raw, _ := json.Marshal(req)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, string(raw))
+}
+
+func resultFor(method string, params map[string]any) map[string]any {
+	pluginPath := firstNonEmpty(os.Getenv("FAKE_CODEX_PLUGIN_PATH"), filepath.Join(mustCWD(), "plugins", "slidex"))
+	skillPath := firstNonEmpty(os.Getenv("FAKE_CODEX_SKILL_PATH"), filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md"))
+	pluginVersion := firstNonEmpty(os.Getenv("FAKE_CODEX_PLUGIN_VERSION"), "0.1.0+codex.test")
+	switch method {
+	case "initialize":
+		return map[string]any{"serverInfo": map[string]any{"name": "fake-codex"}}
+	case "plugin/read":
+		return map[string]any{"plugin": map[string]any{"summary": map[string]any{
+			"name": "slidex", "localVersion": pluginVersion, "installed": true, "enabled": true,
+			"source": map[string]any{"path": pluginPath},
+		}}}
+	case "skills/list":
+		return map[string]any{"skills": []any{map[string]any{"name": "slidex:slidex-start", "metadata": map[string]any{"path": skillPath}}}}
+	case "thread/start":
+		return map[string]any{"thread": map[string]any{"id": "thread-1"}}
+	case "mcpServerStatus/list":
+		return map[string]any{"servers": []any{map[string]any{"name": "slidex", "tools": []string{"workbench.start", "workbench.status", "workbench.stop"}}}}
+	case "mcpServer/tool/call":
+		tool, _ := params["tool"].(string)
+		switch tool {
+		case "workbench.start":
+			return map[string]any{"structuredContent": map[string]any{
+				"status": "running",
+				"workbench": map[string]any{"status": "running", "url": "http://127.0.0.1:49152/workbench/session", "serverBind": "127.0.0.1", "browserOpenStrategy": "manual"},
+				"proprietaryCanvasAPI": "not_used",
+			}}
+		case "workbench.status":
+			return map[string]any{"structuredContent": map[string]any{"workbench": map[string]any{"status": "running"}}}
+		case "workbench.stop":
+			return map[string]any{"structuredContent": map[string]any{"status": "stopped"}}
+		}
+	}
+	return map[string]any{}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func mustCWD() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return cwd
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := "codex"
+	if runtime.GOOS == "windows" {
+		name = "codex.exe"
+	}
+	path := filepath.Join(dir, name)
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fake codex build failed: %v\n%s", err, out)
+	}
+	return path
+}
+
+func readFakeCodexTranscriptForTest(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("invalid fake codex transcript line: %v\n%s", err, line)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func transcriptMethodsForTest(entries []map[string]any) []string {
+	methods := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		methods = append(methods, metadataString(entry["method"]))
+	}
+	return methods
+}
+
+func transcriptEntryForMethodForTest(t *testing.T, entries []map[string]any, method string) map[string]any {
+	t.Helper()
+	for _, entry := range entries {
+		if entry["method"] == method {
+			return entry
+		}
+	}
+	t.Fatalf("transcript missing method %s: %#v", method, entries)
+	return nil
 }
 
 func TestAppServerSkillSmokeHelpers(t *testing.T) {
