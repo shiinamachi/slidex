@@ -1489,7 +1489,28 @@ func validateDeckID(deckID string) error {
 	if deckID == "." || deckID == ".." {
 		return exitCodeError(2, "deck_id must not be a dot path segment")
 	}
+	if strings.HasSuffix(deckID, ".") {
+		return exitCodeError(2, "deck_id must not end with a dot because it is not portable on Windows")
+	}
+	if windowsReservedDeckID(deckID) {
+		return exitCodeError(2, "deck_id must not use a Windows reserved device name")
+	}
 	return nil
+}
+
+func windowsReservedDeckID(deckID string) bool {
+	name := deckID
+	if before, _, ok := strings.Cut(deckID, "."); ok {
+		name = before
+	}
+	switch strings.ToUpper(name) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
 }
 
 func safeDeckDir(root, deckID string) (string, error) {

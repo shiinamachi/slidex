@@ -48,6 +48,19 @@ func TestBootstrapDeckRejectsTraversalAndCreatesUnderDecks(t *testing.T) {
 	}
 }
 
+func TestValidateDeckIDRejectsWindowsReservedNames(t *testing.T) {
+	for _, deckID := range []string{"CON", "con", "NUL", "COM1", "LPT9", "AUX.deck", "PRN.txt", "demo."} {
+		if err := validateDeckID(deckID); err == nil {
+			t.Fatalf("expected %q to be rejected as non-portable", deckID)
+		}
+	}
+	for _, deckID := range []string{"customer-retention", "com10", "lpt10", "auxiliary", "demo.v1"} {
+		if err := validateDeckID(deckID); err != nil {
+			t.Fatalf("expected %q to be portable, got %v", deckID, err)
+		}
+	}
+}
+
 func TestBootstrapDeckUsesRepoTemplateForExternalWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	result, err := bootstrapDeckWorkspace(workspace, "external-template", "decks/_template", true)
