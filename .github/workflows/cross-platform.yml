@@ -43,6 +43,19 @@ jobs:
           go run ./cmd/slidex inspect --deck decks/ci-init-smoke --write
           go run ./cmd/slidex migrate --deck decks/ci-init-smoke --from html-pdf --dry-run
           go run ./cmd/slidex clean --deck decks/ci-init-smoke --logs --older-than 0h
+      - name: Run delivery CLI smoke
+        run: |
+          go run ./cmd/slidex init ci-render-smoke --from-template fixtures/minimal_deck
+          go run ./cmd/slidex strategy --deck decks/ci-render-smoke
+          go run ./cmd/slidex spec --deck decks/ci-render-smoke
+          go run ./cmd/slidex build --deck decks/ci-render-smoke
+          go run ./cmd/slidex migrate --deck decks/ci-render-smoke --from html-pdf --write --dry-run=false
+          go run ./cmd/slidex render --deck decks/ci-render-smoke
+          go run ./cmd/slidex visual-review record --deck decks/ci-render-smoke --status pass --inspector ci
+          go run ./cmd/slidex qa --deck decks/ci-render-smoke --visual-review manual
+          go run ./cmd/slidex finalize --deck decks/ci-render-smoke
+          go run ./cmd/slidex review --deck decks/ci-render-smoke --stage all
+          go run ./cmd/slidex package --deck decks/ci-render-smoke
       - name: Run workbench save smoke
         run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex-workbench-smoke" --deck-id ci-workbench-smoke
 
