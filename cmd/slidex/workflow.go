@@ -2195,27 +2195,25 @@ func stopManagedAppServer(force bool) error {
 	pid, _ := numberAsInt(metadata["pid"])
 	stopped := false
 	if pid > 0 && processAlive(pid) {
-		if proc, err := os.FindProcess(pid); err == nil {
-			if force {
-				_ = proc.Kill()
-			} else {
-				_ = proc.Signal(os.Interrupt)
-				deadline := time.Now().Add(5 * time.Second)
-				for time.Now().Before(deadline) {
-					if !processAlive(pid) {
-						break
-					}
-					time.Sleep(100 * time.Millisecond)
+		if force {
+			killManagedProcess(pid)
+		} else {
+			signalManagedProcess(pid)
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if !processAlive(pid) {
+					break
 				}
-				if processAlive(pid) {
-					metadata["stopPending"] = true
-					metadata["lastStopAttemptAt"] = time.Now().UTC().Format(time.RFC3339)
-					_ = secureWriteJSON(metaPath, metadata)
-					return exitCodeError(1, "app-server did not stop gracefully; use --force")
-				}
+				time.Sleep(100 * time.Millisecond)
 			}
-			stopped = true
+			if processAlive(pid) {
+				metadata["stopPending"] = true
+				metadata["lastStopAttemptAt"] = time.Now().UTC().Format(time.RFC3339)
+				_ = secureWriteJSON(metaPath, metadata)
+				return exitCodeError(1, "app-server did not stop gracefully; use --force")
+			}
 		}
+		stopped = true
 	}
 	_ = os.Remove(metaPath)
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "stopped": stopped, "metadataPath": metaPath})

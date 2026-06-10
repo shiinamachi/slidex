@@ -29,6 +29,14 @@ func killWorkbenchProcess(pid int) {
 	killProcess(pid)
 }
 
+func signalManagedProcess(pid int) {
+	killProcess(pid)
+}
+
+func killManagedProcess(pid int) {
+	killProcess(pid)
+}
+
 func killProcess(pid int) {
 	if pid <= 0 {
 		return

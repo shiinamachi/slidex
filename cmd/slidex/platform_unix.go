@@ -22,6 +22,20 @@ func killWorkbenchProcess(pid int) {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
+func signalManagedProcess(pid int) {
+	proc, err := os.FindProcess(pid)
+	if err == nil {
+		_ = proc.Signal(os.Interrupt)
+	}
+}
+
+func killManagedProcess(pid int) {
+	proc, err := os.FindProcess(pid)
+	if err == nil {
+		_ = proc.Kill()
+	}
+}
+
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
