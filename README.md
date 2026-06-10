@@ -283,8 +283,9 @@ GitHub Actions `Cross Platform` workflow는 `ubuntu-24.04`, `macos-15`,
 test binary cross-compile을 확인합니다. OS별 test job은
 `SLIDEX_REQUIRE_RENDER_SMOKE=1`로 render/QA/package E2E가 skip되지 않도록 강제하고,
 `doctor --render --json`으로 Chrome/Chromium 렌더 의존성을 확인합니다. 또한
-`version`, `init`, `inspect`, `workbench save-smoke`를 OS matrix에서 실제 CLI 명령으로
-실행합니다. Actions는 SHA로 고정합니다.
+`version`, `init`, `inspect --write`, `migrate --dry-run`, `clean --logs`,
+`workbench save-smoke`를 OS matrix에서 실제 CLI 명령으로 실행합니다. Actions는 SHA로
+고정합니다.
 
 template 변경은 임시 deck으로 `slidex init`을 smoke-test한 뒤 해당 deck을 제거합니다.
 render/PDF 변경은 현재 HTML에서 PNG/PDF를 다시 만들고 `slidex qa`와 `slidex package`

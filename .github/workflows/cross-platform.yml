@@ -40,7 +40,9 @@ jobs:
         run: |
           go run ./cmd/slidex version
           go run ./cmd/slidex init ci-init-smoke --from-template decks/_template
-          go run ./cmd/slidex inspect --deck decks/ci-init-smoke
+          go run ./cmd/slidex inspect --deck decks/ci-init-smoke --write
+          go run ./cmd/slidex migrate --deck decks/ci-init-smoke --from html-pdf --dry-run
+          go run ./cmd/slidex clean --deck decks/ci-init-smoke --logs --older-than 0h
       - name: Run workbench save smoke
         run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex-workbench-smoke" --deck-id ci-workbench-smoke
 
