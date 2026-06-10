@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -33,6 +34,11 @@ import (
 const (
 	toolName    = "slidex"
 	toolVersion = "0.1.0"
+)
+
+const (
+	chromeVersionTimeout = 8 * time.Second
+	chromeCommandTimeout = 45 * time.Second
 )
 
 type fileEntry struct {
@@ -2407,11 +2413,41 @@ func chromeExecutableCandidates(goos string) []string {
 }
 
 func chromeVersion(chromePath string) string {
-	out, err := exec.Command(chromePath, "--version").CombinedOutput()
+	out, err := runChromeCommand(chromeVersionTimeout, chromePath, "--version")
 	if err != nil {
 		return "unknown: " + err.Error()
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func runChromeCommand(timeout time.Duration, chromePath string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.Command(chromePath, args...)
+	configureProcessGroupCommand(cmd)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		return output.Bytes(), err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return output.Bytes(), err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			killManagedProcess(cmd.Process.Pid)
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		return output.Bytes(), fmt.Errorf("chrome timed out after %s", timeout)
+	}
 }
 
 func fileURLFromPath(path string) string {
@@ -2454,8 +2490,7 @@ func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height i
 		"--screenshot="+pngPath,
 		targetURL,
 	)
-	cmd := exec.Command(chromePath, args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
 	if err != nil {
 		return fmt.Errorf("chrome screenshot failed: %w\n%s", err, string(out))
 	}
@@ -2476,8 +2511,7 @@ func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) 
 		"--dump-dom",
 		fileURLFromPath(htmlPath),
 	)
-	cmd := exec.Command(chromePath, args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
 	if err != nil {
 		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
 	}

@@ -12,10 +12,14 @@ import (
 )
 
 func configureWorkbenchCommand(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcessGroupCommand(cmd)
 }
 
 func configureManagedAppServerCommand(cmd *exec.Cmd) {
+	configureProcessGroupCommand(cmd)
+}
+
+func configureProcessGroupCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 

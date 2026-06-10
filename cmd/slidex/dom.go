@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -48,7 +47,7 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 		"--dump-dom",
 		fileURLFromPath(tmpHTML),
 	)
-	out, err := exec.Command(chromePath, args...).CombinedOutput()
+	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("chrome DOM enumeration failed: %w\n%s", err, string(out))
 	}

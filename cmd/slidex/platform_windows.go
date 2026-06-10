@@ -26,10 +26,14 @@ const (
 var moveFileExW = syscall.NewLazyDLL("kernel32.dll").NewProc("MoveFileExW")
 
 func configureWorkbenchCommand(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateNewProcessGroup}
+	configureProcessGroupCommand(cmd)
 }
 
 func configureManagedAppServerCommand(cmd *exec.Cmd) {
+	configureProcessGroupCommand(cmd)
+}
+
+func configureProcessGroupCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateNewProcessGroup}
 }
 
