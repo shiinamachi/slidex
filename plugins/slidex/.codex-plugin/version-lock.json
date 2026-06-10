@@ -4,5 +4,8 @@
   "pluginVersion": "0.1.0",
   "requiredCodexCliVersion": "0.138.0",
   "slidexCliVersion": "0.1.0",
-  "goVersion": "1.26.3"
+  "goVersion": "1.26.3",
+  "developerName": "shiinamachi",
+  "license": "MIT",
+  "marketplaceName": "shiinamachi"
 }

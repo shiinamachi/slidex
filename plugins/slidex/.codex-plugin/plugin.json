@@ -1,16 +1,17 @@
 {
   "name": "slidex",
-  "version": "0.1.0+codex.20260610023629",
+  "version": "0.1.0+codex.20260610114022",
   "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
   "author": {
-    "name": "slidex maintainers"
+    "name": "shiinamachi"
   },
+  "license": "MIT",
   "skills": "./skills/",
   "interface": {
     "displayName": "Slidex",
     "shortDescription": "Create slidex decks and open the local workbench.",
     "longDescription": "Slidex starts a loopback deck-creation workbench from Codex, bootstraps deck-local workspaces, and keeps the CLI as the source of truth for later HTML/PDF render, QA, and package stages.",
-    "developerName": "slidex maintainers",
+    "developerName": "shiinamachi",
     "category": "Productivity",
     "capabilities": [
       "Interactive",

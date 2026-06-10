@@ -14,6 +14,19 @@ if [[ -z "$release_version" ]]; then
 fi
 release_version="${release_version#refs/tags/}"
 
+tool_version="$(go run ./cmd/slidex version | awk '{print $2}')"
+case "$release_version" in
+  dev-*|ci-*)
+    ;;
+  *)
+    release_base="${release_version#v}"
+    if [[ "$release_base" != "$tool_version" ]]; then
+      printf 'release version %s does not match slidex CLI version %s\n' "$release_version" "$tool_version" >&2
+      exit 2
+    fi
+    ;;
+esac
+
 dist_dir="${SLIDEX_DIST_DIR:-dist}"
 targets="${SLIDEX_TARGETS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}"
 
@@ -23,8 +36,10 @@ runtime_paths=(
   ".mise.toml"
   "CODEX_INSTALL_PROMPT.md"
   "INSTALL.md"
+  "LICENSE"
   "README.ko.md"
   "README.md"
+  "VERSIONING.md"
   "commands.md"
   "decks/README.md"
   "decks/_template"

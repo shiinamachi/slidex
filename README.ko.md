@@ -252,4 +252,5 @@ Advanced render override와 Codex 전용 명령 예시는
 
 ## 라이선스
 
-라이선스 정보는 저장소를 참고합니다.
+MIT License입니다. Copyright (c) 2026 shiinamachi. 자세한 내용은
+[LICENSE](LICENSE)를 참고합니다.

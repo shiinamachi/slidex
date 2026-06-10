@@ -191,8 +191,9 @@ mise exec -- go test ./...
 ```
 
 배포 전에는 Go/Codex exact pin, `go.sum`, vendored App Server protocol schema,
-companion skill/plugin package, hook manifest, README/commands 문서, shell completion
-생성 절차를 함께 검증합니다.
+companion skill/plugin package, hook manifest, CLI/plugin version lock,
+README/commands 문서, shell completion 생성 절차를 함께 검증합니다.
+CLI와 Codex Plugin 버전 운영 규칙은 [VERSIONING.md](VERSIONING.md)를 따릅니다.
 
 GitHub Actions `Cross Platform` workflow는 `ubuntu-24.04`, `macos-15`,
 `windows-2025` 테스트와 Linux/macOS/Windows `amd64`, `arm64` cross-compile을

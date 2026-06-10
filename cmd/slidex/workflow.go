@@ -337,6 +337,8 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	return map[string]any{
 		"toolName":                    toolName,
 		"version":                     toolVersion,
+		"developer":                   toolDeveloperName,
+		"license":                     toolLicenseIdentifier,
 		"generatedAt":                 time.Now().UTC().Format(time.RFC3339),
 		"goModVersion":                goModVersion,
 		"miseGoVersion":               miseGoVersion,
@@ -405,6 +407,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 		path string
 		kind string
 	}{
+		{filepath.Join(".agents", "plugins", "marketplace.json"), "repo marketplace"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"), "plugin manifest"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"), "plugin version lock"},
 		{filepath.Join("plugins", "slidex", "hooks", "manifest.json"), "hook manifest"},
@@ -418,6 +421,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 	}
 	findings = append(findings, validatePluginJSONManifest(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"))...)
 	findings = append(findings, validatePluginVersionLock(filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"))...)
+	findings = append(findings, validateMarketplaceManifest(filepath.Join(".agents", "plugins", "marketplace.json"))...)
 	findings = append(findings, validatePluginMCPConfig(filepath.Join("plugins", "slidex", ".mcp.json"))...)
 	findings = append(findings, validateHookManifest(filepath.Join("plugins", "slidex", "hooks", "manifest.json"))...)
 	if commandOutputLooksFailed(pluginList) {
@@ -455,6 +459,9 @@ func pluginDoctorSnapshot(pluginList string) map[string]any {
 	}
 	return map[string]any{
 		"name":                 "slidex",
+		"developer":            toolDeveloperName,
+		"license":              toolLicenseIdentifier,
+		"marketplace":          pluginMarketplaceName,
 		"installed":            installed,
 		"enabled":              enabled,
 		"mcpConfigured":        mcpConfigured,
@@ -647,7 +654,7 @@ func doctorWorkbenchFindings() []qaFinding {
 		ToolVersion:         toolVersion,
 		CodexVersion:        requiredCodexVersion,
 		PluginName:          "slidex",
-		PluginVersion:       "0.1.0+doctor",
+		PluginVersion:       pluginVersionDoctorExample,
 		DeckID:              manifest.DeckID,
 		DeckDir:             manifest.DeckDir,
 		Status:              "verified",
@@ -867,13 +874,45 @@ func validatePluginJSONManifest(path string) []qaFinding {
 	if fmt.Sprint(manifest["name"]) != "slidex" {
 		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest name must be slidex", path))
 	}
-	if strings.TrimSpace(fmt.Sprint(manifest["skills"])) == "" {
+	version := metadataString(manifest["version"])
+	if version == "" {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest version missing", path))
+	} else if base := pluginVersionBase(version); base != toolVersion {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest version base must be "+toolVersion+", got "+base, path))
+	}
+	author, _ := manifest["author"].(map[string]any)
+	if metadataString(author["name"]) != toolDeveloperName {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest author.name must be "+toolDeveloperName, path))
+	}
+	if metadataString(manifest["license"]) != toolLicenseIdentifier {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest license must be "+toolLicenseIdentifier, path))
+	}
+	iface, _ := manifest["interface"].(map[string]any)
+	if metadataString(iface["developerName"]) != toolDeveloperName {
+		findings = append(findings, fail("doctor.plugin_manifest", "plugin interface developerName must be "+toolDeveloperName, path))
+	}
+	if metadataString(manifest["skills"]) == "" {
 		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest must expose skills path", path))
 	}
-	if strings.TrimSpace(fmt.Sprint(manifest["mcpServers"])) == "" {
+	if metadataString(manifest["mcpServers"]) == "" {
 		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest must expose MCP server manifest", path))
 	}
 	return findings
+}
+
+func metadataString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func pluginVersionBase(version string) string {
+	v := strings.TrimSpace(version)
+	if idx := strings.Index(v, "+"); idx >= 0 {
+		return v[:idx]
+	}
+	return v
 }
 
 func validatePluginVersionLock(path string) []qaFinding {
@@ -886,14 +925,75 @@ func validatePluginVersionLock(path string) []qaFinding {
 		return []qaFinding{fail("doctor.plugin_version_lock", err.Error(), path)}
 	}
 	var findings []qaFinding
-	if got := fmt.Sprint(lock["requiredCodexCliVersion"]); got != requiredCodexVersion {
+	if got := metadataString(lock["pluginName"]); got != toolName {
+		findings = append(findings, fail("doctor.plugin_version_lock", "pluginName must be "+toolName+", got "+got, path))
+	}
+	if got := metadataString(lock["pluginVersion"]); got != toolVersion {
+		findings = append(findings, fail("doctor.plugin_version_lock", "pluginVersion must be "+toolVersion+", got "+got, path))
+	}
+	if got := metadataString(lock["requiredCodexCliVersion"]); got != requiredCodexVersion {
 		findings = append(findings, fail("doctor.plugin_version_lock", "requiredCodexCliVersion must be "+requiredCodexVersion+", got "+got, path))
 	}
-	if got := fmt.Sprint(lock["slidexCliVersion"]); got != toolVersion {
+	if got := metadataString(lock["slidexCliVersion"]); got != toolVersion {
 		findings = append(findings, fail("doctor.plugin_version_lock", "slidexCliVersion must be "+toolVersion+", got "+got, path))
 	}
-	if got := fmt.Sprint(lock["goVersion"]); got != readGoModVersion("go.mod") {
+	if got := metadataString(lock["goVersion"]); got != readGoModVersion("go.mod") {
 		findings = append(findings, fail("doctor.plugin_version_lock", "goVersion must match go.mod, got "+got, path))
+	}
+	if got := metadataString(lock["developerName"]); got != toolDeveloperName {
+		findings = append(findings, fail("doctor.plugin_version_lock", "developerName must be "+toolDeveloperName+", got "+got, path))
+	}
+	if got := metadataString(lock["license"]); got != toolLicenseIdentifier {
+		findings = append(findings, fail("doctor.plugin_version_lock", "license must be "+toolLicenseIdentifier+", got "+got, path))
+	}
+	if got := metadataString(lock["marketplaceName"]); got != pluginMarketplaceName {
+		findings = append(findings, fail("doctor.plugin_version_lock", "marketplaceName must be "+pluginMarketplaceName+", got "+got, path))
+	}
+	return findings
+}
+
+func validateMarketplaceManifest(path string) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return []qaFinding{fail("doctor.marketplace_manifest", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if got := metadataString(manifest["name"]); got != pluginMarketplaceName {
+		findings = append(findings, fail("doctor.marketplace_manifest", "marketplace name must be "+pluginMarketplaceName+", got "+got, path))
+	}
+	iface, _ := manifest["interface"].(map[string]any)
+	if got := metadataString(iface["displayName"]); got != pluginMarketplaceDisplay {
+		findings = append(findings, fail("doctor.marketplace_manifest", "marketplace displayName must be "+pluginMarketplaceDisplay+", got "+got, path))
+	}
+	plugins, _ := manifest["plugins"].([]any)
+	found := false
+	for _, entry := range plugins {
+		plugin, _ := entry.(map[string]any)
+		if metadataString(plugin["name"]) != toolName {
+			continue
+		}
+		found = true
+		source, _ := plugin["source"].(map[string]any)
+		if metadataString(source["source"]) != "local" {
+			findings = append(findings, fail("doctor.marketplace_manifest", "slidex marketplace source must be local", path))
+		}
+		if metadataString(source["path"]) != "./plugins/slidex" {
+			findings = append(findings, fail("doctor.marketplace_manifest", "slidex marketplace path must be ./plugins/slidex", path))
+		}
+		policy, _ := plugin["policy"].(map[string]any)
+		if metadataString(policy["installation"]) == "" || metadataString(policy["authentication"]) == "" {
+			findings = append(findings, fail("doctor.marketplace_manifest", "slidex marketplace policy must include installation and authentication", path))
+		}
+		if metadataString(plugin["category"]) == "" {
+			findings = append(findings, fail("doctor.marketplace_manifest", "slidex marketplace entry must include category", path))
+		}
+	}
+	if !found {
+		findings = append(findings, fail("doctor.marketplace_manifest", "marketplace must include slidex plugin entry", path))
 	}
 	return findings
 }

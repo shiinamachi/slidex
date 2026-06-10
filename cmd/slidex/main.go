@@ -32,8 +32,14 @@ import (
 )
 
 const (
-	toolName    = "slidex"
-	toolVersion = "0.1.0"
+	toolName                   = "slidex"
+	toolVersion                = "0.1.0"
+	toolDeveloperName          = "shiinamachi"
+	toolLicenseIdentifier      = "MIT"
+	toolLicenseName            = "MIT License"
+	pluginMarketplaceName      = "shiinamachi"
+	pluginMarketplaceDisplay   = "shiinamachi"
+	pluginVersionDoctorExample = toolVersion + "+doctor"
 )
 
 const (

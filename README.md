@@ -255,4 +255,4 @@ Codex-specific commands.
 
 ## License
 
-See the repository for license details.
+MIT License. Copyright (c) 2026 shiinamachi. See [LICENSE](LICENSE).

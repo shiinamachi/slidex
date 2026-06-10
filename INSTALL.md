@@ -164,7 +164,7 @@ From the install directory:
 
 ```bash
 codex plugin marketplace add "$(pwd)"
-codex plugin add slidex@slidex-local --json
+codex plugin add slidex@shiinamachi --json
 codex plugin list
 ```
 

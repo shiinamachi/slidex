@@ -1591,7 +1591,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "go run ./cmd/slidex version", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
@@ -1762,6 +1762,66 @@ func TestDoctorPluginPackageFindingsValidateLocalManifests(t *testing.T) {
 
 	if findings := doctorPluginPackageFindings("slidex"); hasFailures(findings) {
 		t.Fatalf("local plugin package should satisfy doctor gate: %#v", findings)
+	}
+}
+
+func TestVersionMetadataContractStaysAligned(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	manifestPath := filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")
+	lockPath := filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json")
+	marketplacePath := filepath.Join(".agents", "plugins", "marketplace.json")
+	if findings := validatePluginJSONManifest(manifestPath); hasFailures(findings) {
+		t.Fatalf("plugin manifest metadata drifted: %#v", findings)
+	}
+	if findings := validatePluginVersionLock(lockPath); hasFailures(findings) {
+		t.Fatalf("plugin version lock drifted: %#v", findings)
+	}
+	if findings := validateMarketplaceManifest(marketplacePath); hasFailures(findings) {
+		t.Fatalf("marketplace metadata drifted: %#v", findings)
+	}
+
+	var manifest map[string]any
+	readJSONForTest(t, manifestPath, &manifest)
+	if got := pluginVersionBase(metadataString(manifest["version"])); got != toolVersion {
+		t.Fatalf("plugin manifest version base = %q, want %q", got, toolVersion)
+	}
+	author, _ := manifest["author"].(map[string]any)
+	if got := metadataString(author["name"]); got != toolDeveloperName {
+		t.Fatalf("plugin author = %q, want %q", got, toolDeveloperName)
+	}
+	if got := metadataString(manifest["license"]); got != toolLicenseIdentifier {
+		t.Fatalf("plugin license = %q, want %q", got, toolLicenseIdentifier)
+	}
+
+	licenseText := readFileOrEmpty(filepath.Join(root, "LICENSE"))
+	if !strings.Contains(licenseText, toolLicenseName) || !strings.Contains(licenseText, toolDeveloperName) {
+		t.Fatal("LICENSE must declare MIT License for shiinamachi")
+	}
+	versioningText := readFileOrEmpty(filepath.Join(root, "VERSIONING.md"))
+	for _, want := range []string{"toolVersion", "version-lock.json", "marketplace.json", "scripts/package-release.sh"} {
+		if !strings.Contains(versioningText, want) {
+			t.Fatalf("VERSIONING.md is missing %q", want)
+		}
+	}
+}
+
+func readJSONForTest(t *testing.T, path string, target any) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		t.Fatalf("%s: %v", filepath.ToSlash(path), err)
 	}
 }
 
