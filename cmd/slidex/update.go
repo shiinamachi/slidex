@@ -510,6 +510,15 @@ func updateStatusBanners(status updateStatus) []statusBanner {
 			Message:  "Restart Codex and start a new thread before treating updated slidex plugin skills as active.",
 			Command:  status.NextVerificationCommand,
 		})
+	}
+	if status.PluginVerificationStatus == "drift" {
+		banners = append(banners, statusBanner{
+			ID:       "codex_plugin_drift",
+			Severity: "warn",
+			Title:    "Codex plugin drift",
+			Message:  "The visible slidex plugin or bundled skill path does not match this install root.",
+			Command:  status.NextVerificationCommand,
+		})
 	} else if status.PluginVerificationStatus == "verified" {
 		banners = append(banners, statusBanner{
 			ID:       "codex_plugin_verified",
@@ -554,6 +563,26 @@ func markPluginVerified(installRoot, pluginVersion, skillPath string) error {
 	state.RestartReason = ""
 	state.VerificationStatus = "verified"
 	state.VerificationCommand = "slidex update verify --json"
+	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return writeUpdateState(installRoot, *state)
+}
+
+func markPluginDrift(installRoot, pluginVersion, skillPath string) error {
+	if installRoot == "" {
+		installRoot = defaultInstallRoot()
+	}
+	state, _, _ := readUpdateState(installRoot)
+	if state == nil {
+		state = &updateState{}
+	}
+	state.CurrentVersion = toolVersion
+	if state.TargetVersion == "" {
+		state.TargetVersion = pluginVersionBase(pluginVersion)
+	}
+	state.RestartRequired = true
+	state.RestartReason = "Codex plugin verification found a visible plugin or skill path that does not match this install root"
+	state.VerificationStatus = "drift"
+	state.VerificationCommand = "slidex codex app-server plugin-smoke --json"
 	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeUpdateState(installRoot, *state)
 }

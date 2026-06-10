@@ -1320,6 +1320,16 @@ func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 	if !result.RestartRequiredAfter {
 		t.Fatalf("restart-required should remain after drift: %#v", result)
 	}
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PluginVerificationStatus != "drift" || !status.RestartRequired {
+		t.Fatalf("drift should persist in update status: %#v", status)
+	}
+	if !hasStatusBannerForTest(updateStatusBanners(status), "codex_plugin_drift") {
+		t.Fatalf("drift banner missing: %#v", updateStatusBanners(status))
+	}
 }
 
 func TestAppServerSkillSmokeHelpers(t *testing.T) {

@@ -1341,6 +1341,10 @@ func applyPostRestartPluginVerification(result *appServerPluginSmokeResult) {
 		if err := markPluginVerified(status.InstallRoot, result.PluginVersion, result.StartSkillPath); err != nil {
 			result.Checks["pluginVerificationError"] = err.Error()
 		}
+	} else if result.PluginVerificationStatus == "drift" {
+		if err := markPluginDrift(status.InstallRoot, result.PluginVersion, result.StartSkillPath); err != nil {
+			result.Checks["pluginVerificationError"] = err.Error()
+		}
 	}
 	after, err := currentUpdateStatus(status.InstallRoot, status.MetadataPath)
 	if err == nil {

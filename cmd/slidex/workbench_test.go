@@ -589,6 +589,34 @@ func TestWorkbenchHTMLRendersRestartRequiredBannerWithoutBlockingForm(t *testing
 	}
 }
 
+func TestWorkbenchHTMLRendersPluginDriftBanner(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginDrift(installRoot, toolVersion, filepath.Join(t.TempDir(), "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	if !strings.Contains(html, `data-banner-id="codex_plugin_drift"`) {
+		t.Fatalf("workbench HTML missing drift banner:\n%s", html)
+	}
+	if !strings.Contains(html, `data-banner-id="codex_restart_required"`) {
+		t.Fatalf("workbench HTML should keep restart banner with drift:\n%s", html)
+	}
+}
+
 func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
