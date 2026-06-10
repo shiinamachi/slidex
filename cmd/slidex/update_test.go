@@ -757,6 +757,26 @@ func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	if status.PendingActivation || !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
 		t.Fatalf("post activation status = %#v", status)
 	}
+	metadata := status.InstalledMetadata
+	if metadata == nil {
+		t.Fatal("post activation install metadata missing")
+	}
+	if metadata.Version != "0.2.0" || metadata.Channel != updateChannelProduction || metadata.Tag != "v0.2.0" || metadata.InstallMode != installModeReleasePackage {
+		t.Fatalf("pending activation metadata version/channel fields not updated: %#v", metadata)
+	}
+	expectedAsset, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ReleaseAssetName != expectedAsset.ArchiveName || metadata.Commit != "0123456789abcdef" || metadata.BuildTime != "2026-06-10T00:00:00Z" {
+		t.Fatalf("pending activation metadata package identity not preserved: %#v", metadata)
+	}
+	if metadata.OS != runtime.GOOS || metadata.Arch != runtime.GOARCH {
+		t.Fatalf("pending activation metadata platform = %s/%s", metadata.OS, metadata.Arch)
+	}
+	if _, err := time.Parse(time.RFC3339, metadata.InstalledAt); err != nil {
+		t.Fatalf("pending activation metadata installedAt must be RFC3339, got %q: %v", metadata.InstalledAt, err)
+	}
 }
 
 func TestRunUpdateActivatePendingRequiresYes(t *testing.T) {
