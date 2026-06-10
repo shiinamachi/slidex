@@ -3661,6 +3661,8 @@ func mcpTool(name, description string) map[string]any {
 			"sourceNotes":        map[string]any{"type": "string"},
 			"outputExpectations": map[string]any{"type": "string"},
 			"includeLogs":        map[string]any{"type": "boolean"},
+			"chrome":             map[string]any{"type": "string"},
+			"chromeNoSandbox":    map[string]any{"type": "boolean"},
 		}},
 	}
 }
@@ -3685,7 +3687,9 @@ func callMCPTool(name string, args map[string]any) (any, error) {
 		return inspectDeck(deck)
 	case "render":
 		out := filepath.Join(mustAbs(deck), "out")
-		cfg, err := renderConfigFromFlags(filepath.Join(out, "final_deck.html"), filepath.Join(out, "rendered_slides"), filepath.Join(out, "final_deck.pdf"), filepath.Join(out, "render_manifest.json"), "paginated", ".slide", 1920, 1080, "pretendard", "", false)
+		chrome, _ := args["chrome"].(string)
+		chromeNoSandbox, _ := args["chromeNoSandbox"].(bool)
+		cfg, err := renderConfigFromFlags(filepath.Join(out, "final_deck.html"), filepath.Join(out, "rendered_slides"), filepath.Join(out, "final_deck.pdf"), filepath.Join(out, "render_manifest.json"), "paginated", ".slide", 1920, 1080, "pretendard", chrome, chromeNoSandbox)
 		if err != nil {
 			return nil, err
 		}

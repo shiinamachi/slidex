@@ -3238,20 +3238,21 @@ func runSyncHTMLEdits(args []string) error {
 	height := fs.Int("height", 1080, "render height")
 	fontPreset := fs.String("font-preset", "pretendard", "font preset")
 	chromePath := fs.String("chrome", "", "Chrome/Chromium binary")
+	chromeNoSandbox := fs.Bool("chrome-no-sandbox", false, "run Chrome with --no-sandbox and record the risk")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *deck == "" {
 		return errors.New("--deck is required")
 	}
-	result, err := syncHTMLEdits(*deck, *width, *height, *fontPreset, *chromePath)
+	result, err := syncHTMLEdits(*deck, *width, *height, *fontPreset, *chromePath, *chromeNoSandbox)
 	if err != nil {
 		return err
 	}
 	return printJSON(result)
 }
 
-func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string) (map[string]any, error) {
+func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string, chromeNoSandbox bool) (map[string]any, error) {
 	deckAbs := mustAbs(deck)
 	outDir := filepath.Join(deckAbs, "out")
 	htmlPath := filepath.Join(outDir, "final_deck.html")
@@ -3329,7 +3330,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	var renderErr string
 	var qaErr string
 	if changeDetected {
-		cfg, err := renderConfigFromFlags(htmlPath, filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", width, height, fontPreset, chromePath, false)
+		cfg, err := renderConfigFromFlags(htmlPath, filepath.Join(outDir, "rendered_slides"), filepath.Join(outDir, "final_deck.pdf"), filepath.Join(outDir, "render_manifest.json"), "paginated", ".slide", width, height, fontPreset, chromePath, chromeNoSandbox)
 		if err != nil {
 			renderStatus = "failed"
 			renderErr = err.Error()

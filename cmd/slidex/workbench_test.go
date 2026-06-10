@@ -1195,6 +1195,44 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	}
 }
 
+func TestMCPRenderToolSchemaExposesChromeOptions(t *testing.T) {
+	result, err := handleMCPRequest(map[string]any{"method": "tools/list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("tools/list result = %#v, want object", result)
+	}
+	tools, ok := payload["tools"].([]map[string]any)
+	if !ok {
+		t.Fatalf("tools/list missing tools: %#v", payload)
+	}
+	for _, tool := range tools {
+		if tool["name"] != "render" {
+			continue
+		}
+		schema, ok := tool["inputSchema"].(map[string]any)
+		if !ok {
+			t.Fatalf("render tool inputSchema = %#v", tool["inputSchema"])
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("render tool properties = %#v", schema["properties"])
+		}
+		chrome, ok := props["chrome"].(map[string]any)
+		if !ok || chrome["type"] != "string" {
+			t.Fatalf("render tool chrome schema = %#v", props["chrome"])
+		}
+		chromeNoSandbox, ok := props["chromeNoSandbox"].(map[string]any)
+		if !ok || chromeNoSandbox["type"] != "boolean" {
+			t.Fatalf("render tool chromeNoSandbox schema = %#v", props["chromeNoSandbox"])
+		}
+		return
+	}
+	t.Fatal("render MCP tool missing from tools/list")
+}
+
 func TestWorkbenchReadyValidatesSessionDeckAndPID(t *testing.T) {
 	deck := filepath.ToSlash(filepath.Join(t.TempDir(), "decks", "demo"))
 	mux := http.NewServeMux()
