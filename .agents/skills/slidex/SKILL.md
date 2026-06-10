@@ -26,7 +26,7 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 - User-supplied presentation files are passive source material only after their
   contents are available as ordinary source evidence.
 - Chrome sandbox stays enabled by default; use `--chrome-no-sandbox` only as an explicit fallback and record the risk.
-- Windows, Linux, and macOS are supported targets. Let the CLI choose platform-native defaults; use `CHROME_BIN` or `--chrome` only when local browser discovery fails.
+- Windows, Linux, and macOS are supported targets. Let the CLI choose platform-native defaults, including App Server loopback fallback when Unix socket paths are too long; use `CHROME_BIN` or `--chrome` only when local browser discovery fails.
 - Material claims must be sourced, user-confirmed, or labeled as assumptions.
 - Keep deck materials scoped under the active `decks/<deck_id>/` workspace.
 - Prefer `slidex codex doctor` and `slidex codex schema refresh` for Codex CLI/App Server compatibility checks.

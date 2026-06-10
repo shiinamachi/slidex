@@ -7,10 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 )
 
 func configureWorkbenchCommand(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+func configureManagedAppServerCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
@@ -23,15 +28,25 @@ func killWorkbenchProcess(pid int) {
 }
 
 func signalManagedProcess(pid int) {
-	proc, err := os.FindProcess(pid)
-	if err == nil {
-		_ = proc.Signal(os.Interrupt)
+	if pid <= 0 {
+		return
+	}
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err == nil {
+		return
+	}
+	if proc, err := os.FindProcess(pid); err == nil {
+		_ = proc.Signal(syscall.SIGTERM)
 	}
 }
 
 func killManagedProcess(pid int) {
-	proc, err := os.FindProcess(pid)
-	if err == nil {
+	if pid <= 0 {
+		return
+	}
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err == nil {
+		return
+	}
+	if proc, err := os.FindProcess(pid); err == nil {
 		_ = proc.Kill()
 	}
 }
@@ -59,7 +74,11 @@ func appServerRuntimeBaseDir() string {
 }
 
 func managedAppServerDefaultListen() (string, error) {
-	return "unix://" + filepath.Join(appServerRuntimeBaseDir(), "slidex", "codex-app-server.sock"), nil
+	socketPath := filepath.Join(appServerRuntimeBaseDir(), "slidex", "codex-app-server.sock")
+	if unixSocketPathFits(runtime.GOOS, socketPath) {
+		return "unix://" + socketPath, nil
+	}
+	return managedAppServerLoopbackListen()
 }
 
 func replaceFile(src, dst string) error {

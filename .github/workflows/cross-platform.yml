@@ -34,6 +34,8 @@ jobs:
         run: go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
       - name: Run repository doctor
         run: go run ./cmd/slidex doctor --json
+      - name: Run workbench save smoke
+        run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex-workbench-smoke" --deck-id ci-workbench-smoke
 
   cross-compile:
     name: Cross Compile (${{ matrix.goos }}/${{ matrix.goarch }})

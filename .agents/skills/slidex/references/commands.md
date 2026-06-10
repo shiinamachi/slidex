@@ -35,8 +35,9 @@ slidex package --deck decks/<deck_id>
 
 Codex checks:
 
-The repository vendors Codex protocol schema `0.138.0`; installed Codex CLI
-versions at or above that minimum satisfy the runtime gate.
+The repository vendors and tests against exact Codex protocol schema `0.138.0`;
+use the exact Codex CLI/runtime version recorded in the repository lock and
+doctor output.
 
 ```bash
 slidex codex doctor --json

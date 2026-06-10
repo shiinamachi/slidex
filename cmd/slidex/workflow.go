@@ -2086,6 +2086,7 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	cmd.Dir = mustAbs(".")
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	configureManagedAppServerCommand(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -2229,7 +2230,72 @@ func normalizeManagedListenURL(listen string) (string, error) {
 	if listen == "" || listen == "unix://" {
 		return managedAppServerDefaultListen()
 	}
+	if err := validateManagedListenURLForOS(runtime.GOOS, listen); err != nil {
+		return "", err
+	}
 	return listen, nil
+}
+
+func managedAppServerLoopbackListen() (string, error) {
+	port, err := chooseLoopbackPort()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("ws://127.0.0.1:%d/app", port), nil
+}
+
+func validateManagedListenURLForOS(goos, listen string) error {
+	u, err := url.Parse(listen)
+	if err != nil {
+		return exitCodeError(4, "invalid managed app-server listen URL: %v", err)
+	}
+	if u.Scheme != "unix" {
+		return nil
+	}
+	if goos == "windows" {
+		return exitCodeError(4, "managed app-server unix socket listen is not supported on Windows; omit --listen or use ws://127.0.0.1:<port>/app")
+	}
+	socketPath, err := unixSocketPathFromListenURL(u)
+	if err != nil {
+		return exitCodeError(4, "%v", err)
+	}
+	if !unixSocketPathFits(goos, socketPath) {
+		limit := unixSocketPathLimit(goos)
+		return exitCodeError(4, "managed app-server unix socket path is too long for %s: %d bytes exceeds %d-byte sockaddr limit; choose a shorter --listen path or use ws://127.0.0.1:<port>/app", goos, len([]byte(socketPath)), limit)
+	}
+	return nil
+}
+
+func unixSocketPathFromListenURL(u *url.URL) (string, error) {
+	if u == nil || u.Scheme != "unix" {
+		return "", errors.New("not a unix socket listen URL")
+	}
+	if u.Host != "" {
+		return "", fmt.Errorf("managed app-server unix listen must use an absolute local path: unix://%s%s", u.Host, u.Path)
+	}
+	if u.Path == "" || !filepath.IsAbs(u.Path) {
+		return "", fmt.Errorf("managed app-server unix listen must use an absolute socket path: %s", u.String())
+	}
+	return u.Path, nil
+}
+
+func unixSocketPathFits(goos, socketPath string) bool {
+	limit := unixSocketPathLimit(goos)
+	if limit <= 0 {
+		return true
+	}
+	return len([]byte(socketPath)) < limit
+}
+
+func unixSocketPathLimit(goos string) int {
+	switch goos {
+	case "darwin":
+		return 104
+	case "linux":
+		return 108
+	default:
+		return 0
+	}
 }
 
 func readAppServerMetadata(path string) map[string]any {

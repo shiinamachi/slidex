@@ -28,8 +28,9 @@ mise exec -- go install ./cmd/slidex
 
 지원 대상 OS는 Windows, Linux, macOS입니다. 렌더링은 OS별 Chrome/Chromium 또는
 Microsoft Edge 설치 위치를 자동 탐색하며, 필요하면 `CHROME_BIN` 또는 `--chrome`으로
-명시할 수 있습니다. App Server managed mode는 Linux/macOS에서 Unix socket, Windows에서
-`127.0.0.1` loopback WebSocket을 기본 transport로 선택합니다.
+명시할 수 있습니다. App Server managed mode는 Linux/macOS에서 Unix socket을 우선
+선택하고 OS socket path 제한을 넘으면 `127.0.0.1` loopback WebSocket으로 폴백합니다.
+Windows에서는 `127.0.0.1` loopback WebSocket을 기본 transport로 선택합니다.
 
 ## Primary CLI Workflow
 

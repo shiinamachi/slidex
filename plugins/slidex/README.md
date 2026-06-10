@@ -72,8 +72,9 @@ mise exec -- go install ./cmd/slidex
 The CLI and plugin workflow target Windows, Linux, and macOS. Browser discovery
 checks common Chrome/Chromium and Microsoft Edge locations on each OS, and the
 managed App Server chooses a platform-native default transport: Unix sockets on
-Linux/macOS and `127.0.0.1` loopback WebSocket on Windows. Local doctor helpers
-are available as `scripts/slidex-doctor.sh` for Unix shells and
+Linux/macOS, with `127.0.0.1` loopback WebSocket fallback when the OS socket
+path limit would be exceeded, and `127.0.0.1` loopback WebSocket on Windows.
+Local doctor helpers are available as `scripts/slidex-doctor.sh` for Unix shells and
 `scripts/slidex-doctor.cmd` for Windows `cmd.exe`.
 
 Before a full Codex App GUI smoke, run the headless pre-GUI App Server skill

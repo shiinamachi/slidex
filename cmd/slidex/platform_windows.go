@@ -26,6 +26,10 @@ func configureWorkbenchCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateNewProcessGroup}
 }
 
+func configureManagedAppServerCommand(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateNewProcessGroup}
+}
+
 func signalWorkbenchProcess(pid int) {
 	killProcess(pid)
 }
@@ -85,11 +89,7 @@ func appServerRuntimeBaseDir() string {
 }
 
 func managedAppServerDefaultListen() (string, error) {
-	port, err := chooseLoopbackPort()
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("ws://127.0.0.1:%d/app", port), nil
+	return managedAppServerLoopbackListen()
 }
 
 func replaceFile(src, dst string) error {

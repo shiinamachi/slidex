@@ -1174,11 +1174,17 @@ func windowsShellQuote(s string) string {
 		return `""`
 	}
 	if strings.IndexFunc(s, func(r rune) bool {
-		return strings.ContainsRune(" \t\r\n\"&|<>()^", r)
+		return strings.ContainsRune(" \t\r\n\"&|<>()^%!", r)
 	}) == -1 {
 		return s
 	}
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	replacer := strings.NewReplacer(
+		`^`, `^^`,
+		`%`, `^%`,
+		`!`, `^!`,
+		`"`, `\"`,
+	)
+	return `"` + replacer.Replace(s) + `"`
 }
 
 func appServerSkillSmokePrompt(workspace, deckID, command string) string {

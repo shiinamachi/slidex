@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -21,5 +22,13 @@ func TestManagedAppServerDefaultListenWindows(t *testing.T) {
 	}
 	if path := appServerMetadataPath(); !strings.Contains(path, `AppData\Local`) || !strings.Contains(path, `slidex`) {
 		t.Fatalf("windows metadata path should use LOCALAPPDATA: %q", path)
+	}
+}
+
+func TestManagedAppServerCommandUsesProcessGroupWindows(t *testing.T) {
+	cmd := exec.Command("codex", "app-server")
+	configureManagedAppServerCommand(cmd)
+	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&windowsCreateNewProcessGroup == 0 {
+		t.Fatalf("managed app-server command should start in a new Windows process group: %#v", cmd.SysProcAttr)
 	}
 }

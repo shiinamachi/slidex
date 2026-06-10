@@ -1101,6 +1101,10 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if got := windowsShellQuote(`C:\Users\Me\slidex workspace`); got != `"C:\Users\Me\slidex workspace"` {
 		t.Fatalf("windows shell quote did not preserve spaced path: %s", got)
 	}
+	dangerousWindowsPath := `C:\Users\Me\slidex %workspace%!^`
+	if got := windowsShellQuote(dangerousWindowsPath); got != `"C:\Users\Me\slidex ^%workspace^%^!^^"` {
+		t.Fatalf("windows shell quote did not escape cmd metacharacters: %s", got)
+	}
 	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
 	if !strings.Contains(prompt, "Do not run render, QA, package") {
 		t.Fatalf("prompt must keep skill smoke scoped: %s", prompt)
@@ -1349,6 +1353,35 @@ func TestCodexVersionAtLeast(t *testing.T) {
 	for _, tc := range tests {
 		if got := codexVersionAtLeast(tc.installed, tc.minimum); got != tc.want {
 			t.Fatalf("codexVersionAtLeast(%q, %q) = %v, want %v", tc.installed, tc.minimum, got, tc.want)
+		}
+	}
+}
+
+func TestRuntimeReferenceDocsAvoidRangeVersionLanguage(t *testing.T) {
+	root := repoRootForTest(t)
+	files := []string{
+		filepath.Join(root, "commands.md"),
+		filepath.Join(root, "plugins", "slidex", "README.md"),
+		filepath.Join(root, ".agents", "skills", "slidex", "references", "commands.md"),
+	}
+	disallowed := []string{
+		"versions at or above",
+		"version at or above",
+		"or newer",
+		"or later",
+		">=",
+		"<=",
+	}
+	for _, path := range files {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(raw))
+		for _, phrase := range disallowed {
+			if strings.Contains(lower, phrase) {
+				t.Fatalf("%s contains range/floating version language %q", filepath.ToSlash(path), phrase)
+			}
 		}
 	}
 }
@@ -1995,6 +2028,25 @@ func TestWebSocketHealthProbeUsesHTTPAndPing(t *testing.T) {
 	ping, _ := health["websocketPing"].(map[string]any)
 	if ping["status"] != "pass" {
 		t.Fatalf("websocket ping did not pass: %#v", health)
+	}
+}
+
+func TestManagedListenURLRejectsUnsupportedUnixSocketPaths(t *testing.T) {
+	if err := validateManagedListenURLForOS("windows", "unix:///tmp/slidex.sock"); err == nil {
+		t.Fatal("windows should reject explicit unix socket listen URLs")
+	}
+	if err := validateManagedListenURLForOS("linux", "unix:///tmp/slidex.sock"); err != nil {
+		t.Fatalf("linux should accept short unix socket paths: %v", err)
+	}
+	longSocket := "unix:///" + strings.Repeat("a", 140) + ".sock"
+	if err := validateManagedListenURLForOS("linux", longSocket); err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("linux should reject overlong unix socket path, got %v", err)
+	}
+	if err := validateManagedListenURLForOS("darwin", "unix://relative.sock"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("darwin should require absolute unix socket paths, got %v", err)
+	}
+	if err := validateManagedListenURLForOS("windows", "ws://127.0.0.1:49200/app"); err != nil {
+		t.Fatalf("windows should accept loopback websocket listen URLs: %v", err)
 	}
 }
 
