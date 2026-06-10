@@ -72,7 +72,9 @@ requires release integrity and artifact attestation verification by default,
 stages activation, preserves a backup or Windows pending handoff, and marks
 Codex plugin restart verification as required when bundled plugin content may
 have changed. `--attestation-policy allow-unverified` is an explicit manual
-override and is not treated as an unattended verified update.
+override and is not treated as an unattended verified update. Direct
+`--candidate` application requires that explicit override because an extracted
+candidate has no release archive attestation evidence.
 When a Windows handoff is pending, `slidex update status --json` reports
 `pendingActivation: true` and a `pendingActivationCommand` that runs from an
 activator binary outside the old install root and staged candidate. That command

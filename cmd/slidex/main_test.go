@@ -2103,7 +2103,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "Code signing is deferred", "canary install", "immutable channel"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),

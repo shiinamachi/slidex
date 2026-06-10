@@ -314,8 +314,18 @@ func runUpdateApply(args []string) error {
 	if !status.UpdatesEnabled {
 		return exitCodeError(4, "updates are disabled for channel %s: %s", status.Channel, firstNonEmpty(status.Guidance, status.Reason))
 	}
+	if *candidate != "" && *attestationPolicy != attestationPolicyAllowUnverified {
+		return exitCodeError(2, "--candidate bypasses release archive attestation and requires --attestation-policy allow-unverified")
+	}
 	candidateRoot := *candidate
 	attestation := attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}
+	if *candidate != "" {
+		attestation = attestationVerification{
+			Policy: *attestationPolicy,
+			Status: "skipped",
+			Output: "candidate bundle provided directly; release attestation explicitly bypassed by --attestation-policy allow-unverified",
+		}
+	}
 	if *candidate == "" && *archive == "" {
 		downloadedRoot, downloadedVersion, downloadedTag, downloadedAttestation, err := downloadAndStageReleaseCandidate(context.Background(), status, *apiURL, *attestationPolicy)
 		if err != nil {

@@ -657,6 +657,83 @@ func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	}
 }
 
+func TestRunUpdateApplyCandidateRequiresAllowUnverifiedPolicy(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "--candidate bypasses release archive attestation") {
+		t.Fatalf("candidate apply without explicit allow-unverified err = %v", err)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("candidate should not activate without explicit allow-unverified, VERSION = %q", got)
+	}
+}
+
+func TestRunUpdateApplyCandidateRecordsAllowUnverifiedAttestation(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", installMetadataPath(installRoot),
+			"--candidate", candidate,
+			"--target-version", "0.2.0",
+			"--attestation-policy", attestationPolicyAllowUnverified,
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("candidate apply with explicit allow-unverified failed: %v\n%s", runErr, output)
+	}
+	var result updateApplyResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid candidate apply JSON: %v\n%s", err, output)
+	}
+	if result.Attestation.Policy != attestationPolicyAllowUnverified || result.Attestation.Status != "skipped" {
+		t.Fatalf("candidate apply attestation should be explicit skipped: %#v", result.Attestation)
+	}
+	if !strings.Contains(result.Attestation.Output, "candidate bundle provided directly") {
+		t.Fatalf("candidate apply attestation output should explain bypass: %#v", result.Attestation)
+	}
+	if result.Status != "applied" && result.Status != "pending-restart" {
+		t.Fatalf("candidate apply result status = %#v", result)
+	}
+}
+
 func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")

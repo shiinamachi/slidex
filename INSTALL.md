@@ -289,6 +289,11 @@ slidex update apply \
   --json
 ```
 
+Do not pass `--candidate` for unattended release updates. A direct extracted
+candidate has no release archive attestation evidence, so `update apply
+--candidate` requires `--attestation-policy allow-unverified` and is treated as
+an explicit manual security decision.
+
 `update apply` validates the candidate bundle before activation. On Unix-like
 systems it stages the candidate, keeps a backup of the previous install root,
 and marks Codex plugin restart verification as required. On Windows it writes a
