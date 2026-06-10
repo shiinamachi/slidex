@@ -2005,6 +2005,7 @@ func printUpdateStatus(status updateStatus) {
 	if status.Guidance != "" {
 		fmt.Printf("guidance: %s\n", status.Guidance)
 	}
+	fmt.Printf("plugin status: %s\n", status.PluginVerificationStatus)
 	if status.RestartRequired {
 		fmt.Println("restart required: restart Codex and start a new thread before treating updated plugin skills as active")
 	}

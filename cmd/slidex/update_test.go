@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -506,6 +507,43 @@ func TestVerifyReleaseAttestationRequiresGitHubCLIByDefault(t *testing.T) {
 	}
 }
 
+func TestVerifyReleaseAttestationRunsRequiredGitHubChecks(t *testing.T) {
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "gh.log")
+	writeFakeGitHubCLIForTest(t, filepath.Join(binDir, executableNameForTest("gh")))
+	t.Setenv("PATH", binDir)
+	t.Setenv("GH_LOG", logPath)
+
+	archivePath := filepath.Join(t.TempDir(), "slidex_0.2.0_linux_amd64.tar.gz")
+	if err := os.WriteFile(archivePath, []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := verifyReleaseAttestation(archivePath, "v0.2.0", attestationPolicyRequire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "verified" || result.Policy != attestationPolicyRequire {
+		t.Fatalf("unexpected attestation result: %#v", result)
+	}
+	log := readFileOrEmpty(logPath)
+	wants := []string{
+		"release verify v0.2.0 --repo shiinamachi/slidex",
+		"release verify-asset v0.2.0 " + archivePath + " --repo shiinamachi/slidex",
+		"attestation verify " + archivePath + " --repo shiinamachi/slidex --cert-oidc-issuer https://token.actions.githubusercontent.com --cert-identity-regex",
+	}
+	last := -1
+	for _, want := range wants {
+		index := strings.Index(log, want)
+		if index < 0 {
+			t.Fatalf("fake gh log missing %q:\n%s", want, log)
+		}
+		if index <= last {
+			t.Fatalf("fake gh commands out of order:\n%s", log)
+		}
+		last = index
+	}
+}
+
 func TestVerifyReleaseAttestationCanBeExplicitlyBypassed(t *testing.T) {
 	result, err := verifyReleaseAttestation("/tmp/slidex_0.2.0_linux_amd64.tar.gz", "v0.2.0", attestationPolicyAllowUnverified)
 	if err != nil {
@@ -513,6 +551,22 @@ func TestVerifyReleaseAttestationCanBeExplicitlyBypassed(t *testing.T) {
 	}
 	if result.Status != "skipped" || result.Policy != attestationPolicyAllowUnverified {
 		t.Fatalf("unexpected attestation result: %#v", result)
+	}
+}
+
+func TestPrintUpdateStatusIncludesPluginStatus(t *testing.T) {
+	out := captureStdoutForTest(t, func() {
+		printUpdateStatus(updateStatus{
+			ToolName:                 toolName,
+			CurrentVersion:           toolVersion,
+			Channel:                  updateChannelProduction,
+			Status:                   "verification-failed",
+			PluginVerificationStatus: "drift",
+			NextVerificationCommand:  "slidex update verify --json",
+		})
+	})
+	if !strings.Contains(out, "plugin status: drift") {
+		t.Fatalf("status output missing plugin status:\n%s", out)
 	}
 }
 
@@ -699,6 +753,64 @@ func TestUpdateVerifyFailsOnPluginDrift(t *testing.T) {
 
 func allowUnverifiedAttestationForTest() attestationVerification {
 	return attestationVerification{Policy: attestationPolicyAllowUnverified, Status: "skipped"}
+}
+
+func executableNameForTest(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
+func writeFakeGitHubCLIForTest(t *testing.T, path string) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	code := `package main
+
+import (
+	"os"
+	"strings"
+)
+
+func main() {
+	logPath := os.Getenv("GH_LOG")
+	if logPath != "" {
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			panic(err)
+		}
+		_, _ = f.WriteString(strings.Join(os.Args[1:], " ") + "\n")
+		_ = f.Close()
+	}
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fake gh build failed: %v\n%s", err, out)
+	}
+}
+
+func captureStdoutForTest(t *testing.T, fn func()) string {
+	t.Helper()
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	fn()
+	_ = writer.Close()
+	os.Stdout = oldStdout
+	defer func() { _ = reader.Close() }()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
