@@ -513,8 +513,16 @@ func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {
 	if findings := verifyVisualReviewImageSet(filepath.Join(outDir, "visual_reviews", "image_set.json"), manifest); len(findings) > 0 {
 		t.Fatalf("image set should verify, got %#v", findings)
 	}
-	if findings := verifyVisualReviewEvidence(reviewPath, manifest); len(findings) > 0 {
+	checkDir := t.TempDir()
+	if err := os.Chdir(checkDir); err != nil {
+		t.Fatal(err)
+	}
+	if findings := verifyVisualReviewEvidence(reviewPath, deck, manifest); len(findings) > 0 {
 		t.Fatalf("visual review evidence should verify, got %#v", findings)
+	}
+	rawReview := readFileOrEmpty(reviewPath)
+	if !strings.Contains(rawReview, `"repoRelativePath": "out/rendered_slides/slide_01.png"`) {
+		t.Fatalf("manual review evidence should use deck-relative image paths: %s", rawReview)
 	}
 	if !strings.Contains(readFileOrEmpty(reviewPath), "montage and PDF inspected") {
 		t.Fatalf("manual notes were not recorded: %s", readFileOrEmpty(reviewPath))

@@ -4087,7 +4087,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			if !visualReviewArtifactFresh(visualReviewPath, manifest) {
 				findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
 			}
-			findings = append(findings, verifyVisualReviewEvidence(visualReviewPath, manifest)...)
+			findings = append(findings, verifyVisualReviewEvidence(visualReviewPath, deckAbs, manifest)...)
 			reviewStages := structuredReviewStages()
 			for i, structuredReviewPath := range structuredReviewPaths {
 				findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, reviewStages[i], manifest, deckAbs, htmlPath, qaReportPath, deliverySummaryPath)...)

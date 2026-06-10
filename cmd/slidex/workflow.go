@@ -6447,7 +6447,7 @@ func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]
 	for _, img := range manifest.PNGFiles {
 		evidence = append(evidence, map[string]any{
 			"slideId":          img.SlideID,
-			"repoRelativePath": evidenceRepoRelativePath(img.Path),
+			"repoRelativePath": evidenceRepoRelativePath(deckAbs, img.Path),
 			"absolutePath":     img.Path,
 			"sha256":           img.SHA256,
 			"blank":            img.Blank,
@@ -6458,9 +6458,9 @@ func visualReviewEvidence(deckAbs string, manifest renderManifest) []map[string]
 	return evidence
 }
 
-func evidenceRepoRelativePath(path string) string {
-	rel, err := filepath.Rel(mustAbs("."), path)
-	if err != nil {
+func evidenceRepoRelativePath(deckAbs, path string) string {
+	rel, err := filepath.Rel(deckAbs, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(rel)
@@ -6555,7 +6555,7 @@ func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFindin
 	return findings
 }
 
-func verifyVisualReviewEvidence(path string, manifest renderManifest) []qaFinding {
+func verifyVisualReviewEvidence(path, deckAbs string, manifest renderManifest) []qaFinding {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return []qaFinding{fail("package.visual_review_evidence", "visual review missing: "+err.Error(), path)}
@@ -6575,7 +6575,7 @@ func verifyVisualReviewEvidence(path string, manifest renderManifest) []qaFindin
 		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
 			findings = append(findings, fail("package.visual_review_evidence", "visual review slideId does not match manifest", path))
 		}
-		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(img.Path) {
+		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(deckAbs, img.Path) {
 			findings = append(findings, fail("package.visual_review_evidence", "visual review repoRelativePath does not match manifest", path))
 		}
 		if absPath, _ := item["absolutePath"].(string); absPath != img.Path {
@@ -6669,7 +6669,7 @@ func verifyStructuredReviewImageEvidence(path, deckAbs string, rawEvidence []any
 		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
 			findings = append(findings, fail("package.structured_review_evidence", "structured review slideId does not match manifest", path))
 		}
-		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(img.Path) {
+		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(deckAbs, img.Path) {
 			findings = append(findings, fail("package.structured_review_evidence", "structured review repoRelativePath does not match manifest", path))
 		}
 		if absPath, _ := item["absolutePath"].(string); absPath != img.Path {
