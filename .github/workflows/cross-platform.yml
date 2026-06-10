@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   test:
     name: Test (${{ matrix.os }})
@@ -28,10 +31,14 @@ jobs:
           cache: true
       - name: Show Go version
         run: go version
-      - name: Run tests
+      - name: Check render dependencies
+        run: go run ./cmd/slidex doctor --render --json
+      - name: Run render smoke test
         env:
           SLIDEX_REQUIRE_RENDER_SMOKE: "1"
-        run: go test ./...
+        run: go run ./.github/scripts/go-test-annotate.go -- -count=1 -v -run '^TestDeterministicRenderQAPackageE2E$' ./cmd/slidex
+      - name: Run tests
+        run: go run ./.github/scripts/go-test-annotate.go -- -count=1 -v -skip '^TestDeterministicRenderQAPackageE2E$' ./...
       - name: Validate sample deck spec
         run: go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
       - name: Run repository doctor
