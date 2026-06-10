@@ -286,6 +286,8 @@ test binary cross-compile을 확인합니다. OS별 test job은
 `version`, `init`, `inspect --write`, `migrate --dry-run`, `clean --logs`,
 `render`, `visual-review record`, `qa --visual-review manual`, `finalize`, `review`,
 `package`, `workbench save-smoke`를 OS matrix에서 실제 CLI 명령으로 실행합니다.
+`workbench save-smoke`는 공백이 포함된 workspace path에서 실행해 subprocess 인자 전달을
+검증합니다.
 Actions는 SHA로 고정합니다.
 
 template 변경은 임시 deck으로 `slidex init`을 smoke-test한 뒤 해당 deck을 제거합니다.

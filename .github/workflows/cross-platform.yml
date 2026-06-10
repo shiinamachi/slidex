@@ -57,7 +57,7 @@ jobs:
           go run ./cmd/slidex review --deck decks/ci-render-smoke --stage all
           go run ./cmd/slidex package --deck decks/ci-render-smoke
       - name: Run workbench save smoke
-        run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex-workbench-smoke" --deck-id ci-workbench-smoke
+        run: go run ./cmd/slidex workbench save-smoke --workspace "${{ runner.temp }}/slidex workbench smoke" --deck-id ci-workbench-smoke
 
   cross-compile:
     name: Cross Compile (${{ matrix.goos }}/${{ matrix.goarch }})
