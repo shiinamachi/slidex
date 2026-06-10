@@ -13,20 +13,47 @@ if [[ -z "$release_version" ]]; then
   fi
 fi
 release_version="${release_version#refs/tags/}"
+package_version="${release_version#v}"
 
 tool_version="$(go run ./cmd/slidex version | awk '{print $2}')"
-case "$release_version" in
+case "$package_version" in
   dev-*|ci-*)
     ;;
   *)
-    release_base="${release_version#v}"
     canary_pattern="^${tool_version//./\\.}-[0-9a-f]{7,40}$"
-    if [[ "$release_base" != "$tool_version" && ! "$release_base" =~ $canary_pattern ]]; then
+    if [[ "$package_version" != "$tool_version" && ! "$package_version" =~ $canary_pattern ]]; then
       printf 'release version %s does not match slidex CLI version %s\n' "$release_version" "$tool_version" >&2
       exit 2
     fi
     ;;
 esac
+
+release_tag="${SLIDEX_RELEASE_TAG:-}"
+if [[ -z "$release_tag" ]]; then
+  case "$package_version" in
+    dev-*|ci-*) release_tag="$release_version" ;;
+    *) release_tag="v${package_version}" ;;
+  esac
+fi
+
+build_channel="${SLIDEX_BUILD_CHANNEL:-}"
+if [[ -z "$build_channel" ]]; then
+  case "$package_version" in
+    dev-*|ci-*) build_channel="local-development" ;;
+    *-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) build_channel="canary" ;;
+    *) build_channel="production" ;;
+  esac
+fi
+case "$build_channel" in
+  production|canary|local-development) ;;
+  *)
+    printf 'unsupported build channel: %s\n' "$build_channel" >&2
+    exit 2
+    ;;
+esac
+
+commit_sha="${SLIDEX_COMMIT_SHA:-$(git rev-parse --verify HEAD 2>/dev/null || echo unknown)}"
+build_time="${SLIDEX_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 dist_dir="${SLIDEX_DIST_DIR:-dist}"
 targets="${SLIDEX_TARGETS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}"
@@ -86,7 +113,7 @@ for target in $targets; do
     archive_ext="zip"
   fi
 
-  package_name="slidex_${release_version}_${goos}_${goarch}"
+  package_name="slidex_${package_version}_${goos}_${goarch}"
   package_dir="$work_dir/$package_name"
   mkdir -p "$package_dir"
 
@@ -100,6 +127,25 @@ for target in $targets; do
     cp -R "$path" "$package_dir/$path"
   done
 
+  mkdir -p "$package_dir/.slidex"
+  cat > "$package_dir/.slidex/install.json" <<EOF
+{
+  "schemaVersion": "slidex.install.v1",
+  "toolName": "slidex",
+  "version": "${package_version}",
+  "channel": "${build_channel}",
+  "tag": "${release_tag}",
+  "commit": "${commit_sha}",
+  "buildTime": "${build_time}",
+  "installRoot": "",
+  "releaseAssetName": "${package_name}.${archive_ext}",
+  "installedAt": "",
+  "installMode": "release-package",
+  "os": "${goos}",
+  "arch": "${goarch}"
+}
+EOF
+
   if [[ "$archive_ext" == "zip" ]]; then
     (cd "$work_dir" && zip -qr "$dist_abs/$package_name.zip" "$package_name")
   else
@@ -107,14 +153,14 @@ for target in $targets; do
   fi
 done
 
-checksum_name="slidex_${release_version}_checksums.txt"
+checksum_name="slidex_${package_version}_checksums.txt"
 (
   cd "$dist_abs"
   rm -f "$checksum_name"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum slidex_"${release_version}"_* > "$checksum_name"
+    sha256sum slidex_"${package_version}"_* > "$checksum_name"
   else
-    shasum -a 256 slidex_"${release_version}"_* > "$checksum_name"
+    shasum -a 256 slidex_"${package_version}"_* > "$checksum_name"
   fi
 )
 

@@ -40,6 +40,17 @@ curl -sL https://api.github.com/repos/shiinamachi/slidex/releases/latest | grep 
 
 Store the result as `TAG`.
 
+Release tags include the leading `v`, while release asset names do not. Store
+the asset version separately:
+
+```bash
+ASSET_VERSION="${TAG#v}"
+```
+
+```powershell
+$ASSET_VERSION = $TAG.TrimStart("v")
+```
+
 ---
 
 ## Step 3 — Download the release package and checksums
@@ -47,27 +58,27 @@ Store the result as `TAG`.
 The release asset naming convention is:
 
 ```text
-slidex_<TAG>_<OS>_<ARCH>.<EXT>
-slidex_<TAG>_checksums.txt
+slidex_<ASSET_VERSION>_<OS>_<ARCH>.<EXT>
+slidex_<ASSET_VERSION>_checksums.txt
 ```
 
 Download both files from:
 
 ```text
-https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<TAG>_<OS>_<ARCH>.<EXT>
-https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<TAG>_checksums.txt
+https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<ASSET_VERSION>_<OS>_<ARCH>.<EXT>
+https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<ASSET_VERSION>_checksums.txt
 ```
 
 ### Available targets
 
 | OS | Arch | Package file |
 |----|------|-------------|
-| `linux` | `amd64` | `slidex_<TAG>_linux_amd64.tar.gz` |
-| `linux` | `arm64` | `slidex_<TAG>_linux_arm64.tar.gz` |
-| `darwin` | `amd64` | `slidex_<TAG>_darwin_amd64.tar.gz` |
-| `darwin` | `arm64` | `slidex_<TAG>_darwin_arm64.tar.gz` |
-| `windows` | `amd64` | `slidex_<TAG>_windows_amd64.zip` |
-| `windows` | `arm64` | `slidex_<TAG>_windows_arm64.zip` |
+| `linux` | `amd64` | `slidex_<ASSET_VERSION>_linux_amd64.tar.gz` |
+| `linux` | `arm64` | `slidex_<ASSET_VERSION>_linux_arm64.tar.gz` |
+| `darwin` | `amd64` | `slidex_<ASSET_VERSION>_darwin_amd64.tar.gz` |
+| `darwin` | `arm64` | `slidex_<ASSET_VERSION>_darwin_arm64.tar.gz` |
+| `windows` | `amd64` | `slidex_<ASSET_VERSION>_windows_amd64.zip` |
+| `windows` | `arm64` | `slidex_<ASSET_VERSION>_windows_arm64.zip` |
 
 ---
 
@@ -76,20 +87,20 @@ https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<TAG>_check
 **Linux:**
 
 ```bash
-sha256sum -c slidex_${TAG}_checksums.txt --ignore-missing
+sha256sum -c slidex_${ASSET_VERSION}_checksums.txt --ignore-missing
 ```
 
 **macOS:**
 
 ```bash
-grep " slidex_${TAG}_darwin_${ARCH}.tar.gz$" slidex_${TAG}_checksums.txt | shasum -a 256 -c -
+grep " slidex_${ASSET_VERSION}_darwin_${ARCH}.tar.gz$" slidex_${ASSET_VERSION}_checksums.txt | shasum -a 256 -c -
 ```
 
 **Windows PowerShell:**
 
 ```powershell
-$expected = (Select-String "slidex_${TAG}_windows_${ARCH}.zip$" "slidex_${TAG}_checksums.txt").Line.Split(" ")[0].ToLowerInvariant()
-$actual   = (Get-FileHash "slidex_${TAG}_windows_${ARCH}.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+$expected = (Select-String "slidex_${ASSET_VERSION}_windows_${ARCH}.zip$" "slidex_${ASSET_VERSION}_checksums.txt").Line.Split(" ")[0].ToLowerInvariant()
+$actual   = (Get-FileHash "slidex_${ASSET_VERSION}_windows_${ARCH}.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "SHA-256 mismatch: expected $expected, got $actual" }
 Write-Host "SHA-256 verified."
 ```
@@ -105,7 +116,7 @@ Write-Host "SHA-256 verified."
 ```bash
 INSTALL_DIR="$HOME/.local/share/slidex"
 mkdir -p "$INSTALL_DIR"
-tar -xzf "slidex_${TAG}_${OS}_${ARCH}.tar.gz" -C "$INSTALL_DIR" --strip-components=1
+tar -xzf "slidex_${ASSET_VERSION}_${OS}_${ARCH}.tar.gz" -C "$INSTALL_DIR" --strip-components=1
 
 mkdir -p "$HOME/.local/bin"
 ln -sf "$INSTALL_DIR/slidex" "$HOME/.local/bin/slidex"
@@ -118,8 +129,8 @@ $installRoot = Join-Path $env:LOCALAPPDATA "slidex"
 New-Item -ItemType Directory -Force $installRoot | Out-Null
 
 $extractDir = Join-Path $env:TEMP "slidex-extract"
-Expand-Archive -Force "slidex_${TAG}_windows_${ARCH}.zip" $extractDir
-Copy-Item -Recurse -Force (Join-Path $extractDir "slidex_${TAG}_windows_${ARCH}\*") $installRoot
+Expand-Archive -Force "slidex_${ASSET_VERSION}_windows_${ARCH}.zip" $extractDir
+Copy-Item -Recurse -Force (Join-Path $extractDir "slidex_${ASSET_VERSION}_windows_${ARCH}\*") $installRoot
 Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
 ```
 

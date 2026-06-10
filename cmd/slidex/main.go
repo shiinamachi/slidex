@@ -210,6 +210,8 @@ func main() {
 		err = runSyncHTMLEdits(os.Args[2:])
 	case "sync-version-metadata":
 		err = runSyncVersionMetadata(os.Args[2:])
+	case "update":
+		err = runUpdate(os.Args[2:])
 	case "finalize":
 		err = runFinalize(os.Args[2:])
 	case "package":
@@ -267,6 +269,7 @@ Commands:
   revise --deck decks/<deck_id>
   sync-html-edits --deck decks/<deck_id>
   sync-version-metadata [--json]
+  update status|check|verify [--json]
   finalize --deck decks/<deck_id>
   package --deck decks/<deck_id>
   clean --deck decks/<deck_id> [--logs] [--older-than DURATION]

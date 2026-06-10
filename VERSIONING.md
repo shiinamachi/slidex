@@ -14,6 +14,7 @@ Codex Plugin. The root `VERSION` file is the single canonical version file.
 | Plugin manifest version | generated into `plugins/slidex/.codex-plugin/plugin.json` | `<VERSION>+codex.<cachebuster>` |
 | Plugin lock | generated into `plugins/slidex/.codex-plugin/version-lock.json` | `pluginVersion` and `slidexCliVersion` equal `VERSION` |
 | Marketplace name | `.agents/plugins/marketplace.json` | `shiinamachi` |
+| Install metadata | packaged into `.slidex/install.json` | immutable `channel`, `tag`, `version`, commit, build time, asset name, and install mode |
 
 ## Bump Procedure
 
@@ -25,14 +26,20 @@ Codex Plugin. The root `VERSION` file is the single canonical version file.
    metadata changes. Do not increment the base version just to force Codex to
    reinstall a local plugin.
 4. Production release tags must be `v<VERSION>`. Canary release tags are
-   `v<VERSION>-<short-commit-sha>` and their package version is
-   `<VERSION>-<short-commit-sha>`, for example `0.1.0-e9c033e`.
+   `v<VERSION>-<short-commit-sha>`. Release asset names always use the package
+   version without the leading tag `v`, for example
+   `slidex_0.1.0_linux_amd64.tar.gz` or
+   `slidex_0.1.0-e9c033e_linux_amd64.tar.gz`.
    `scripts/package-release.sh` rejects release package names whose version
    does not match the CLI version or that canary pattern, except `dev-*` and
    `ci-*` smoke packages.
 5. GitHub Actions releases are dispatched manually. Choose `canary` to build
    the current `develop` branch commit, or `production` to build the current
    `main` branch commit.
+6. Release packages include `.slidex/install.json`. The updater treats its
+   `channel` as immutable: `production` follows stable releases, `canary`
+   follows canary prereleases, and `local-development` disables automatic
+   release updates.
 
 ## Verification
 

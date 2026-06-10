@@ -184,6 +184,8 @@ jobs:
         run: go build -o "${{ runner.temp }}/slidex-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/slidex
       - name: Build release package smoke
         env:
+          SLIDEX_BUILD_CHANNEL: local-development
+          SLIDEX_RELEASE_TAG: ci-${{ matrix.goos }}-${{ matrix.goarch }}
           SLIDEX_RELEASE_VERSION: ci-${{ matrix.goos }}-${{ matrix.goarch }}
           SLIDEX_DIST_DIR: ${{ runner.temp }}/slidex-dist-${{ matrix.goos }}-${{ matrix.goarch }}
           SLIDEX_TARGETS: ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -235,6 +237,9 @@ jobs:
           fi
       - name: Build release packages
         env:
+          SLIDEX_BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
+          SLIDEX_RELEASE_TAG: ${{ needs.release-metadata.outputs.tag_name }}
+          SLIDEX_COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
           SLIDEX_RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
           SLIDEX_DIST_DIR: dist
         run: ./scripts/package-release.sh

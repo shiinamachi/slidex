@@ -1587,11 +1587,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "cross-platform.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "scripts/package-release.sh", "gh release create", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "gh release create", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "SLIDEX_BUILD_CHANNEL", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", ".slidex/install.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
