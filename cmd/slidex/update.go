@@ -32,6 +32,9 @@ const (
 	installMetadataSchemaVersion = "slidex.install.v1"
 	updateStateSchemaVersion     = "slidex.updateState.v1"
 	updateGitHubReleasesAPI      = "https://api.github.com/repos/shiinamachi/slidex/releases"
+
+	updateInstallRootEnv     = "SLIDEX_INSTALL_ROOT"
+	updateInstallMetadataEnv = "SLIDEX_INSTALL_METADATA"
 )
 
 var (
@@ -92,6 +95,14 @@ type updateStatus struct {
 	CandidateValidation       []qaFinding      `json:"candidateValidation,omitempty"`
 	InstalledMetadata         *installMetadata `json:"installedMetadata,omitempty"`
 	PersistedRestartStatePath string           `json:"persistedRestartStatePath,omitempty"`
+}
+
+type statusBanner struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Message  string `json:"message"`
+	Command  string `json:"command,omitempty"`
 }
 
 type updateRelease struct {
@@ -250,9 +261,15 @@ func runUpdateVerify(args []string) error {
 func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, error) {
 	installRoot := installRootArg
 	if installRoot == "" {
+		installRoot = os.Getenv(updateInstallRootEnv)
+	}
+	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
 	metadataPath := metadataPathArg
+	if metadataPath == "" {
+		metadataPath = os.Getenv(updateInstallMetadataEnv)
+	}
 	if metadataPath == "" {
 		metadataPath = installMetadataPath(installRoot)
 	}
@@ -294,6 +311,92 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		}
 	}
 	return status, nil
+}
+
+func updateStatusSnapshot() map[string]any {
+	status, err := currentUpdateStatus("", "")
+	if err != nil {
+		return map[string]any{
+			"toolName":       toolName,
+			"currentVersion": toolVersion,
+			"status":         "unknown",
+			"error":          err.Error(),
+			"banners": []statusBanner{{
+				ID:       "update_status_error",
+				Severity: "warn",
+				Title:    "Update status unavailable",
+				Message:  err.Error(),
+			}},
+		}
+	}
+	return map[string]any{
+		"toolName":                 status.ToolName,
+		"currentVersion":           status.CurrentVersion,
+		"channel":                  status.Channel,
+		"installMode":              status.InstallMode,
+		"installRoot":              status.InstallRoot,
+		"updatesEnabled":           status.UpdatesEnabled,
+		"status":                   status.Status,
+		"reason":                   status.Reason,
+		"restartRequired":          status.RestartRequired,
+		"pluginVerificationStatus": status.PluginVerificationStatus,
+		"nextVerificationCommand":  status.NextVerificationCommand,
+		"banners":                  updateStatusBanners(status),
+	}
+}
+
+func updateStatusBanners(status updateStatus) []statusBanner {
+	var banners []statusBanner
+	if status.Channel == updateChannelCanary {
+		banners = append(banners, statusBanner{
+			ID:       "canary_channel",
+			Severity: "info",
+			Title:    "Canary channel",
+			Message:  "This install follows canary prerelease bundles only.",
+		})
+	}
+	if !status.UpdatesEnabled {
+		banners = append(banners, statusBanner{
+			ID:       "updates_disabled",
+			Severity: "warn",
+			Title:    "Automatic updates disabled",
+			Message:  firstNonEmpty(status.Guidance, status.Reason),
+		})
+	}
+	if status.RestartRequired {
+		banners = append(banners, statusBanner{
+			ID:       "codex_restart_required",
+			Severity: "warn",
+			Title:    "Codex restart required",
+			Message:  "Restart Codex and start a new thread before treating updated slidex plugin skills as active.",
+			Command:  status.NextVerificationCommand,
+		})
+	} else if status.PluginVerificationStatus == "verified" {
+		banners = append(banners, statusBanner{
+			ID:       "codex_plugin_verified",
+			Severity: "ok",
+			Title:    "Codex plugin verified",
+			Message:  "The visible slidex plugin state matches this install.",
+		})
+	}
+	return banners
+}
+
+func markPluginRestartRequired(installRoot, targetVersion, targetTag string) error {
+	if installRoot == "" {
+		installRoot = defaultInstallRoot()
+	}
+	return writeUpdateState(installRoot, updateState{
+		CurrentVersion:      toolVersion,
+		TargetVersion:       targetVersion,
+		TargetTag:           targetTag,
+		Channel:             channelFromPackageVersion(targetVersion),
+		RestartRequired:     true,
+		RestartReason:       "bundled Codex plugin content may have changed during slidex bundle update",
+		PluginUpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+		VerificationStatus:  "restart_required",
+		VerificationCommand: "slidex codex app-server plugin-smoke --json",
+	})
 }
 
 func inferUpdateChannel(installRoot string, metadata *installMetadata, metadataErr error) (channel, mode, reason string) {

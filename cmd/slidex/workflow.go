@@ -348,6 +348,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"chromeVersion":               chrome,
 		"protocolSchema":              protocol,
 		"plugin":                      pluginDoctorSnapshot(pluginList),
+		"update":                      updateStatusSnapshot(),
 		"workbench":                   workbenchDoctorSnapshot(),
 		"dangerousAppServerApiPolicy": dangerousAppServerPolicySnapshot(),
 		"codexDoctorJson":             json.RawMessage(nullOrRaw(codexDoctor)),
@@ -513,6 +514,8 @@ func workbenchDoctorSnapshot() map[string]any {
 		"browserEvidenceRequired":             true,
 		"browserEvidenceCommand":              "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --screenshot <path-to-codex-browser-screenshot.png> --workbench-visible --saved-input-verified",
 		"browserEvidenceVerifyCommand":        "slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot",
+		"statusBanners":                       updateStatusSnapshot()["banners"],
+		"postRestartVerificationCommand":      "slidex codex app-server plugin-smoke --json",
 	}
 }
 

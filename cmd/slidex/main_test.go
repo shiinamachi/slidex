@@ -1427,6 +1427,42 @@ func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	if snapshot["browserEvidenceRequired"] != true {
 		t.Fatalf("doctor snapshot must require actual browser evidence: %#v", snapshot)
 	}
+	if snapshot["postRestartVerificationCommand"] != "slidex codex app-server plugin-smoke --json" {
+		t.Fatalf("doctor snapshot should expose post-restart verification command: %#v", snapshot)
+	}
+}
+
+func TestDoctorReportIncludesUpdateSnapshot(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	report := doctorReport("", false, false)
+	update, ok := report["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor report missing update snapshot: %#v", report)
+	}
+	if update["channel"] != updateChannelProduction || update["updatesEnabled"] != true {
+		t.Fatalf("unexpected update snapshot: %#v", update)
+	}
 }
 
 func TestClientRequestMethodsFromSchema(t *testing.T) {

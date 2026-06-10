@@ -555,6 +555,40 @@ func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 	}
 }
 
+func TestWorkbenchHTMLRendersRestartRequiredBannerWithoutBlockingForm(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	for _, want := range []string{
+		`data-banner-id="codex_restart_required"`,
+		"slidex codex app-server plugin-smoke --json",
+		`<form id="deck-form">`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
+		}
+	}
+	if strings.Index(html, `data-banner-id="codex_restart_required"`) > strings.Index(html, `<form id="deck-form">`) {
+		t.Fatal("restart banner should render before the deck form without replacing it")
+	}
+}
+
 func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
@@ -702,6 +736,50 @@ func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
 	if status["tokenRedacted"] != false {
 		t.Fatalf("tokenRedacted should require token hash, got %#v", status["tokenRedacted"])
 	}
+}
+
+func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelCanary,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatus(manifest)
+	update, ok := status["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing update snapshot: %#v", status)
+	}
+	if update["channel"] != updateChannelCanary || update["restartRequired"] != true {
+		t.Fatalf("unexpected update snapshot: %#v", update)
+	}
+	banners, ok := status["statusBanners"].([]statusBanner)
+	if !ok {
+		t.Fatalf("missing status banners: %#v", status["statusBanners"])
+	}
+	if !hasStatusBannerForTest(banners, "canary_channel") || !hasStatusBannerForTest(banners, "codex_restart_required") {
+		t.Fatalf("missing update banners: %#v", banners)
+	}
+}
+
+func hasStatusBannerForTest(banners []statusBanner, id string) bool {
+	for _, banner := range banners {
+		if banner.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDoctorWorkbenchFindingsCoverSecurityContract(t *testing.T) {

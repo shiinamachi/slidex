@@ -1251,6 +1251,13 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
     header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:22px; }
     h1 { margin:0; font-size:24px; line-height:1.2; letter-spacing:0; }
     .meta { color:var(--muted); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+    .status-banners { display:grid; gap:10px; margin:0 0 18px; }
+    .status-banner { border:1px solid var(--line); border-left-width:4px; border-radius:6px; background:var(--paper); padding:10px 12px; font-size:13px; line-height:1.45; }
+    .status-banner strong { display:block; font-size:13px; margin-bottom:2px; }
+    .status-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; overflow-wrap:anywhere; }
+    .status-banner.warn { border-left-color:var(--warn); }
+    .status-banner.info { border-left-color:#2563eb; }
+    .status-banner.ok { border-left-color:var(--accent); }
     form { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:16px; }
     label { display:grid; gap:7px; font-size:13px; font-weight:650; }
     input, textarea { width:100%; min-width:0; border:1px solid var(--line); border-radius:6px; padding:11px 12px; font:inherit; background:var(--paper); color:var(--ink); }
@@ -1280,6 +1287,7 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
       </div>
       <div class="meta">` + html.EscapeString(s.manifest.DeckDir) + `</div>
     </header>
+    ` + workbenchStatusBannersHTML() + `
     <form id="deck-form">
       <label>Deck title<input name="title" autocomplete="off" required></label>
       <label>Audience<input name="audience" autocomplete="off" required></label>
@@ -1375,6 +1383,28 @@ func workbenchFilePathHTML(manifest workbenchManifest) string {
 		path := firstNonEmpty(paths[item.key], item.path)
 		b.WriteString("<dt>" + html.EscapeString(item.label) + "</dt><dd>" + html.EscapeString(path) + "</dd>")
 	}
+	return b.String()
+}
+
+func workbenchStatusBannersHTML() string {
+	snapshot := updateStatusSnapshot()
+	banners, _ := snapshot["banners"].([]statusBanner)
+	if len(banners) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<section class="status-banners" aria-label="slidex status">`)
+	for _, banner := range banners {
+		severity := html.EscapeString(firstNonEmpty(banner.Severity, "info"))
+		b.WriteString(`<div class="status-banner ` + severity + `" data-banner-id="` + html.EscapeString(banner.ID) + `">`)
+		b.WriteString(`<strong>` + html.EscapeString(banner.Title) + `</strong>`)
+		b.WriteString(`<span>` + html.EscapeString(banner.Message) + `</span>`)
+		if banner.Command != "" {
+			b.WriteString(`<div><code>` + html.EscapeString(banner.Command) + `</code></div>`)
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</section>`)
 	return b.String()
 }
 
@@ -2374,6 +2404,7 @@ func validateWorkbenchBrowserEvidenceInput(input workbenchBrowserEvidenceInput, 
 }
 
 func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
+	update := updateStatusSnapshot()
 	status := map[string]any{
 		"status":              manifest.Status,
 		"deckId":              manifest.DeckID,
@@ -2388,6 +2419,8 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"serverBind":          manifest.ServerBind,
 		"browserOpenStrategy": manifest.BrowserOpenStrategy,
 		"manifest":            filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
+		"update":              update,
+		"statusBanners":       update["banners"],
 	}
 	evidencePath := filepath.Join(manifest.OutDir, workbenchBrowserEvidenceName)
 	if _, err := os.Stat(evidencePath); err == nil {
