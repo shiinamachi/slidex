@@ -280,7 +280,7 @@ go run ./cmd/slidex doctor --json
 
 GitHub Actions `Cross Platform` workflow는 `ubuntu-24.04`, `macos-15`,
 `windows-2025`에서 같은 검증을 실행하고, Linux/macOS/Windows `amd64`와 `arm64`
-test binary cross-compile을 확인합니다. OS별 test job은
+CLI binary 및 test binary cross-compile을 확인합니다. OS별 test job은
 `SLIDEX_REQUIRE_RENDER_SMOKE=1`로 render/QA/package E2E가 skip되지 않도록 강제하고,
 `doctor --render --json`으로 Chrome/Chromium 렌더 의존성을 확인합니다. 또한
 `version`, `init`, `inspect --write`, `migrate --dry-run`, `clean --logs`,

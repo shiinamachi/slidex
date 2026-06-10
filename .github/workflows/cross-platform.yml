@@ -92,6 +92,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Build CLI binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o "${{ runner.temp }}/slidex-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/slidex
       - name: Build test binary
         env:
           GOOS: ${{ matrix.goos }}
