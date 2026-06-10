@@ -239,7 +239,7 @@ func runUpdateCheck(args []string) error {
 		if err != nil {
 			return err
 		}
-		release, err := selectUpdateRelease(status.Channel, releases)
+		release, err := selectUpdateReleaseForStatus(status, releases)
 		if err != nil {
 			return err
 		}
@@ -460,6 +460,9 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 	}
 	if metadata != nil {
 		status.InstalledMetadata = metadata
+		if metadata.Version != "" {
+			status.CurrentVersion = metadata.Version
+		}
 		if metadata.InstallRoot != "" {
 			status.InstallRoot = filepath.ToSlash(metadata.InstallRoot)
 		}
@@ -643,7 +646,7 @@ func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, 
 	if err != nil {
 		return "", "", "", attestationVerification{}, err
 	}
-	release, err := selectUpdateRelease(status.Channel, releases)
+	release, err := selectUpdateReleaseForStatus(status, releases)
 	if err != nil {
 		return "", "", "", attestationVerification{}, err
 	}
@@ -1248,6 +1251,14 @@ func channelFromPackageVersion(version string) string {
 	}
 }
 
+func releaseBaseVersion(version string) string {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if canaryPackageVersionPattern.MatchString(version) {
+		return strings.SplitN(version, "-", 2)[0]
+	}
+	return version
+}
+
 func fetchUpdateReleases(ctx context.Context, apiURL string) ([]updateRelease, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -1315,26 +1326,122 @@ func parseUpdateReleases(raw []byte) ([]updateRelease, error) {
 }
 
 func selectUpdateRelease(channel string, releases []updateRelease) (updateRelease, error) {
+	return selectUpdateReleaseForCurrent(channel, "", releases)
+}
+
+func selectUpdateReleaseForStatus(status updateStatus, releases []updateRelease) (updateRelease, error) {
+	return selectUpdateReleaseForCurrent(status.Channel, status.CurrentVersion, releases)
+}
+
+func selectUpdateReleaseForCurrent(channel, currentVersion string, releases []updateRelease) (updateRelease, error) {
+	currentVersion = strings.TrimPrefix(strings.TrimSpace(currentVersion), "v")
+	if channel == updateChannelCanary && canaryPackageVersionPattern.MatchString(currentVersion) {
+		return selectCanaryUpdateRelease(currentVersion, releases)
+	}
 	for _, release := range releases {
 		if release.Draft {
 			continue
 		}
 		switch channel {
 		case updateChannelProduction:
-			if !release.Prerelease && channelFromPackageVersion(release.Version) == updateChannelProduction {
+			if !release.Prerelease && channelFromPackageVersion(release.Version) == updateChannelProduction && releaseIsNotOlder(release.Version, currentVersion) {
 				return release, nil
 			}
 		case updateChannelCanary:
-			if release.Prerelease || channelFromPackageVersion(release.Version) == updateChannelCanary {
-				if channelFromPackageVersion(release.Version) == updateChannelCanary {
-					return release, nil
-				}
+			if release.Prerelease && channelFromPackageVersion(release.Version) == updateChannelCanary && canaryReleaseIsNotOlder(release.Version, currentVersion) {
+				return release, nil
 			}
 		default:
 			return updateRelease{}, fmt.Errorf("updates are disabled for channel %q", channel)
 		}
 	}
 	return updateRelease{}, fmt.Errorf("no matching %s release found", channel)
+}
+
+func selectCanaryUpdateRelease(currentVersion string, releases []updateRelease) (updateRelease, error) {
+	currentBase := releaseBaseVersion(currentVersion)
+	var sameBaseBeforeCurrent *updateRelease
+	for _, release := range releases {
+		if release.Draft || !release.Prerelease || channelFromPackageVersion(release.Version) != updateChannelCanary {
+			continue
+		}
+		cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(release.Version), currentBase)
+		if !ok {
+			continue
+		}
+		if cmp > 0 {
+			return release, nil
+		}
+		if cmp < 0 {
+			continue
+		}
+		if release.Version == currentVersion {
+			if sameBaseBeforeCurrent != nil {
+				return *sameBaseBeforeCurrent, nil
+			}
+			return release, nil
+		}
+		if sameBaseBeforeCurrent == nil {
+			candidate := release
+			sameBaseBeforeCurrent = &candidate
+		}
+	}
+	if sameBaseBeforeCurrent != nil {
+		return updateRelease{}, fmt.Errorf("current canary release %s was not found in release metadata; refusing to infer same-base canary ordering", currentVersion)
+	}
+	return updateRelease{}, fmt.Errorf("no matching %s release found", updateChannelCanary)
+}
+
+func releaseIsNotOlder(candidateVersion, currentVersion string) bool {
+	if currentVersion == "" {
+		return true
+	}
+	cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(candidateVersion), releaseBaseVersion(currentVersion))
+	return ok && cmp >= 0
+}
+
+func canaryReleaseIsNotOlder(candidateVersion, currentVersion string) bool {
+	if currentVersion == "" {
+		return true
+	}
+	cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(candidateVersion), releaseBaseVersion(currentVersion))
+	return ok && cmp >= 0
+}
+
+func compareReleaseBaseVersions(left, right string) (int, bool) {
+	leftParts, ok := parseReleaseBaseVersionParts(left)
+	if !ok {
+		return 0, false
+	}
+	rightParts, ok := parseReleaseBaseVersionParts(right)
+	if !ok {
+		return 0, false
+	}
+	for i := range leftParts {
+		if leftParts[i] > rightParts[i] {
+			return 1, true
+		}
+		if leftParts[i] < rightParts[i] {
+			return -1, true
+		}
+	}
+	return 0, true
+}
+
+func parseReleaseBaseVersionParts(version string) ([3]int, bool) {
+	var parts [3]int
+	version = releaseBaseVersion(version)
+	if !stablePackageVersionPattern.MatchString(version) {
+		return parts, false
+	}
+	for i, part := range strings.Split(version, ".") {
+		var value int
+		for _, r := range part {
+			value = value*10 + int(r-'0')
+		}
+		parts[i] = value
+	}
+	return parts, true
 }
 
 func (release updateRelease) requiredAssets(contract releaseAssetContract) (archive updateAsset, checksum updateAsset, err error) {
@@ -1431,16 +1538,33 @@ func parseBSDChecksumLine(line, assetName string) (string, bool) {
 
 func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	root = filepath.Clean(root)
+	expectedVersion = strings.TrimPrefix(strings.TrimSpace(expectedVersion), "v")
+	expectedBaseVersion := releaseBaseVersion(expectedVersion)
 	var findings []qaFinding
 	required := []string{
+		".agents/plugins/marketplace.json",
+		".agents/skills/slidex",
+		".mise.toml",
+		"CODEX_INSTALL_PROMPT.md",
+		"INSTALL.md",
+		"LICENSE",
+		"README.ko.md",
+		"README.md",
+		"VERSIONING.md",
 		"VERSION",
 		".slidex/install.json",
+		"commands.md",
+		"decks/README.md",
 		"decks/_template",
+		"examples/sample_deck_spec.json",
+		"go.mod",
+		"go.sum",
+		"internal/codex/protocol",
+		"plugins/slidex",
 		"schemas",
+		"slidex.toml",
 		"plugins/slidex/.codex-plugin/plugin.json",
 		"plugins/slidex/.codex-plugin/version-lock.json",
-		".agents/plugins/marketplace.json",
-		"internal/codex/protocol",
 	}
 	for _, rel := range required {
 		path := filepath.Join(root, filepath.FromSlash(rel))
@@ -1449,8 +1573,8 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		}
 	}
 	version := strings.TrimSpace(readFileOrEmpty(filepath.Join(root, "VERSION")))
-	if version != expectedVersion {
-		findings = append(findings, fail("update.candidate_version", fmt.Sprintf("candidate VERSION must be %s, got %s", expectedVersion, firstNonEmpty(version, "missing")), filepath.ToSlash(filepath.Join(root, "VERSION"))))
+	if version != expectedBaseVersion {
+		findings = append(findings, fail("update.candidate_version", fmt.Sprintf("candidate VERSION must be %s, got %s", expectedBaseVersion, firstNonEmpty(version, "missing")), filepath.ToSlash(filepath.Join(root, "VERSION"))))
 	}
 	metadataPath := filepath.Join(root, ".slidex", "install.json")
 	if metadata, err := readInstallMetadata(metadataPath); err != nil {
@@ -1462,6 +1586,32 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		if metadata.Channel != updateChannelProduction && metadata.Channel != updateChannelCanary {
 			findings = append(findings, fail("update.candidate_install_metadata", "install metadata channel must be production or canary, got "+metadata.Channel, filepath.ToSlash(metadataPath)))
 		}
+		if metadata.Tag == "" {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata tag is required", filepath.ToSlash(metadataPath)))
+		} else if tagVersion, err := releasePackageVersionFromTag(metadata.Tag); err != nil || tagVersion != expectedVersion {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata tag must resolve to "+expectedVersion+", got "+metadata.Tag, filepath.ToSlash(metadataPath)))
+		}
+		if metadata.Commit == "" {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata commit is required", filepath.ToSlash(metadataPath)))
+		}
+		if metadata.BuildTime == "" {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata buildTime is required", filepath.ToSlash(metadataPath)))
+		}
+		if metadata.InstallMode != installModeReleasePackage {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata installMode must be "+installModeReleasePackage+", got "+metadata.InstallMode, filepath.ToSlash(metadataPath)))
+		}
+		expectedAsset, err := releaseAssetContractFor("v"+expectedVersion, runtime.GOOS, runtime.GOARCH)
+		if err != nil {
+			findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
+		} else if metadata.ReleaseAssetName != expectedAsset.ArchiveName {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata releaseAssetName must be "+expectedAsset.ArchiveName+", got "+metadata.ReleaseAssetName, filepath.ToSlash(metadataPath)))
+		}
+		if metadata.OS != runtime.GOOS {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata os must be "+runtime.GOOS+", got "+metadata.OS, filepath.ToSlash(metadataPath)))
+		}
+		if metadata.Arch != runtime.GOARCH {
+			findings = append(findings, fail("update.candidate_install_metadata", "install metadata arch must be "+runtime.GOARCH+", got "+metadata.Arch, filepath.ToSlash(metadataPath)))
+		}
 	}
 	manifestPath := filepath.Join(root, "plugins", "slidex", ".codex-plugin", "plugin.json")
 	if manifest, err := readCandidateJSON(manifestPath); err != nil {
@@ -1470,8 +1620,8 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		if got := metadataString(manifest["name"]); got != toolName {
 			findings = append(findings, fail("update.candidate_plugin_manifest", "plugin manifest name must be "+toolName, filepath.ToSlash(manifestPath)))
 		}
-		if got := pluginVersionBase(metadataString(manifest["version"])); got != expectedVersion {
-			findings = append(findings, fail("update.candidate_plugin_manifest", "plugin manifest version base must be "+expectedVersion+", got "+got, filepath.ToSlash(manifestPath)))
+		if got := pluginVersionBase(metadataString(manifest["version"])); got != expectedBaseVersion {
+			findings = append(findings, fail("update.candidate_plugin_manifest", "plugin manifest version base must be "+expectedBaseVersion+", got "+got, filepath.ToSlash(manifestPath)))
 		}
 	}
 	lockPath := filepath.Join(root, "plugins", "slidex", ".codex-plugin", "version-lock.json")
@@ -1479,8 +1629,8 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_version_lock", err.Error(), filepath.ToSlash(lockPath)))
 	} else {
 		for _, key := range []string{"pluginVersion", "slidexCliVersion"} {
-			if got := metadataString(lock[key]); got != expectedVersion {
-				findings = append(findings, fail("update.candidate_version_lock", key+" must be "+expectedVersion+", got "+got, filepath.ToSlash(lockPath)))
+			if got := metadataString(lock[key]); got != expectedBaseVersion {
+				findings = append(findings, fail("update.candidate_version_lock", key+" must be "+expectedBaseVersion+", got "+got, filepath.ToSlash(lockPath)))
 			}
 		}
 		if got := metadataString(lock["requiredCodexCliVersion"]); got == "" {
@@ -1502,8 +1652,8 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_binary", "missing candidate CLI binary: "+err.Error(), filepath.ToSlash(binaryPath)))
 	} else if version, err := candidateBinaryVersion(binaryPath); err != nil {
 		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version command failed: "+err.Error(), filepath.ToSlash(binaryPath)))
-	} else if version != expectedVersion {
-		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version must be "+expectedVersion+", got "+version, filepath.ToSlash(binaryPath)))
+	} else if version != expectedBaseVersion {
+		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version must be "+expectedBaseVersion+", got "+version, filepath.ToSlash(binaryPath)))
 	} else if doctorStatus, err := candidateDoctorStatus(root, binaryPath); err != nil {
 		findings = append(findings, fail("update.candidate_doctor", "candidate doctor failed: "+err.Error(), filepath.ToSlash(binaryPath)))
 	} else if doctorStatus != "pass" {

@@ -92,6 +92,9 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	if status.Channel != updateChannelCanary || !status.UpdatesEnabled {
 		t.Fatalf("canary status = %#v", status)
 	}
+	if status.CurrentVersion != toolVersion+"-abcdef0" {
+		t.Fatalf("canary current version should come from package metadata, got %q", status.CurrentVersion)
+	}
 
 	sourceRoot := filepath.Join(temp, "checkout")
 	for _, dir := range []string{".git", filepath.Join("cmd", "slidex")} {
@@ -154,6 +157,50 @@ func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	}
 }
 
+func TestUpdateDiscoveryDoesNotSelectOlderProductionRelease(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v0.1.0","draft":false,"prerelease":false,"assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectUpdateReleaseForCurrent(updateChannelProduction, "0.2.0", releases); err == nil || !strings.Contains(err.Error(), "no matching production release") {
+		t.Fatalf("expected older production release to be rejected, got %v", err)
+	}
+}
+
+func TestUpdateDiscoveryOrdersSameBaseCanaryOnlyWhenCurrentReleaseIsKnown(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v0.2.0-bbbbbbb","draft":false,"prerelease":true,"assets":[]},
+	  {"tag_name":"v0.2.0-aaaaaaa","draft":false,"prerelease":true,"assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-aaaaaaa", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Version != "0.2.0-bbbbbbb" {
+		t.Fatalf("next canary = %s", next.Version)
+	}
+	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-ccccccc", releases); err == nil || !strings.Contains(err.Error(), "refusing to infer same-base canary ordering") {
+		t.Fatalf("expected unknown same-base canary ordering to fail closed, got %v", err)
+	}
+}
+
+func TestUpdateDiscoveryRequiresCanaryPrereleaseFlag(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":false,"assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.1.0-aaaaaaa", releases); err == nil || !strings.Contains(err.Error(), "no matching canary release") {
+		t.Fatalf("expected non-prerelease canary tag to be rejected, got %v", err)
+	}
+}
+
 func TestVerifyReleaseAssetSHA256FailsClosed(t *testing.T) {
 	payload := []byte("release archive")
 	sum := sha256.Sum256(payload)
@@ -178,6 +225,12 @@ func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 	findings := validateCandidateBundle(root, "0.2.0")
 	if hasFailures(findings) {
 		t.Fatalf("candidate should validate: %#v", findings)
+	}
+	canaryRoot := t.TempDir()
+	writeCandidateBundleForTest(t, canaryRoot, "0.2.0-abcdef0")
+	findings = validateCandidateBundle(canaryRoot, "0.2.0-abcdef0")
+	if hasFailures(findings) {
+		t.Fatalf("canary candidate should validate with base runtime versions: %#v", findings)
 	}
 	if err := os.WriteFile(filepath.Join(root, "plugins", "slidex", ".codex-plugin", "version-lock.json"), []byte(`{"pluginVersion":"0.1.0","slidexCliVersion":"0.1.0","requiredCodexCliVersion":"0.138.0"}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -213,6 +266,32 @@ func TestValidateCandidateBundleChecksDoctorStatus(t *testing.T) {
 	findings := validateCandidateBundle(root, "0.2.0")
 	if !findingCheckPresent(findings, "update.candidate_doctor") {
 		t.Fatalf("candidate doctor failure should fail: %#v", findings)
+	}
+}
+
+func TestValidateCandidateBundleChecksInstallMetadataFields(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	metadataPath := filepath.Join(root, ".slidex", "install.json")
+	raw, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata installMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata.Commit = ""
+	updated, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings := validateCandidateBundle(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_install_metadata") {
+		t.Fatalf("candidate install metadata omission should fail: %#v", findings)
 	}
 }
 
@@ -540,6 +619,21 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	if metadata.ReleaseAssetName != "slidex_"+toolVersion+"_linux_amd64.tar.gz" {
 		t.Fatalf("metadata asset = %q", metadata.ReleaseAssetName)
 	}
+	if metadata.Version != toolVersion {
+		t.Fatalf("metadata version = %q", metadata.Version)
+	}
+	if metadata.Commit != "0123456789abcdef" {
+		t.Fatalf("metadata commit = %q", metadata.Commit)
+	}
+	if metadata.BuildTime != "2026-06-10T00:00:00Z" {
+		t.Fatalf("metadata buildTime = %q", metadata.BuildTime)
+	}
+	if metadata.InstallMode != installModeReleasePackage {
+		t.Fatalf("metadata installMode = %q", metadata.InstallMode)
+	}
+	if metadata.OS != "linux" || metadata.Arch != "amd64" {
+		t.Fatalf("metadata os/arch = %s/%s", metadata.OS, metadata.Arch)
+	}
 	checksum := filepath.Join(dist, "slidex_"+toolVersion+"_checksums.txt")
 	if _, err := os.Stat(checksum); err != nil {
 		t.Fatalf("checksum name should use asset version without v: %v", err)
@@ -562,9 +656,20 @@ func writeInstallMetadataForTest(t *testing.T, path string, metadata installMeta
 
 func writeCandidateBundleForTest(t *testing.T, root, version string) {
 	t.Helper()
+	baseVersion := releaseBaseVersion(version)
+	channel := channelFromPackageVersion(version)
+	if channel == updateChannelLocalDevelopment {
+		channel = updateChannelProduction
+	}
+	contract, err := releaseAssetContractFor("v"+version, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dirs := []string{
+		".agents/skills/slidex",
 		".slidex",
 		"decks/_template",
+		"examples",
 		"schemas",
 		"plugins/slidex/.codex-plugin",
 		".agents/plugins",
@@ -580,26 +685,44 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 		binary = "slidex.exe"
 	}
 	files := map[string]string{
-		"VERSION": version,
+		".mise.toml":              "go = \"1.26.3\"\n",
+		"CODEX_INSTALL_PROMPT.md": "Install slidex.\n",
+		"INSTALL.md":              "Install slidex.\n",
+		"LICENSE":                 "MIT\n",
+		"README.ko.md":            "# slidex\n",
+		"README.md":               "# slidex\n",
+		"VERSIONING.md":           "# slidex Version Management\n",
+		"VERSION":                 baseVersion,
 		".slidex/install.json": `{
 		  "schemaVersion":"slidex.install.v1",
 		  "toolName":"slidex",
 		  "version":"` + version + `",
-		  "channel":"production",
+		  "channel":"` + channel + `",
 		  "tag":"v` + version + `",
+		  "commit":"0123456789abcdef",
+		  "buildTime":"2026-06-10T00:00:00Z",
+		  "releaseAssetName":"` + contract.ArchiveName + `",
+		  "os":"` + runtime.GOOS + `",
+		  "arch":"` + runtime.GOARCH + `",
 		  "installMode":"release-package"
 		}`,
+		"commands.md":                    "# commands\n",
+		"decks/README.md":                "# decks\n",
+		"examples/sample_deck_spec.json": "{}\n",
+		"go.mod":                         "module slidex\n\ngo 1.26.3\n",
+		"go.sum":                         "",
+		"slidex.toml":                    "[app_server_api]\ndefault = \"deny\"\n",
 		"plugins/slidex/.codex-plugin/plugin.json": `{
 		  "name":"slidex",
-		  "version":"` + version + `+codex.test",
+		  "version":"` + baseVersion + `+codex.test",
 		  "author":{"name":"shiinamachi"},
 		  "license":"MIT",
 		  "skills":"./skills/",
 		  "mcpServers":"./.mcp.json"
 		}`,
 		"plugins/slidex/.codex-plugin/version-lock.json": `{
-		  "pluginVersion":"` + version + `",
-		  "slidexCliVersion":"` + version + `",
+		  "pluginVersion":"` + baseVersion + `",
+		  "slidexCliVersion":"` + baseVersion + `",
 		  "requiredCodexCliVersion":"0.138.0"
 		}`,
 		".agents/plugins/marketplace.json": `{
@@ -608,11 +731,14 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 	}
 	for rel, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeCandidateBinaryForTest(t, filepath.Join(root, binary), version)
+	writeCandidateBinaryForTest(t, filepath.Join(root, binary), baseVersion)
 }
 
 func writeCandidateBinaryForTest(t *testing.T, path, version string) {
