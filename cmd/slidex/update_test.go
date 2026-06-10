@@ -224,7 +224,7 @@ func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyCandidateBundle(status, t.TempDir(), "0.2.0", "v0.2.0")
+	result, err := applyCandidateBundle(status, t.TempDir(), "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0")
+	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--yes", "--json"}); err != nil {
+	if err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--attestation-policy", attestationPolicyAllowUnverified, "--yes", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
@@ -349,6 +349,27 @@ func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	}
 	if !status.RestartRequired || status.TargetVersion != "0.2.0" {
 		t.Fatalf("downloaded apply status = %#v", status)
+	}
+}
+
+func TestVerifyReleaseAttestationRequiresGitHubCLIByDefault(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	result, err := verifyReleaseAttestation("/tmp/slidex_0.2.0_linux_amd64.tar.gz", "v0.2.0", attestationPolicyRequire)
+	if err == nil {
+		t.Fatal("required attestation verification should fail without gh")
+	}
+	if result.Policy != attestationPolicyRequire || result.Status != "fail" || !strings.Contains(result.Error, "GitHub CLI") {
+		t.Fatalf("unexpected attestation result: %#v err=%v", result, err)
+	}
+}
+
+func TestVerifyReleaseAttestationCanBeExplicitlyBypassed(t *testing.T) {
+	result, err := verifyReleaseAttestation("/tmp/slidex_0.2.0_linux_amd64.tar.gz", "v0.2.0", attestationPolicyAllowUnverified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "skipped" || result.Policy != attestationPolicyAllowUnverified {
+		t.Fatalf("unexpected attestation result: %#v", result)
 	}
 }
 
@@ -370,6 +391,10 @@ func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "updates are disabled") {
 		t.Fatalf("local-development apply err = %v", err)
 	}
+}
+
+func allowUnverifiedAttestationForTest() attestationVerification {
+	return attestationVerification{Policy: attestationPolicyAllowUnverified, Status: "skipped"}
 }
 
 func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {

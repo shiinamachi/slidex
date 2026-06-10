@@ -240,8 +240,8 @@ Each release package includes:
 | Codex protocol bundle | `internal/codex/protocol/codex-cli-0.138.0/` |
 | Install/update metadata | `.slidex/install.json` |
 
-Code signing is deferred. Always verify the SHA-256 checksum before trusting a
-downloaded package.
+Code signing is deferred. Always verify the SHA-256 checksum and GitHub artifact
+attestation before trusting a downloaded release package.
 
 ---
 
@@ -265,6 +265,12 @@ the verified bundle as one unit:
 slidex update apply --yes --json
 ```
 
+By default, `update apply` requires GitHub CLI release integrity and artifact
+attestation verification. It runs documented GitHub surfaces equivalent to
+`gh release verify`, `gh release verify-asset`, and `gh attestation verify` for
+the selected release asset. If this verification cannot be completed, the update
+fails before activation.
+
 For a manually downloaded archive, pass the local files explicitly:
 
 ```bash
@@ -281,6 +287,10 @@ slidex update apply \
 systems it stages the candidate, keeps a backup of the previous install root,
 and marks Codex plugin restart verification as required. On Windows it writes a
 pending update handoff because the running executable may be locked.
+
+`--attestation-policy allow-unverified` exists only for an explicit manual
+product/security decision. Runs that use it are not considered unattended
+verified updates.
 
 After any update that may change bundled plugin content:
 

@@ -1708,7 +1708,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "cross-platform.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "gh release create", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "actions/attest@", "attestations: write", "refusing to overwrite immutable release assets", "gh release create", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
@@ -1744,6 +1744,10 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatal("scripts/package-release.sh must be executable")
+	}
+	workflow := readFileOrEmpty(filepath.Join(root, ".github", "workflows", "cross-platform.yml"))
+	if strings.Contains(workflow, "--clobber") {
+		t.Fatal("release workflow must not clobber existing release assets")
 	}
 }
 

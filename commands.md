@@ -178,6 +178,10 @@ slidex codex app-server plugin-smoke --json
 slidex update verify --json
 ```
 
+기본 `update apply`는 GitHub CLI release integrity와 artifact attestation 검증을
+요구합니다. `--attestation-policy allow-unverified`는 명시적인 수동 보안 판단이
+있을 때만 사용합니다.
+
 개발자 source build:
 
 ```bash
