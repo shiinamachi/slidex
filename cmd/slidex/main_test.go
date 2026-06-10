@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func TestExtractSlidesUsesHTMLParserForNestedSections(t *testing.T) {
@@ -1109,16 +1111,19 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
 		t.Fatalf("command was not shell quoted as expected: %s", command)
 	}
-	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", `C:\Users\Me\slidex workspace`, "demo", `C:\repo\decks\_template`)
-	if !strings.Contains(windowsCommand, `--workspace "C:\Users\Me\slidex workspace"`) || !strings.Contains(windowsCommand, `--from-template C:\repo\decks\_template`) {
-		t.Fatalf("windows command was not quoted as expected: %s", windowsCommand)
+	dangerousWindowsPath := `C:\Users\Me\slidex %workspace%!^&() O'Hare`
+	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", dangerousWindowsPath, "demo", `C:\repo\decks\_template`)
+	if !strings.HasPrefix(windowsCommand, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ") {
+		t.Fatalf("windows command should force encoded PowerShell execution: %s", windowsCommand)
 	}
-	if got := windowsShellQuote(`C:\Users\Me\slidex workspace`); got != `"C:\Users\Me\slidex workspace"` {
-		t.Fatalf("windows shell quote did not preserve spaced path: %s", got)
+	if strings.Contains(windowsCommand, dangerousWindowsPath) {
+		t.Fatalf("windows command should not expose shell-metacharacter path outside encoded payload: %s", windowsCommand)
 	}
-	dangerousWindowsPath := `C:\Users\Me\slidex %workspace%!^`
-	if got := windowsShellQuote(dangerousWindowsPath); got != `"C:\Users\Me\slidex ^%workspace^%^!^^"` {
-		t.Fatalf("windows shell quote did not escape cmd metacharacters: %s", got)
+	windowsScript := decodeWindowsPowerShellCommandForTest(t, windowsCommand)
+	for _, want := range []string{"& 'slidex'", "'workbench'", "'start'", "'--workspace'", "'C:\\Users\\Me\\slidex %workspace%!^&() O''Hare'", "'--from-template'", "'C:\\repo\\decks\\_template'"} {
+		if !strings.Contains(windowsScript, want) {
+			t.Fatalf("decoded windows command missing %q:\n%s", want, windowsScript)
+		}
 	}
 	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
 	if !strings.Contains(prompt, "Do not run render, QA, package") {
@@ -1172,6 +1177,26 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if raw, _ := json.Marshal(events); strings.Contains(string(raw), "secret-value") {
 		t.Fatalf("event summary leaked secret: %s", raw)
 	}
+}
+
+func decodeWindowsPowerShellCommandForTest(t *testing.T, command string) string {
+	t.Helper()
+	_, encoded, ok := strings.Cut(command, "-EncodedCommand ")
+	if !ok {
+		t.Fatalf("encoded command missing: %s", command)
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw)%2 != 0 {
+		t.Fatalf("encoded PowerShell command has odd byte length: %d", len(raw))
+	}
+	words := make([]uint16, len(raw)/2)
+	for i := range words {
+		words[i] = binary.LittleEndian.Uint16(raw[i*2:])
+	}
+	return string(utf16.Decode(words))
 }
 
 func TestAppServerSkillSmokeSchemaRequiresSavedInputProof(t *testing.T) {

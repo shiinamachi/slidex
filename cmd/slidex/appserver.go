@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 const (
@@ -1179,10 +1182,10 @@ func appServerSkillSmokeWorkbenchCommand(workspace, deckID, fromTemplate string)
 }
 
 func appServerSkillSmokeWorkbenchCommandForOS(goos, workspace, deckID, fromTemplate string) string {
-	quote := shellQuote
 	if goos == "windows" {
-		quote = windowsShellQuote
+		return windowsPowerShellCommand("slidex", "workbench", "start", "--workspace", workspace, "--deck-id", deckID, "--from-template", fromTemplate)
 	}
+	quote := shellQuote
 	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s --from-template %s", quote(workspace), quote(deckID), quote(fromTemplate))
 }
 
@@ -1198,22 +1201,29 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
-func windowsShellQuote(s string) string {
-	if s == "" {
-		return `""`
+func windowsPowerShellCommand(name string, args ...string) string {
+	var script strings.Builder
+	script.WriteString("$ErrorActionPreference='Stop'; & ")
+	script.WriteString(powershellSingleQuote(name))
+	for _, arg := range args {
+		script.WriteByte(' ')
+		script.WriteString(powershellSingleQuote(arg))
 	}
-	if strings.IndexFunc(s, func(r rune) bool {
-		return strings.ContainsRune(" \t\r\n\"&|<>()^%!", r)
-	}) == -1 {
-		return s
+	script.WriteString("; exit $LASTEXITCODE")
+	return "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + windowsPowerShellEncodedCommand(script.String())
+}
+
+func powershellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func windowsPowerShellEncodedCommand(script string) string {
+	encoded := utf16.Encode([]rune(script))
+	raw := make([]byte, len(encoded)*2)
+	for i, v := range encoded {
+		binary.LittleEndian.PutUint16(raw[i*2:], v)
 	}
-	replacer := strings.NewReplacer(
-		`^`, `^^`,
-		`%`, `^%`,
-		`!`, `^!`,
-		`"`, `\"`,
-	)
-	return `"` + replacer.Replace(s) + `"`
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 func appServerSkillSmokePrompt(workspace, deckID, command string) string {
