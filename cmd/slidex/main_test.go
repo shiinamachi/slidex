@@ -1147,6 +1147,34 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	}
 }
 
+func TestAppServerSkillSmokeSchemaRequiresSavedInputProof(t *testing.T) {
+	root := repoRootForTest(t)
+	deckAbs := filepath.Join(root, "decks", "doctor-workbench-contract")
+	manifest := newWorkbenchManifest(deckAbs, root, "doctor-session", "doctor-token", 49152, os.Getpid(), "running")
+	payload := doctorAppServerSkillSmokeEvidence(deckAbs, manifest)
+	schemaPath := filepath.Join(root, "schemas", "app_server_skill_smoke.schema.json")
+	if err := validatePayloadAgainstSchema(payload, schemaPath); err != nil {
+		t.Fatal(err)
+	}
+
+	payload.SavedInputVerified = false
+	if err := validatePayloadAgainstSchema(payload, schemaPath); err == nil {
+		t.Fatal("pass skill smoke evidence without savedInputVerified should fail schema validation")
+	}
+
+	payload = doctorAppServerSkillSmokeEvidence(deckAbs, manifest)
+	delete(payload.VerifiedFiles, "draft")
+	if err := validatePayloadAgainstSchema(payload, schemaPath); err == nil {
+		t.Fatal("pass skill smoke evidence without verifiedFiles.draft should fail schema validation")
+	}
+
+	payload = doctorAppServerSkillSmokeEvidence(deckAbs, manifest)
+	payload.Checks["workbenchSave"] = map[string]any{"status": "fail"}
+	if err := validatePayloadAgainstSchema(payload, schemaPath); err == nil {
+		t.Fatal("pass skill smoke evidence without passing workbenchSave summary should fail schema validation")
+	}
+}
+
 func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	snapshot := workbenchDoctorSnapshot()
 	if snapshot["browserOpenMechanism"] != "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin" {
@@ -1169,6 +1197,18 @@ func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	}
 	if snapshot["proprietaryCanvasMountAPI"] != "not_claimed" {
 		t.Fatalf("doctor snapshot must not claim proprietary canvas mount support: %#v", snapshot)
+	}
+	if snapshot["skillSmokeCommand"] != "slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>" {
+		t.Fatalf("doctor snapshot should expose the App Server skill smoke command: %#v", snapshot)
+	}
+	if snapshot["skillSmokeEvidenceSchema"] != "schemas/app_server_skill_smoke.schema.json" {
+		t.Fatalf("doctor snapshot should expose the App Server skill smoke schema: %#v", snapshot)
+	}
+	if snapshot["skillSmokeSavesInput"] != true {
+		t.Fatalf("skill smoke must be reported as saving workbench input: %#v", snapshot)
+	}
+	if snapshot["skillSmokeIsBrowserEvidence"] != false {
+		t.Fatalf("skill smoke must not be reported as browser evidence: %#v", snapshot)
 	}
 	if snapshot["saveSmokeCommand"] != "slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>" {
 		t.Fatalf("doctor snapshot should expose the pre-GUI save smoke command: %#v", snapshot)

@@ -576,6 +576,10 @@ func workbenchDoctorSnapshot() map[string]any {
 		"schemaOpenPageActionEvidence":        capability["schemaOpenPageActionEvidence"],
 		"officialInAppBrowserMechanismSource": "codex-manual:/codex/app/browser.md",
 		"proprietaryCanvasMountAPI":           "not_claimed",
+		"skillSmokeCommand":                   "slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>",
+		"skillSmokeEvidenceSchema":            "schemas/app_server_skill_smoke.schema.json",
+		"skillSmokeSavesInput":                true,
+		"skillSmokeIsBrowserEvidence":         false,
 		"saveSmokeCommand":                    "slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>",
 		"saveSmokeIsBrowserEvidence":          false,
 		"browserEvidenceRequired":             true,
@@ -767,7 +771,85 @@ func doctorWorkbenchFindings() []qaFinding {
 	if err := validatePayloadAgainstSchema(evidence, schemaPath); err != nil {
 		findings = append(findings, fail("doctor.workbench_browser_evidence_schema", err.Error(), schemaPath))
 	}
+	skillSmokeSchemaPath := filepath.Join("schemas", "app_server_skill_smoke.schema.json")
+	skillSmoke := doctorAppServerSkillSmokeEvidence(deckAbs, manifest)
+	if err := validatePayloadAgainstSchema(skillSmoke, skillSmokeSchemaPath); err != nil {
+		findings = append(findings, fail("doctor.app_server_skill_smoke_schema", err.Error(), skillSmokeSchemaPath))
+	}
 	return findings
+}
+
+func doctorAppServerSkillSmokeEvidence(deckAbs string, manifest workbenchManifest) appServerSkillSmokeResult {
+	workspace := workspaceRoot(".")
+	briefPath := filepath.ToSlash(filepath.Join(deckAbs, "brief.md"))
+	draftPath := filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName))
+	manifestPath := filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchManifestName))
+	verified := map[string]artifact{
+		"brief":    {Path: briefPath, SHA256: strings.Repeat("a", 64), Size: 1},
+		"draft":    {Path: draftPath, SHA256: strings.Repeat("b", 64), Size: 1},
+		"manifest": {Path: manifestPath, SHA256: strings.Repeat("c", 64), Size: 1},
+	}
+	return appServerSkillSmokeResult{
+		SchemaVersion:                   "slidex.appServerSkillSmoke.v1",
+		ToolName:                        toolName,
+		ToolVersion:                     toolVersion,
+		Status:                          "pass",
+		GeneratedAt:                     time.Now().UTC().Format(time.RFC3339),
+		CodexVersion:                    requiredCodexVersion,
+		Workspace:                       filepath.ToSlash(workspace),
+		DeckID:                          manifest.DeckID,
+		DeckDir:                         manifest.DeckDir,
+		ThreadID:                        "thread-doctor",
+		TurnID:                          "turn-doctor",
+		TurnStatus:                      "completed",
+		SkillName:                       "slidex:slidex-start",
+		SkillPath:                       filepath.ToSlash(filepath.Join(workspace, ".agents", "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+		SkillFound:                      true,
+		PluginReadOK:                    true,
+		TurnSandboxPolicy:               "dangerFullAccess",
+		WorkbenchCommand:                appServerSkillSmokeWorkbenchCommand(workspace, manifest.DeckID, filepath.Join(workspace, "decks", "_template")),
+		PromptSha256:                    strings.Repeat("d", 64),
+		EventCount:                      1,
+		DeckCreated:                     true,
+		ManifestExists:                  true,
+		ManifestPath:                    manifestPath,
+		EvidencePath:                    filepath.ToSlash(filepath.Join(deckAbs, "out", appServerSkillSmokeName)),
+		WorkbenchURL:                    manifest.URL,
+		ServerBind:                      manifest.ServerBind,
+		SessionID:                       manifest.SessionID,
+		StartStatus:                     "running",
+		DraftStatus:                     "draft_saved",
+		SaveStatus:                      "saved",
+		StopStatus:                      "stopped",
+		TokenRedacted:                   manifest.TokenRedacted,
+		RawTokenAbsentFromArtifacts:     true,
+		SavedInputVerified:              true,
+		BriefPath:                       briefPath,
+		DraftPath:                       draftPath,
+		BrowserOpenStrategy:             manifest.BrowserOpenStrategy,
+		ProprietaryCanvasAPI:            "not_used",
+		IsActualCodexAppBrowserEvidence: false,
+		VerifiedFiles:                   verified,
+		Checks: map[string]any{
+			"actualCodexAppBrowserEvidence": false,
+			"turnSandboxPolicy":             "dangerFullAccess",
+			"workbenchSave": map[string]any{
+				"schemaVersion":                   "slidex.workbenchSaveSmoke.v1",
+				"status":                          "pass",
+				"serverBind":                      manifest.ServerBind,
+				"startStatus":                     "running",
+				"draftStatus":                     "draft_saved",
+				"saveStatus":                      "saved",
+				"tokenRedacted":                   manifest.TokenRedacted,
+				"rawTokenAbsentFromArtifacts":     true,
+				"isActualCodexAppBrowserEvidence": false,
+				"verifiedFiles":                   verified,
+				"checks": map[string]any{
+					"actualCodexAppBrowserEvidence": false,
+				},
+			},
+		},
+	}
 }
 
 func validatePluginMCPConfig(path string) []qaFinding {

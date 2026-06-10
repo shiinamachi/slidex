@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.app_server_skill_smoke.schema.json",
+  "title": "slidex App Server Skill Smoke Evidence",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "toolName",
+    "toolVersion",
+    "status",
+    "generatedAt",
+    "codexVersion",
+    "workspace",
+    "deckId",
+    "deckDir",
+    "skillName",
+    "skillFound",
+    "pluginReadOk",
+    "turnSandboxPolicy",
+    "workbenchCommand",
+    "promptSha256",
+    "eventCount",
+    "deckCreated",
+    "manifestExists",
+    "manifestPath",
+    "evidencePath",
+    "tokenRedacted",
+    "rawTokenAbsentFromArtifacts",
+    "savedInputVerified",
+    "proprietaryCanvasApi",
+    "isActualCodexAppBrowserEvidence",
+    "checks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "slidex.appServerSkillSmoke.v1"
+    },
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "toolVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "error": {
+      "type": "string"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "codexVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deckId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deckDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "threadId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turnId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turnStatus": {
+      "type": "string"
+    },
+    "skillName": {
+      "type": "string",
+      "const": "slidex:slidex-start"
+    },
+    "skillPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skillFound": {
+      "type": "boolean"
+    },
+    "pluginReadOk": {
+      "type": "boolean"
+    },
+    "turnSandboxPolicy": {
+      "type": "string"
+    },
+    "workbenchCommand": {
+      "type": "string",
+      "minLength": 1
+    },
+    "promptSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "finalMessage": {
+      "type": "string"
+    },
+    "eventCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "deckCreated": {
+      "type": "boolean"
+    },
+    "manifestExists": {
+      "type": "boolean"
+    },
+    "manifestPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidencePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workbenchUrl": {
+      "type": "string",
+      "pattern": "^http://127\\.0\\.0\\.1:[0-9]+/workbench/[^/?#]+$"
+    },
+    "serverBind": {
+      "type": "string"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "startStatus": {
+      "type": "string"
+    },
+    "draftStatus": {
+      "type": "string"
+    },
+    "saveStatus": {
+      "type": "string"
+    },
+    "stopStatus": {
+      "type": "string"
+    },
+    "tokenRedacted": {
+      "type": "boolean"
+    },
+    "rawTokenAbsentFromArtifacts": {
+      "type": "boolean"
+    },
+    "savedInputVerified": {
+      "type": "boolean"
+    },
+    "briefPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "draftPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "browserOpenStrategy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "proprietaryCanvasApi": {
+      "type": "string",
+      "const": "not_used"
+    },
+    "isActualCodexAppBrowserEvidence": {
+      "type": "boolean"
+    },
+    "verifiedFiles": {
+      "$ref": "#/$defs/verifiedWorkbenchFiles"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "actualCodexAppBrowserEvidence": {
+          "type": "boolean"
+        },
+        "turnSandboxPolicy": {
+          "type": "string"
+        },
+        "workbenchSave": {
+          "$ref": "#/$defs/workbenchSaveSmokeSummary"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "pass"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "required": [
+          "threadId",
+          "turnId",
+          "turnStatus",
+          "skillPath",
+          "workbenchUrl",
+          "serverBind",
+          "sessionId",
+          "startStatus",
+          "draftStatus",
+          "saveStatus",
+          "stopStatus",
+          "briefPath",
+          "draftPath",
+          "browserOpenStrategy",
+          "verifiedFiles"
+        ],
+        "properties": {
+          "pluginReadOk": {
+            "const": true
+          },
+          "skillFound": {
+            "const": true
+          },
+          "turnSandboxPolicy": {
+            "const": "dangerFullAccess"
+          },
+          "turnStatus": {
+            "const": "completed"
+          },
+          "deckCreated": {
+            "const": true
+          },
+          "manifestExists": {
+            "const": true
+          },
+          "serverBind": {
+            "const": "127.0.0.1"
+          },
+          "startStatus": {
+            "const": "running"
+          },
+          "draftStatus": {
+            "const": "draft_saved"
+          },
+          "saveStatus": {
+            "const": "saved"
+          },
+          "stopStatus": {
+            "const": "stopped"
+          },
+          "tokenRedacted": {
+            "const": true
+          },
+          "rawTokenAbsentFromArtifacts": {
+            "const": true
+          },
+          "savedInputVerified": {
+            "const": true
+          },
+          "isActualCodexAppBrowserEvidence": {
+            "const": false
+          },
+          "checks": {
+            "required": [
+              "actualCodexAppBrowserEvidence",
+              "turnSandboxPolicy",
+              "workbenchSave"
+            ],
+            "properties": {
+              "actualCodexAppBrowserEvidence": {
+                "const": false
+              },
+              "turnSandboxPolicy": {
+                "const": "dangerFullAccess"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["path", "sha256", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "verifiedWorkbenchFiles": {
+      "type": "object",
+      "required": ["brief", "draft", "manifest"],
+      "additionalProperties": false,
+      "properties": {
+        "brief": {
+          "$ref": "#/$defs/artifact"
+        },
+        "draft": {
+          "$ref": "#/$defs/artifact"
+        },
+        "manifest": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "workbenchSaveSmokeSummary": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "status",
+        "serverBind",
+        "startStatus",
+        "draftStatus",
+        "saveStatus",
+        "tokenRedacted",
+        "rawTokenAbsentFromArtifacts",
+        "isActualCodexAppBrowserEvidence",
+        "verifiedFiles",
+        "checks"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "slidex.workbenchSaveSmoke.v1"
+        },
+        "status": {
+          "type": "string",
+          "const": "pass"
+        },
+        "serverBind": {
+          "type": "string",
+          "const": "127.0.0.1"
+        },
+        "startStatus": {
+          "type": "string",
+          "const": "running"
+        },
+        "draftStatus": {
+          "type": "string",
+          "const": "draft_saved"
+        },
+        "saveStatus": {
+          "type": "string",
+          "const": "saved"
+        },
+        "tokenRedacted": {
+          "type": "boolean",
+          "const": true
+        },
+        "rawTokenAbsentFromArtifacts": {
+          "type": "boolean",
+          "const": true
+        },
+        "isActualCodexAppBrowserEvidence": {
+          "type": "boolean",
+          "const": false
+        },
+        "verifiedFiles": {
+          "$ref": "#/$defs/verifiedWorkbenchFiles"
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["actualCodexAppBrowserEvidence"],
+          "properties": {
+            "actualCodexAppBrowserEvidence": {
+              "type": "boolean",
+              "const": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
