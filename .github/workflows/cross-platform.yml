@@ -248,6 +248,7 @@ jobs:
       - name: Smoke release package before publish
         env:
           BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
+          COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
           TAG_NAME: ${{ needs.release-metadata.outputs.tag_name }}
         run: |
@@ -264,28 +265,76 @@ jobs:
           tar -xzf "$archive" -C "$smoke_root"
           package_root="$smoke_root/slidex_${RELEASE_VERSION}_linux_amd64"
           metadata="$package_root/.slidex/install.json"
-          python3 - "$metadata" "$BUILD_CHANNEL" "$TAG_NAME" "$RELEASE_VERSION" "slidex_${RELEASE_VERSION}_linux_amd64.tar.gz" <<'PY'
+          python3 - dist "$BUILD_CHANNEL" "$TAG_NAME" "$RELEASE_VERSION" "$COMMIT_SHA" <<'PY'
           import json
           import sys
+          import tarfile
+          import zipfile
+          from datetime import datetime
+          from pathlib import Path
 
-          path, channel, tag, version, asset = sys.argv[1:]
-          with open(path, encoding="utf-8") as f:
-              data = json.load(f)
-          expected = {
-              "schemaVersion": "slidex.install.v1",
-              "toolName": "slidex",
-              "channel": channel,
-              "tag": tag,
-              "version": version,
-              "releaseAssetName": asset,
-              "installMode": "release-package",
-              "os": "linux",
-              "arch": "amd64",
-          }
-          for key, want in expected.items():
-              got = data.get(key)
-              if got != want:
-                  raise SystemExit(f"{path}: {key} = {got!r}, want {want!r}")
+          dist, channel, tag, version, commit = sys.argv[1:]
+          dist = Path(dist)
+          prefix = f"slidex_{version}_"
+          archives = sorted(path for path in dist.iterdir() if path.name.startswith(prefix) and path.name != f"slidex_{version}_checksums.txt")
+          if not archives:
+              raise SystemExit(f"{dist}: no release archives found for {version}")
+
+          def parse_target(asset):
+              if asset.endswith(".tar.gz"):
+                  target = asset[:-7]
+              elif asset.endswith(".zip"):
+                  target = asset[:-4]
+              else:
+                  raise SystemExit(f"{asset}: unsupported release archive extension")
+              if not target.startswith(prefix):
+                  raise SystemExit(f"{asset}: unexpected release archive name")
+              os_arch = target[len(prefix):]
+              if "_" not in os_arch:
+                  raise SystemExit(f"{asset}: missing os/arch segment")
+              return target, *os_arch.rsplit("_", 1)
+
+          def read_metadata(path, root):
+              metadata_name = f"{root}/.slidex/install.json"
+              if path.name.endswith(".tar.gz"):
+                  with tarfile.open(path, "r:gz") as archive:
+                      try:
+                          member = archive.extractfile(metadata_name)
+                      except KeyError:
+                          raise SystemExit(f"{path}: missing {metadata_name}")
+                      if member is None:
+                          raise SystemExit(f"{path}: {metadata_name} is not a regular file")
+                      return json.load(member)
+              with zipfile.ZipFile(path) as archive:
+                  try:
+                      with archive.open(metadata_name) as member:
+                          return json.load(member)
+                  except KeyError:
+                      raise SystemExit(f"{path}: missing {metadata_name}")
+
+          for archive in archives:
+              root, goos, goarch = parse_target(archive.name)
+              data = read_metadata(archive, root)
+              expected = {
+                  "schemaVersion": "slidex.install.v1",
+                  "toolName": "slidex",
+                  "channel": channel,
+                  "tag": tag,
+                  "version": version,
+                  "commit": commit,
+                  "releaseAssetName": archive.name,
+                  "installMode": "release-package",
+                  "os": goos,
+                  "arch": goarch,
+              }
+              for key, want in expected.items():
+                  got = data.get(key)
+                  if got != want:
+                      raise SystemExit(f"{archive}: {key} = {got!r}, want {want!r}")
+              build_time = data.get("buildTime")
+              if not build_time:
+                  raise SystemExit(f"{archive}: buildTime is missing")
+              datetime.fromisoformat(build_time.replace("Z", "+00:00"))
           PY
 
           "$package_root/slidex" --help >/dev/null
@@ -344,3 +393,8 @@ jobs:
             exit 2
           fi
           gh release create "$TAG_NAME" dist/* --verify-tag --title "slidex ${RELEASE_VERSION}" --notes-file "$notes_file" "${release_flags[@]}"
+          gh release verify "$TAG_NAME" --repo shiinamachi/slidex
+          for asset in dist/slidex_"${RELEASE_VERSION}"_*; do
+            [[ "$asset" == *"_checksums.txt" ]] && continue
+            gh release verify-asset "$TAG_NAME" "$asset" --repo shiinamachi/slidex
+          done
