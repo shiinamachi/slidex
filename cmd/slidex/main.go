@@ -2368,6 +2368,7 @@ func chromeExecutableCandidates(goos string) []string {
 		}
 	case "windows":
 		localAppData := os.Getenv("LOCALAPPDATA")
+		programW6432 := os.Getenv("ProgramW6432")
 		programFiles := os.Getenv("ProgramFiles")
 		programFilesX86 := os.Getenv("ProgramFiles(x86)")
 		add(
@@ -2378,7 +2379,7 @@ func chromeExecutableCandidates(goos string) []string {
 			"chromium.exe",
 			"chromium",
 		)
-		for _, root := range []string{programFiles, programFilesX86, localAppData} {
+		for _, root := range []string{programW6432, programFiles, programFilesX86, localAppData} {
 			if root == "" {
 				continue
 			}

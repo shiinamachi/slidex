@@ -1663,11 +1663,18 @@ func TestChromeDiscoveryPolicyCoversSupportedPlatforms(t *testing.T) {
 	if !testStringSliceContains(darwin, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") {
 		t.Fatalf("darwin chrome candidates missing app bundle path: %#v", darwin)
 	}
+	t.Setenv("ProgramW6432", `C:\Program Files`)
+	t.Setenv("ProgramFiles", `C:\Program Files`)
+	t.Setenv("ProgramFiles(x86)", `C:\Program Files (x86)`)
+	t.Setenv("LOCALAPPDATA", `C:\Users\Me\AppData\Local`)
 	windows := chromeExecutableCandidates("windows")
 	for _, name := range []string{"chrome.exe", "msedge.exe", "chromium.exe"} {
 		if !testStringSliceContains(windows, name) {
 			t.Fatalf("windows chrome candidates missing %s: %#v", name, windows)
 		}
+	}
+	if want := filepath.Join(`C:\Program Files`, "Google", "Chrome", "Application", "chrome.exe"); !testStringSliceContains(windows, want) {
+		t.Fatalf("windows chrome candidates missing ProgramW6432 Chrome path: %#v", windows)
 	}
 }
 
