@@ -72,15 +72,73 @@ func TestParseInitArgsRejectsAmbiguousInput(t *testing.T) {
 }
 
 func TestRunBufferedCommandReportsTimeout(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses POSIX shell")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
-	out, err := runBufferedCommand(50*time.Millisecond, "sh", "-c", "printf ready; sleep 5")
+	out, err := runBufferedCommand(50*time.Millisecond, exe, "-test.run=^TestRunBufferedCommandHelperProcess$", "--", "timeout")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected timeout error, got out=%q err=%v", out, err)
 	}
 	if !strings.Contains(string(out), "ready") {
 		t.Fatalf("expected buffered output before timeout, got %q", out)
+	}
+}
+
+func TestRunBufferedCommandUsesDirAndStdin(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	out, err := runBufferedCommandWithInput(time.Second, dir, strings.NewReader("payload"), exe, "-test.run=^TestRunBufferedCommandHelperProcess$", "--", "dir-stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(out)) != dir {
+		t.Fatalf("command dir output = %q, want %q", strings.TrimSpace(string(out)), dir)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "result.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "payload" {
+		t.Fatalf("stdin was not passed through: %q", raw)
+	}
+}
+
+func TestRunBufferedCommandHelperProcess(t *testing.T) {
+	mode := ""
+	for i, arg := range os.Args {
+		if arg == "--" && i+1 < len(os.Args) {
+			mode = os.Args[i+1]
+			break
+		}
+	}
+	switch mode {
+	case "timeout":
+		fmt.Print("ready")
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	case "dir-stdin":
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read stdin: %v", err)
+			os.Exit(2)
+		}
+		if err := os.WriteFile("result.txt", raw, 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "write result: %v", err)
+			os.Exit(2)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "get cwd: %v", err)
+			os.Exit(2)
+		}
+		fmt.Print(cwd)
+		os.Exit(0)
+	default:
+		return
 	}
 }
 

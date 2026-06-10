@@ -1894,8 +1894,7 @@ func runCodexSchema(args []string) error {
 	if strings.Contains(help, "--experimental") {
 		cmdArgs = append(cmdArgs, "--experimental")
 	}
-	cmd := exec.Command("codex", cmdArgs...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runBufferedCommand(60*time.Second, "codex", cmdArgs...); err != nil {
 		return fmt.Errorf("schema refresh failed: %w\n%s", err, string(out))
 	}
 	manifest, err := writeProtocolManifest(filepath.Dir(outDir))
@@ -5130,10 +5129,20 @@ func commandOutput(timeout time.Duration, name string, args ...string) string {
 }
 
 func runBufferedCommand(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return runBufferedCommandWithInput(timeout, "", nil, name, args...)
+}
+
+func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.Command(name, args...)
 	configureProcessGroupCommand(cmd)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
@@ -5182,12 +5191,7 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 		}
 	}
 	args := codexExecArgs(schemaPath, lastMessage, resume, effectiveResumeTarget, images)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "codex", args...)
-	cmd.Dir = mustAbs(".")
-	cmd.Stdin = strings.NewReader(prompt)
-	out, err := cmd.CombinedOutput()
+	out, err := runBufferedCommandWithInput(5*time.Minute, mustAbs("."), strings.NewReader(prompt), "codex", args...)
 	if writeErr := secureWriteFile(eventLog, out, 0o600); writeErr != nil {
 		return "", nil, writeErr
 	}
@@ -5306,8 +5310,7 @@ func probeProtocolSchema() map[string]any {
 	if experimental {
 		args = append(args, "--experimental")
 	}
-	cmd := exec.Command("codex", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runBufferedCommand(60*time.Second, "codex", args...); err != nil {
 		return map[string]any{"ok": false, "experimentalFlagSupported": experimental, "error": strings.TrimSpace(string(out) + "\n" + err.Error())}
 	}
 	files, _ := filepath.Glob(filepath.Join(tmp, "**", "*.json"))
@@ -6480,10 +6483,7 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 		args = append(args, "--image", image.Path)
 	}
 	args = append(args, "--output-schema", filepath.Join("schemas", "app_review_findings.strict.schema.json"), "--output-last-message", lastMessage, "-")
-	cmd := exec.Command("codex", args...)
-	cmd.Dir = mustAbs(".")
-	cmd.Stdin = strings.NewReader(prompt)
-	out, err := cmd.CombinedOutput()
+	out, err := runBufferedCommandWithInput(5*time.Minute, mustAbs("."), strings.NewReader(prompt), "codex", args...)
 	if err != nil {
 		return nil, fmt.Errorf("codex exec visual QA failed: %w\n%s", err, string(out))
 	}
