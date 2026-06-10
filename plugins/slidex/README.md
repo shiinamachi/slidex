@@ -46,9 +46,10 @@ slidex workbench evidence --deck-id <deck_id> \
 thread id is visible. This writes
 `decks/<deck_id>/out/workbench_browser_evidence.json`. Do not claim the Codex
 App browser/work-surface path has passed until this evidence reflects an actual
-inspection. `--screenshot` is optional but recommended; it copies the inspected
-Codex App browser capture under `out/workbench_browser_screenshot.<ext>` and
-records its hash in the evidence.
+inspection. `--screenshot` is optional but recommended; it verifies the
+inspected Codex App browser capture is a decodable nonblank PNG/JPEG, copies it
+under `out/workbench_browser_screenshot.<ext>`, and records its hash in the
+evidence.
 
 After recording the evidence, verify it still matches the current deck-local
 artifacts:
