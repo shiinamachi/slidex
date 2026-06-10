@@ -92,6 +92,15 @@ func managedAppServerDefaultListen() (string, error) {
 	return managedAppServerLoopbackListen()
 }
 
+func isReparsePoint(path string) bool {
+	pathPtr, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return false
+	}
+	attrs, err := syscall.GetFileAttributes(pathPtr)
+	return err == nil && attrs&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
 func replaceFile(src, dst string) error {
 	srcPtr, err := syscall.UTF16PtrFromString(src)
 	if err != nil {

@@ -6089,8 +6089,8 @@ func rejectSecureWriteTarget(path string) error {
 		}
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("secure write target must not be a symlink: %s", filepath.ToSlash(path))
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("secure write target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
 	}
 	return nil
 }
@@ -6115,11 +6115,11 @@ func rejectSymlinkAncestors(path string) error {
 			}
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		if isSymlinkOrReparsePoint(current, info) {
 			if systemSymlinkAncestorAllowed(runtime.GOOS, current) {
 				continue
 			}
-			return fmt.Errorf("secure write path must not contain symlinks: %s", filepath.ToSlash(current))
+			return fmt.Errorf("secure write path must not contain symlinks or reparse points: %s", filepath.ToSlash(current))
 		}
 	}
 	return nil

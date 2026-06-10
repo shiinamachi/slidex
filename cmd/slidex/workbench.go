@@ -1554,8 +1554,8 @@ func rejectSymlinkEscape(root, target string, allowMissingTarget bool) error {
 			}
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("deck path must not contain symlinks: %s", filepath.ToSlash(current))
+		if isSymlinkOrReparsePoint(current, info) {
+			return fmt.Errorf("deck path must not contain symlinks or reparse points: %s", filepath.ToSlash(current))
 		}
 	}
 	return nil
@@ -1569,10 +1569,14 @@ func rejectSymlinkComponent(path string) error {
 		}
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("deck path must not contain symlinks: %s", filepath.ToSlash(path))
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("deck path must not contain symlinks or reparse points: %s", filepath.ToSlash(path))
 	}
 	return nil
+}
+
+func isSymlinkOrReparsePoint(path string, info os.FileInfo) bool {
+	return info.Mode()&os.ModeSymlink != 0 || isReparsePoint(path)
 }
 
 func workbenchStatus(workspace, deckID, deck string) (workbenchManifest, error) {

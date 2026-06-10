@@ -81,6 +81,10 @@ func managedAppServerDefaultListen() (string, error) {
 	return managedAppServerLoopbackListen()
 }
 
+func isReparsePoint(string) bool {
+	return false
+}
+
 func replaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }
