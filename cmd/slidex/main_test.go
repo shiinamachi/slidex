@@ -71,6 +71,39 @@ func TestParseInitArgsRejectsAmbiguousInput(t *testing.T) {
 	}
 }
 
+func TestRunInitCreatesDeckWorkspaceFromTemplate(t *testing.T) {
+	root := repoRootForTest(t)
+	workspace := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	if err := runInit([]string{"portable-init", "--from-template", filepath.Join(root, "decks", "_template")}); err != nil {
+		t.Fatal(err)
+	}
+	deckDir := filepath.Join(workspace, "decks", "portable-init")
+	for _, rel := range []string{
+		"brief.md",
+		"DESIGN.md",
+		filepath.Join("assets", "README.md"),
+		filepath.Join("brand", "README.md"),
+		filepath.Join("data", "README.md"),
+		filepath.Join("source", "README.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(deckDir, rel)); err != nil {
+			t.Fatalf("init did not create %s: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "brief.md")); !os.IsNotExist(err) {
+		t.Fatalf("init should not create root-level legacy brief.md, got err=%v", err)
+	}
+}
+
 func TestRunBufferedCommandReportsTimeout(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
