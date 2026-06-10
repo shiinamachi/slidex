@@ -4215,7 +4215,7 @@ html, body { margin: 0; padding: 0; background: #e5e7eb; font-family: var(--font
 .slide { position: relative; width: var(--slide-width); height: var(--slide-height); overflow: hidden; background: var(--color-bg); padding: 96px 104px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 32px; border-bottom: 1px solid #d1d5db; }
 .slide::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 12px; background: linear-gradient(90deg, var(--color-primary), var(--color-accent)); }
 .kicker { color: var(--color-primary); font-size: 28px; font-weight: 700; margin: 0 0 20px; }
-h1, h2 { margin: 0; letter-spacing: 0; line-height: 1.08; max-width: 1280px; }
+h1, h2 { margin: 0; letter-spacing: 0; line-height: 1.14; max-width: 1280px; }
 h1 { font-size: 72px; }
 h2 { font-size: 58px; }
 .body { display: grid; grid-template-columns: 1.15fr .85fr; gap: 64px; align-items: center; }
