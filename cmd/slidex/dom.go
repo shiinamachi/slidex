@@ -38,17 +38,16 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if err := os.WriteFile(tmpHTML, []byte(injected), 0o644); err != nil {
 		return nil, "", err
 	}
-	args := []string{
-		"--headless=new",
-		"--disable-gpu",
-		"--hide-scrollbars",
+	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
+	if err != nil {
+		return nil, "", err
+	}
+	defer cleanup()
+	args = append(args,
 		"--virtual-time-budget=3000",
 		"--dump-dom",
 		fileURLFromPath(tmpHTML),
-	}
-	if chromeNoSandbox {
-		args = append([]string{"--no-sandbox"}, args...)
-	}
+	)
 	out, err := exec.Command(chromePath, args...).CombinedOutput()
 	if err != nil {
 		return nil, "", fmt.Errorf("chrome DOM enumeration failed: %w\n%s", err, string(out))

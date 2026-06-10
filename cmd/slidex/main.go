@@ -2441,19 +2441,18 @@ func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, 
 }
 
 func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
-	args := []string{
-		"--headless=new",
-		"--disable-gpu",
-		"--hide-scrollbars",
+	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	args = append(args,
 		fmt.Sprintf("--window-size=%d,%d", width, height),
 		"--force-device-scale-factor=1",
 		"--virtual-time-budget=3000",
-		"--screenshot=" + pngPath,
+		"--screenshot="+pngPath,
 		targetURL,
-	}
-	if chromeNoSandbox {
-		args = append([]string{"--no-sandbox"}, args...)
-	}
+	)
 	cmd := exec.Command(chromePath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -2466,17 +2465,16 @@ func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height i
 }
 
 func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) ([]string, error) {
-	args := []string{
-		"--headless=new",
-		"--disable-gpu",
-		"--hide-scrollbars",
+	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	args = append(args,
 		"--virtual-time-budget=3000",
 		"--dump-dom",
 		fileURLFromPath(htmlPath),
-	}
-	if chromeNoSandbox {
-		args = append([]string{"--no-sandbox"}, args...)
-	}
+	)
 	cmd := exec.Command(chromePath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -2500,6 +2498,31 @@ func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) 
 		))
 	}
 	return issues, nil
+}
+
+func chromeHeadlessBaseArgs(chromeNoSandbox bool) ([]string, func(), error) {
+	profileDir, err := os.MkdirTemp("", "slidex-chrome-profile-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(profileDir)
+	}
+	args := []string{
+		"--headless=new",
+		"--disable-gpu",
+		"--hide-scrollbars",
+		"--no-first-run",
+		"--disable-default-apps",
+		"--disable-background-networking",
+		"--disable-sync",
+		"--metrics-recording-only",
+		"--user-data-dir=" + profileDir,
+	}
+	if chromeNoSandbox {
+		args = append([]string{"--no-sandbox"}, args...)
+	}
+	return args, cleanup, nil
 }
 
 func editorialGridClippingError(slideID string, issues []string) error {

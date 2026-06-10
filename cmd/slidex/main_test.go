@@ -1689,6 +1689,47 @@ func TestResolveChromeAcceptsMacOSAppBundle(t *testing.T) {
 	}
 }
 
+func TestChromeHeadlessBaseArgsUsesIsolatedProfile(t *testing.T) {
+	args, cleanup, err := chromeHeadlessBaseArgs(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testStringSliceContains(args, "--no-sandbox") {
+		t.Fatalf("chrome args missing --no-sandbox: %#v", args)
+	}
+	for _, want := range []string{"--headless=new", "--no-first-run", "--disable-background-networking"} {
+		if !testStringSliceContains(args, want) {
+			t.Fatalf("chrome args missing %s: %#v", want, args)
+		}
+	}
+	profileDir := ""
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--user-data-dir=") {
+			profileDir = strings.TrimPrefix(arg, "--user-data-dir=")
+			break
+		}
+	}
+	if profileDir == "" {
+		t.Fatalf("chrome args missing user data dir: %#v", args)
+	}
+	if info, err := os.Stat(profileDir); err != nil || !info.IsDir() {
+		t.Fatalf("chrome profile dir was not created: %s %v", profileDir, err)
+	}
+	cleanup()
+	if _, err := os.Stat(profileDir); !os.IsNotExist(err) {
+		t.Fatalf("chrome profile dir was not cleaned up: %s %v", profileDir, err)
+	}
+
+	args, cleanup, err = chromeHeadlessBaseArgs(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if testStringSliceContains(args, "--no-sandbox") {
+		t.Fatalf("chrome args unexpectedly included --no-sandbox: %#v", args)
+	}
+}
+
 func testStringSliceContains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
