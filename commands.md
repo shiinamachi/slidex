@@ -160,10 +160,15 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 
 ## 설치와 배포
 
-일반 사용자는 GitHub Release package를 설치합니다. package에는 `slidex` binary와
-실행에 필요한 `decks/_template`, `schemas`, Codex plugin package, repo marketplace가
-함께 들어 있습니다. 자세한 절차와 Codex App one-shot prompt는 `INSTALL.md`와
-`CODEX_INSTALL_PROMPT.md`를 따릅니다.
+일반 사용자에게 보여줄 설치 안내는 한 줄짜리 Codex App one-shot prompt만 사용합니다.
+실제 release package 설치, checksum 검증, Codex plugin setup 절차는 Codex가
+저장소 안의 `INSTALL.md`를 읽고 수행합니다.
+
+```text
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete the install, Codex plugin setup, and verification.
+```
+
+개발자 source build:
 
 ```bash
 mise exec -- go install ./cmd/slidex

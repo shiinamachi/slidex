@@ -68,8 +68,8 @@ The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires
 `X-Slidex-Workbench-Token` for writes, and records only token hashes in
 manifests.
 
-Because the plugin MCP configuration runs `slidex` from `PATH`, install the
-current repository binary before local plugin invocation tests:
+Because the plugin MCP configuration runs `slidex` from `PATH`, local source
+checkout plugin invocation tests should install the current repository binary:
 
 ```bash
 mise exec -- go install ./cmd/slidex

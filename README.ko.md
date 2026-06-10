@@ -31,98 +31,9 @@ Markdown artifact로 구성됩니다.
 
 ## 설치
 
-### 요구 사항
-
-- Windows, macOS, Linux 중 하나
-- HTML을 PNG/PDF로 렌더링하기 위한 Chrome, Chromium, 또는 Microsoft Edge
-- 선택 사항: bundled Codex Plugin을 사용할 경우 Codex App 또는 Codex CLI
-- source build 전용: Git과 `mise`
-
-### 권장: GitHub Release package로 설치
-
-일반 사용자는 packaged release를 사용합니다. package에는 `slidex` binary,
-deck template, schema, Codex plugin file, repo marketplace가 함께 들어 있습니다.
-Release package는 GitHub Actions에서 빌드합니다. code signing은 이후 작업으로
-미룹니다.
-
-설치 절차는 다음 파일을 따릅니다.
-
 ```text
-INSTALL.md
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete the install, Codex plugin setup, and verification.
 ```
-
-Codex App one-shot prompt:
-
-```text
-Install slidex from https://github.com/shiinamachi/slidex. Follow INSTALL.md in that repository: resolve the published GitHub Release tag first, use that exact tag's package for this OS/CPU, verify the SHA-256 checksum, add slidex to PATH, install the included Codex plugin with `codex plugin marketplace add <install-dir>` and `codex plugin add slidex@slidex-local` when Codex CLI is available, run `slidex --help` and `slidex doctor --render`, then report any manual follow-up.
-```
-
-### Source build fallback
-
-개발 중이거나 대상 platform용 release package가 없을 때만 이 경로를 사용합니다. 이
-저장소는 `.mise.toml`과 `go.mod`에서 Go 버전을 정확히 pin합니다. source build
-명령은 저장소 root에서 실행합니다.
-
-```bash
-git clone https://github.com/shiinamachi/slidex.git
-cd slidex
-mise install
-mise exec -- go install ./cmd/slidex
-```
-
-Go install directory를 `PATH`에 추가합니다.
-
-macOS 또는 Linux:
-
-```bash
-export PATH="$(mise exec -- go env GOPATH)/bin:$PATH"
-```
-
-Windows PowerShell:
-
-```powershell
-$env:Path = "$(mise exec -- go env GOPATH)\bin;$env:Path"
-```
-
-Windows `cmd.exe`:
-
-```bat
-for /f "delims=" %G in ('mise exec -- go env GOPATH') do set "PATH=%G\bin;%PATH%"
-```
-
-다음 terminal session에서도 `slidex`를 사용하려면 같은 PATH 설정을 shell profile이나
-system environment에 저장합니다.
-
-설치를 확인합니다.
-
-```bash
-slidex --help
-slidex doctor --render
-```
-
-`slidex` 명령을 찾을 수 없다면, 다음 명령이 출력하는 경로 아래의 `bin` directory가
-`PATH`에 포함되어 있는지 확인합니다.
-
-```bash
-mise exec -- go env GOPATH
-```
-
-### 기존 설치 업데이트
-
-Release package 설치는 `INSTALL.md`의 release package 절차를 새 release tag에 대해
-반복합니다.
-
-Source build 설치는 다음을 실행합니다.
-
-```bash
-git pull
-mise install
-mise exec -- go install ./cmd/slidex
-slidex doctor --render
-```
-
-Codex Plugin은 `PATH`에서 `slidex` binary를 찾습니다. plugin을 사용한다면 저장소
-변경 사항을 pull한 뒤 CLI를 다시 설치해야 합니다.
 
 ## 빠른 시작
 
@@ -286,11 +197,8 @@ slidex package --deck decks/customer-retention
 loopback workbench를 통해 deck brief를 만드는 front door입니다. build, render, QA,
 package stage의 source of truth는 계속 CLI입니다.
 
-plugin을 사용하기 전에 설치된 `slidex` binary가 최신인지 확인합니다.
-
-```bash
-mise exec -- go install ./cmd/slidex
-```
+위 one-shot prompt로 설치해 `slidex` binary와 plugin marketplace를 최신 상태로
+맞춥니다.
 
 workbench를 시작합니다.
 

@@ -1595,11 +1595,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"GitHub Release", "SHA-256", "Code signing is deferred", "Codex App one-shot"},
+			want: []string{"repository-contained instruction set for Codex", "GitHub Release", "SHA-256", "Code signing is deferred"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
-			want: []string{"https://github.com/shiinamachi/slidex", "INSTALL.md", "SHA-256", "slidex doctor --render"},
+			want: []string{"https://github.com/shiinamachi/slidex", "read INSTALL.md", "complete the install", "verification"},
 		},
 	}
 	for _, check := range checks {
@@ -1621,6 +1621,71 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	if info.Mode()&0o111 == 0 {
 		t.Fatal("scripts/package-release.sh must be executable")
 	}
+}
+
+func TestUserFacingInstallDocsOnlyExposeOneShotPrompt(t *testing.T) {
+	root := repoRootForTest(t)
+	prompt := "Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete the install, Codex plugin setup, and verification."
+	checks := []struct {
+		path  string
+		start string
+		end   string
+	}{
+		{filepath.Join(root, "README.md"), "## Install", "## Quick Start"},
+		{filepath.Join(root, "README.ko.md"), "## 설치", "## 빠른 시작"},
+	}
+	reject := []string{
+		"sha256sum",
+		"shasum",
+		"Get-FileHash",
+		"codex plugin marketplace add",
+		"mise exec -- go install",
+		"Source build fallback",
+		"요구 사항",
+		"Requirements",
+	}
+	for _, check := range checks {
+		raw, err := os.ReadFile(check.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		section := markdownSectionBetween(string(raw), check.start, check.end)
+		if !strings.Contains(section, prompt) {
+			t.Fatalf("%s install section must expose the one-shot prompt", filepath.ToSlash(check.path))
+		}
+		for _, phrase := range reject {
+			if strings.Contains(section, phrase) {
+				t.Fatalf("%s install section exposes detailed install guidance %q", filepath.ToSlash(check.path), phrase)
+			}
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "CODEX_INSTALL_PROMPT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, prompt) {
+		t.Fatal("CODEX_INSTALL_PROMPT.md must contain the canonical one-shot prompt")
+	}
+	for _, phrase := range []string{"SHA-256", "codex plugin marketplace add", "slidex doctor --render"} {
+		if strings.Contains(text, phrase) {
+			t.Fatalf("one-shot prompt should defer detailed procedure to INSTALL.md, found %q", phrase)
+		}
+	}
+}
+
+func markdownSectionBetween(text, start, end string) string {
+	startIdx := strings.Index(text, start)
+	if startIdx < 0 {
+		return ""
+	}
+	rest := text[startIdx:]
+	endIdx := strings.Index(rest, end)
+	if endIdx < 0 {
+		return rest
+	}
+	return rest[:endIdx]
 }
 
 func TestDoctorGoalMethodsAndRequiredMCPGates(t *testing.T) {

@@ -1,15 +1,24 @@
-# slidex install guide
+# slidex Codex install instructions
 
-This file is the canonical install guide for Codex and for human operators.
+This file is the repository-contained instruction set for Codex. It is the file
+Codex should read after the end user pastes the one-shot prompt from
+`CODEX_INSTALL_PROMPT.md`. Keep end-user-facing install copy short; put the
+operational details here.
+
 Prefer the GitHub Release package. Build from source only when a release package
 is not available for the target platform.
 
 ## Codex App one-shot
 
-Paste the short prompt from `CODEX_INSTALL_PROMPT.md` into a new Codex App
-thread. Codex should open this repository, read this file, resolve the published
-release tag, download the matching package from that exact tag, verify the
-SHA-256 checksum, and run the verification commands below.
+The user-facing prompt should stay short:
+
+```text
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete the install, Codex plugin setup, and verification.
+```
+
+When Codex receives that prompt, open this repository, read this file, resolve
+the published release tag, download the matching package from that exact tag,
+verify the SHA-256 checksum, and run the verification commands below.
 
 ## What the release contains
 

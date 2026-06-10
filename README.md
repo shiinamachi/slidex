@@ -31,98 +31,9 @@ JSON, and Markdown artifacts.
 
 ## Install
 
-### Requirements
-
-- Windows, macOS, or Linux
-- Chrome, Chromium, or Microsoft Edge for rendering HTML to PNG/PDF
-- Optional: Codex App or Codex CLI if you want to use the bundled Codex Plugin
-- Source build only: Git and `mise`
-
-### Recommended: install from GitHub Releases
-
-Use the packaged release for normal installation. It includes the `slidex`
-binary, deck template, schemas, Codex plugin files, and repo marketplace needed
-for local use. Release packages are built by GitHub Actions; code signing is
-deferred.
-
-Follow:
-
 ```text
-INSTALL.md
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete the install, Codex plugin setup, and verification.
 ```
-
-Codex App one-shot prompt:
-
-```text
-Install slidex from https://github.com/shiinamachi/slidex. Follow INSTALL.md in that repository: resolve the published GitHub Release tag first, use that exact tag's package for this OS/CPU, verify the SHA-256 checksum, add slidex to PATH, install the included Codex plugin with `codex plugin marketplace add <install-dir>` and `codex plugin add slidex@slidex-local` when Codex CLI is available, run `slidex --help` and `slidex doctor --render`, then report any manual follow-up.
-```
-
-### Source build fallback
-
-Use this path for development or when a release package is unavailable for the
-target platform. The repository pins Go exactly in `.mise.toml` and `go.mod`.
-Run all source build commands from the repository root.
-
-```bash
-git clone https://github.com/shiinamachi/slidex.git
-cd slidex
-mise install
-mise exec -- go install ./cmd/slidex
-```
-
-Add Go's install directory to your `PATH`.
-
-macOS or Linux:
-
-```bash
-export PATH="$(mise exec -- go env GOPATH)/bin:$PATH"
-```
-
-Windows PowerShell:
-
-```powershell
-$env:Path = "$(mise exec -- go env GOPATH)\bin;$env:Path"
-```
-
-Windows `cmd.exe`:
-
-```bat
-for /f "delims=" %G in ('mise exec -- go env GOPATH') do set "PATH=%G\bin;%PATH%"
-```
-
-Persist the same path update in your shell profile or system environment if you
-want `slidex` available in future terminal sessions.
-
-Verify the install:
-
-```bash
-slidex --help
-slidex doctor --render
-```
-
-If `slidex` is not found, confirm that the `bin` directory under the path
-printed by this command is on your `PATH`:
-
-```bash
-mise exec -- go env GOPATH
-```
-
-### Update an existing install
-
-For release package installs, repeat the `INSTALL.md` release package steps for
-the new release tag.
-
-For source builds:
-
-```bash
-git pull
-mise install
-mise exec -- go install ./cmd/slidex
-slidex doctor --render
-```
-
-The Codex Plugin resolves the `slidex` binary from `PATH`, so reinstall the CLI
-after pulling repository changes if you use the plugin.
 
 ## Quick Start
 
@@ -290,11 +201,8 @@ The repository includes a local Codex Plugin in `plugins/slidex`. The plugin is
 a front door for creating a deck brief through a local loopback workbench. The
 CLI remains the source of truth for build, render, QA, and package stages.
 
-Before using the plugin, make sure the installed `slidex` binary is current:
-
-```bash
-mise exec -- go install ./cmd/slidex
-```
+Install with the one-shot prompt above so the `slidex` binary and plugin
+marketplace are current.
 
 Start a workbench:
 
