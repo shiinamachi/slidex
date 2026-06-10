@@ -1380,7 +1380,9 @@ func TestUpdateVerifyFailsUntilPluginVerified(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
 		t.Fatalf("restart-required verify err = %v", err)
 	}
-	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
+	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
+	skillPath := filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")
+	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", pluginPath, skillPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath}); err != nil {
@@ -1468,6 +1470,43 @@ func TestUpdateStatusRejectsForgedVerifiedUpdateState(t *testing.T) {
 	err = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath})
 	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
 		t.Fatalf("forged verified state should not pass update verify: %v", err)
+	}
+}
+
+func TestUpdateStatusRejectsForgedVerifiedPluginEvidence(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	if err := os.MkdirAll(filepath.Dir(updateStatePath(installRoot)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := updateState{
+		CurrentVersion:         toolVersion,
+		TargetVersion:          "0.2.0",
+		TargetTag:              "v0.2.0",
+		Channel:                updateChannelProduction,
+		RestartRequired:        false,
+		VerificationStatus:     "verified",
+		VerificationCommand:    "slidex update verify --json",
+		VerifiedPluginVersion:  toolVersion + "+codex.test",
+		VerifiedPluginPath:     filepath.ToSlash(filepath.Join(t.TempDir(), "plugins", "slidex")),
+		VerifiedStartSkillPath: filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+		PluginUpdatedAt:        "2026-06-10T00:00:00Z",
+		UpdatedAt:              "2026-06-10T00:00:00Z",
+	}
+	if err := writeUpdateState(installRoot, state); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("forged verified plugin evidence should fail closed: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "verifiedPluginPath must be under") {
+		t.Fatalf("invalid verified plugin path reason missing: %#v", status)
 	}
 }
 

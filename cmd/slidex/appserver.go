@@ -1391,7 +1391,7 @@ func applyPostRestartPluginVerification(result *appServerPluginSmokeResult) {
 	result.RestartRequiredBefore = status.RestartRequired
 	result.PluginVerificationStatus = postRestartPluginVerificationStatus(*result, status.InstallRoot)
 	if result.Status == "pass" && result.PluginVerificationStatus == "verified" {
-		if err := markPluginVerified(status.InstallRoot, result.PluginVersion, result.StartSkillPath); err != nil {
+		if err := markPluginVerified(status.InstallRoot, result.PluginVersion, result.PluginPath, result.StartSkillPath); err != nil {
 			result.Checks["pluginVerificationError"] = err.Error()
 		}
 	} else if result.PluginVerificationStatus == "drift" {

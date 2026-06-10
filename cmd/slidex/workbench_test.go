@@ -632,7 +632,9 @@ func TestWorkbenchHTMLRendersPluginVerifiedBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
 	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
-	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
+	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
+	skillPath := filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")
+	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", pluginPath, skillPath); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(updateInstallRootEnv, installRoot)
@@ -649,6 +651,10 @@ func TestWorkbenchHTMLRendersPluginVerifiedBanner(t *testing.T) {
 		t.Fatalf("verified workbench HTML should not keep restart banner:\n%s", html)
 	}
 	status := publicWorkbenchStatus(manifest)
+	update, ok := status["update"].(map[string]any)
+	if !ok || update["verifiedPluginPath"] != filepath.ToSlash(pluginPath) || update["verifiedStartSkillPath"] != filepath.ToSlash(skillPath) {
+		t.Fatalf("public workbench status missing verified plugin evidence: %#v", status["update"])
+	}
 	banners, ok := status["statusBanners"].([]statusBanner)
 	if !ok || !hasStatusBannerForTest(banners, "codex_plugin_verified") {
 		t.Fatalf("public workbench status missing verified banner: %#v", status["statusBanners"])

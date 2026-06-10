@@ -69,18 +69,21 @@ type installMetadata struct {
 }
 
 type updateState struct {
-	SchemaVersion       string `json:"schemaVersion"`
-	ToolName            string `json:"toolName"`
-	CurrentVersion      string `json:"currentVersion"`
-	TargetVersion       string `json:"targetVersion,omitempty"`
-	TargetTag           string `json:"targetTag,omitempty"`
-	Channel             string `json:"channel"`
-	RestartRequired     bool   `json:"restartRequired"`
-	RestartReason       string `json:"restartReason,omitempty"`
-	PluginUpdatedAt     string `json:"pluginUpdatedAt,omitempty"`
-	VerificationStatus  string `json:"verificationStatus"`
-	VerificationCommand string `json:"verificationCommand"`
-	UpdatedAt           string `json:"updatedAt"`
+	SchemaVersion          string `json:"schemaVersion"`
+	ToolName               string `json:"toolName"`
+	CurrentVersion         string `json:"currentVersion"`
+	TargetVersion          string `json:"targetVersion,omitempty"`
+	TargetTag              string `json:"targetTag,omitempty"`
+	Channel                string `json:"channel"`
+	RestartRequired        bool   `json:"restartRequired"`
+	RestartReason          string `json:"restartReason,omitempty"`
+	PluginUpdatedAt        string `json:"pluginUpdatedAt,omitempty"`
+	VerificationStatus     string `json:"verificationStatus"`
+	VerificationCommand    string `json:"verificationCommand"`
+	VerifiedPluginVersion  string `json:"verifiedPluginVersion,omitempty"`
+	VerifiedPluginPath     string `json:"verifiedPluginPath,omitempty"`
+	VerifiedStartSkillPath string `json:"verifiedStartSkillPath,omitempty"`
+	UpdatedAt              string `json:"updatedAt"`
 }
 
 type updateStatus struct {
@@ -110,6 +113,9 @@ type updateStatus struct {
 	PendingUpdatePath         string           `json:"pendingUpdatePath,omitempty"`
 	PendingUpdate             *pendingUpdate   `json:"pendingUpdate,omitempty"`
 	PersistedRestartStatePath string           `json:"persistedRestartStatePath,omitempty"`
+	VerifiedPluginVersion     string           `json:"verifiedPluginVersion,omitempty"`
+	VerifiedPluginPath        string           `json:"verifiedPluginPath,omitempty"`
+	VerifiedStartSkillPath    string           `json:"verifiedStartSkillPath,omitempty"`
 }
 
 type updateApplyResult struct {
@@ -606,6 +612,9 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		if state.VerificationCommand != "" {
 			status.NextVerificationCommand = state.VerificationCommand
 		}
+		status.VerifiedPluginVersion = state.VerifiedPluginVersion
+		status.VerifiedPluginPath = state.VerifiedPluginPath
+		status.VerifiedStartSkillPath = state.VerifiedStartSkillPath
 	}
 	if pending != nil {
 		status.PendingActivation = true
@@ -675,6 +684,9 @@ func updateStatusSnapshot() map[string]any {
 		"nextVerificationCommand":  status.NextVerificationCommand,
 		"pendingActivation":        status.PendingActivation,
 		"pendingActivationCommand": status.PendingActivationCommand,
+		"verifiedPluginVersion":    status.VerifiedPluginVersion,
+		"verifiedPluginPath":       status.VerifiedPluginPath,
+		"verifiedStartSkillPath":   status.VerifiedStartSkillPath,
 		"banners":                  updateStatusBanners(status),
 	}
 }
@@ -751,7 +763,7 @@ func markPluginRestartRequired(installRoot, targetVersion, targetTag string) err
 	})
 }
 
-func markPluginVerified(installRoot, pluginVersion, skillPath string) error {
+func markPluginVerified(installRoot, pluginVersion, pluginPath, skillPath string) error {
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
@@ -767,6 +779,9 @@ func markPluginVerified(installRoot, pluginVersion, skillPath string) error {
 	state.RestartReason = ""
 	state.VerificationStatus = "verified"
 	state.VerificationCommand = "slidex update verify --json"
+	state.VerifiedPluginVersion = strings.TrimSpace(pluginVersion)
+	state.VerifiedPluginPath = filepath.ToSlash(filepath.Clean(filepath.FromSlash(pluginPath)))
+	state.VerifiedStartSkillPath = filepath.ToSlash(filepath.Clean(filepath.FromSlash(skillPath)))
 	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeUpdateState(installRoot, *state)
 }
@@ -1610,6 +1625,11 @@ func readUpdateState(installRoot string) (*updateState, string, error) {
 	if state.TargetVersion == "" {
 		return nil, path, fmt.Errorf("%s: targetVersion is required", filepath.ToSlash(path))
 	}
+	if state.VerificationStatus == "verified" {
+		if err := validateVerifiedUpdateState(installRoot, path, state); err != nil {
+			return nil, path, err
+		}
+	}
 	if state.UpdatedAt == "" {
 		return nil, path, fmt.Errorf("%s: updatedAt is required", filepath.ToSlash(path))
 	}
@@ -1617,6 +1637,38 @@ func readUpdateState(installRoot string) (*updateState, string, error) {
 		return nil, path, fmt.Errorf("%s: updatedAt must be RFC3339: %w", filepath.ToSlash(path), err)
 	}
 	return &state, path, nil
+}
+
+func validateVerifiedUpdateState(installRoot, path string, state updateState) error {
+	path = filepath.ToSlash(path)
+	if pluginVersionBase(state.VerifiedPluginVersion) != toolVersion {
+		return fmt.Errorf("%s: verifiedPluginVersion must match current slidex version %s, got %q", path, toolVersion, state.VerifiedPluginVersion)
+	}
+	pluginRoot := filepath.Join(filepath.Clean(installRoot), "plugins", "slidex")
+	pluginPath := filepath.Clean(filepath.FromSlash(state.VerifiedPluginPath))
+	if strings.TrimSpace(state.VerifiedPluginPath) == "" {
+		return fmt.Errorf("%s: verifiedPluginPath is required", path)
+	}
+	if !filepath.IsAbs(pluginPath) {
+		return fmt.Errorf("%s: verifiedPluginPath must be absolute, got %q", path, state.VerifiedPluginPath)
+	}
+	if !pathWithin(pluginRoot, pluginPath) {
+		return fmt.Errorf("%s: verifiedPluginPath must be under %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(pluginPath))
+	}
+	skillPath := filepath.Clean(filepath.FromSlash(state.VerifiedStartSkillPath))
+	if strings.TrimSpace(state.VerifiedStartSkillPath) == "" {
+		return fmt.Errorf("%s: verifiedStartSkillPath is required", path)
+	}
+	if !filepath.IsAbs(skillPath) {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be absolute, got %q", path, state.VerifiedStartSkillPath)
+	}
+	if !pathWithin(pluginRoot, skillPath) {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
+	}
+	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
+		return fmt.Errorf("%s: verifiedStartSkillPath must end with skills/slidex-start/SKILL.md, got %s", path, filepath.ToSlash(skillPath))
+	}
+	return nil
 }
 
 func writeUpdateState(installRoot string, state updateState) error {

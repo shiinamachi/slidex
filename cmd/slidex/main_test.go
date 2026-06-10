@@ -1294,6 +1294,15 @@ func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 	if status.RestartRequired || status.PluginVerificationStatus != "verified" {
 		t.Fatalf("persisted status = %#v", status)
 	}
+	if status.VerifiedPluginVersion != toolVersion+"+codex.test" {
+		t.Fatalf("verified plugin version = %q", status.VerifiedPluginVersion)
+	}
+	if status.VerifiedPluginPath != filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")) {
+		t.Fatalf("verified plugin path = %q", status.VerifiedPluginPath)
+	}
+	if status.VerifiedStartSkillPath != filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")) {
+		t.Fatalf("verified start skill path = %q", status.VerifiedStartSkillPath)
+	}
 }
 
 func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
