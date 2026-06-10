@@ -22,6 +22,8 @@ Choose the package format:
 - `linux` or `darwin` → `.tar.gz`
 - `windows` → `.zip`
 
+Store the chosen extension as `EXT` (`tar.gz` or `zip`).
+
 ---
 
 ## Step 2 — Resolve the latest release tag
@@ -57,6 +59,14 @@ a canary install, choose the newest prerelease tag that matches
 not switch an existing install between production and canary in place; the
 package's `.slidex/install.json` records the immutable channel for that install.
 
+With GitHub CLI, resolve a canary tag deterministically:
+
+```bash
+gh release list --repo shiinamachi/slidex --json tagName,isPrerelease,isDraft,publishedAt --limit 100 \
+  -q '.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{7,40}$"))) | .tagName' \
+  | head -n 1
+```
+
 ---
 
 ## Step 3 — Download the release package and checksums
@@ -88,7 +98,17 @@ https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<ASSET_VERS
 
 ---
 
-## Step 4 — Verify the SHA-256 checksum
+## Step 4 — Verify the SHA-256 checksum and GitHub artifact attestation
+
+Store the package filename:
+
+```bash
+PACKAGE_FILE="slidex_${ASSET_VERSION}_${OS}_${ARCH}.${EXT}"
+```
+
+```powershell
+$PACKAGE_FILE = "slidex_${ASSET_VERSION}_${OS}_${ARCH}.${EXT}"
+```
 
 **Linux:**
 
@@ -112,6 +132,21 @@ Write-Host "SHA-256 verified."
 ```
 
 > **If the checksum does not match, stop immediately and report the failure.**
+
+Then verify GitHub release integrity and artifact attestation:
+
+```bash
+gh release verify "$TAG" --repo shiinamachi/slidex
+gh release verify-asset "$TAG" "$PACKAGE_FILE" --repo shiinamachi/slidex
+gh attestation verify "$PACKAGE_FILE" \
+  --repo shiinamachi/slidex \
+  --cert-oidc-issuer https://token.actions.githubusercontent.com \
+  --cert-identity-regex '^https://github.com/shiinamachi/slidex/.github/workflows/cross-platform.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$'
+```
+
+> **If `gh` is not installed, authentication is unavailable, or any attestation
+> command fails, stop and report the package as unverified. Do not continue the
+> install as a verified release package.**
 
 ---
 
@@ -213,15 +248,20 @@ Expected results:
   report `local-development` with automatic updates disabled.
 - `slidex doctor --render` checks the workspace structure and browser
   availability, and exits with code `0`.
-- If update status reports `restartRequired: true`, restart Codex, start a new
-  thread, and run:
+- After registering the plugin, start a new Codex thread and run:
 
   ```bash
   slidex codex app-server plugin-smoke --json
+  slidex update verify --json
   ```
 
-  Treat bundled skills as active only after the plugin smoke reports verified
-  plugin and skill state for this install.
+- If update status reports `pendingActivation: true`, run the reported
+  `pendingActivationCommand` before plugin smoke.
+- If update status reports `restartRequired: true`, restart Codex, start a new
+  thread, rerun `slidex codex app-server plugin-smoke --json`, and rerun
+  `slidex update verify --json`.
+- Treat bundled skills as active only after plugin smoke and `update verify`
+  report verified plugin and skill state for this install.
 
 > If `slidex doctor --render` reports that Chrome is not detected, set one of
 > these environment variables to the browser binary path:

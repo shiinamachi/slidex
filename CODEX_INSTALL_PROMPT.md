@@ -12,7 +12,7 @@ and verify the setup.
 ## Prompt
 
 ```text
-Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm success. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. If update status reports restartRequired, restart Codex, start a new thread, run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" before treating bundled skills as active. Report each step's result.
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum and GitHub artifact attestation, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm the CLI. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. Start a new Codex thread, run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" to confirm bundled plugin skills match the install. If update status reports restartRequired, restart Codex, start a new thread, rerun "slidex codex app-server plugin-smoke --json", and then rerun "slidex update verify --json" before treating bundled skills as active. Report each step's result.
 ```
 
 ## What this prompt does / 이 프롬프트가 수행하는 작업
@@ -24,10 +24,11 @@ Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in th
 | 3 | Detect OS (`linux`, `darwin`, `windows`) and CPU architecture (`amd64`, `arm64`) |
 | 4 | Resolve the latest GitHub Release tag |
 | 5 | Download the matching release package and checksum file |
-| 6 | Verify the SHA-256 checksum |
+| 6 | Verify the SHA-256 checksum and GitHub artifact attestation |
 | 7 | Extract and install the `slidex` binary to a stable directory |
 | 8 | Add the install directory to `PATH` |
 | 9 | Register the Codex plugin from the bundled `.agents/plugins/marketplace.json` |
-| 10 | Run `slidex --help`, `slidex update status --json`, and `slidex doctor --render` to verify |
+| 10 | Run `slidex --help`, `slidex update status --json`, and `slidex doctor --render` to verify the CLI |
 | 11 | If `pendingActivation` is true, run the reported `pendingActivationCommand` |
-| 12 | If `restartRequired` is true, restart Codex, start a new thread, run `slidex codex app-server plugin-smoke --json`, and then run `slidex update verify --json` |
+| 12 | Start a new Codex thread, run `slidex codex app-server plugin-smoke --json`, and then run `slidex update verify --json` |
+| 13 | If `restartRequired` is true, restart Codex, start a new thread, rerun plugin smoke, and rerun `slidex update verify --json` |

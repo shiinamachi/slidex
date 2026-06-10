@@ -2095,7 +2095,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "cross-platform.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "actions/attest@", "attestations: write", "refusing to overwrite immutable release assets", "gh release create", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "update status --json", "actions/attest@", "attestations: write", "refusing to overwrite immutable release assets", "gh release create", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
@@ -2103,11 +2103,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "GitHub artifact attestation", "gh release verify", "gh attestation verify", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
-			want: []string{"How to use", "사용법", "What this prompt does", "https://github.com/shiinamachi/slidex", "read INSTALL.md"},
+			want: []string{"How to use", "사용법", "What this prompt does", "https://github.com/shiinamachi/slidex", "read INSTALL.md", "GitHub artifact attestation", "plugin-smoke"},
 		},
 	}
 	for _, check := range checks {
@@ -2147,7 +2147,9 @@ func TestUserFacingInstallDocsExposeCanonicalOneShotPrompt(t *testing.T) {
 		"detect the local OS and architecture",
 		"latest GitHub Release tag",
 		"SHA-256 checksum",
+		"GitHub artifact attestation",
 		"register the Codex plugin",
+		`"slidex codex app-server plugin-smoke --json"`,
 		`"slidex --help"`,
 		`"slidex doctor --render"`,
 	} {
