@@ -44,6 +44,37 @@ func TestAppServerClientCommandUsesProcessGroupWindows(t *testing.T) {
 	}
 }
 
+func TestPluginDoctorHelperWindowsInvokesSlidexDoctor(t *testing.T) {
+	root := repoRootForTest(t)
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "args.log")
+	fakeSlidex := filepath.Join(binDir, "slidex.cmd")
+	if err := os.WriteFile(fakeSlidex, []byte("@echo off\r\n"+
+		"type nul > \"%SLIDEX_HELPER_LOG%\"\r\n"+
+		":loop\r\n"+
+		"if \"%~1\"==\"\" exit /b 0\r\n"+
+		"echo %~1>>\"%SLIDEX_HELPER_LOG%\"\r\n"+
+		"shift\r\n"+
+		"goto loop\r\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SLIDEX_HELPER_LOG", logPath)
+	cmd := exec.Command("cmd", "/c", filepath.Join(root, "plugins", "slidex", "scripts", "slidex-doctor.cmd"), "--probe")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("helper failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Fields(strings.ReplaceAll(string(raw), "\r\n", "\n"))
+	want := []string{"doctor", "--codex", "--render", "--json", "--probe"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("helper args = %#v, want %#v", got, want)
+	}
+}
+
 func TestRejectSymlinkEscapeRejectsWindowsJunction(t *testing.T) {
 	workspace := t.TempDir()
 	decksRoot := filepath.Join(workspace, "decks")

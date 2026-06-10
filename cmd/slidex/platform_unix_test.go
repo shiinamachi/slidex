@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,39 @@ func TestAppServerClientCommandUsesProcessGroupUnix(t *testing.T) {
 	cmd := appServerClientExecCommand("codex", "app-server", "--listen", "stdio://")
 	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
 		t.Fatalf("stdio app-server command should start in its own process group: %#v", cmd.SysProcAttr)
+	}
+}
+
+func TestPluginDoctorHelperUnixInvokesSlidexDoctor(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash unavailable: %v", err)
+	}
+	root := repoRootForTest(t)
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "args.log")
+	fakeSlidex := filepath.Join(binDir, "slidex")
+	if err := os.WriteFile(fakeSlidex, []byte(`#!/usr/bin/env sh
+: > "$SLIDEX_HELPER_LOG"
+for arg in "$@"; do
+  printf '%s\n' "$arg" >> "$SLIDEX_HELPER_LOG"
+done
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SLIDEX_HELPER_LOG", logPath)
+	cmd := exec.Command("bash", filepath.Join(root, "plugins", "slidex", "scripts", "slidex-doctor.sh"), "--probe")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("helper failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Fields(strings.ReplaceAll(string(raw), "\r\n", "\n"))
+	want := []string{"doctor", "--codex", "--render", "--json", "--probe"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("helper args = %#v, want %#v", got, want)
 	}
 }
 
