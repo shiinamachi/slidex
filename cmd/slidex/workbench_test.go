@@ -1552,7 +1552,9 @@ func TestWorkbenchLockSerializesAccessAndRejectsSymlink(t *testing.T) {
 	}
 	acquired := make(chan error, 1)
 	releaseSecond := make(chan struct{})
+	secondDone := make(chan struct{})
 	go func() {
+		defer close(secondDone)
 		unlockSecond, err := acquireWorkbenchLock(outDir)
 		if err != nil {
 			acquired <- err
@@ -1566,6 +1568,7 @@ func TestWorkbenchLockSerializesAccessAndRejectsSymlink(t *testing.T) {
 	case err := <-acquired:
 		unlock()
 		close(releaseSecond)
+		<-secondDone
 		t.Fatalf("second lock acquired before first release: %v", err)
 	case <-time.After(120 * time.Millisecond):
 	}
@@ -1581,6 +1584,11 @@ func TestWorkbenchLockSerializesAccessAndRejectsSymlink(t *testing.T) {
 		t.Fatal("second lock did not acquire after first release")
 	}
 	close(releaseSecond)
+	select {
+	case <-secondDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second lock did not release")
+	}
 
 	outsideLock := filepath.Join(t.TempDir(), "outside.lock")
 	if err := os.WriteFile(outsideLock, []byte("outside\n"), 0o600); err != nil {
