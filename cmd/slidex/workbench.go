@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -871,7 +870,7 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		cmd.Env = append(os.Environ(), "SLIDEX_WORKBENCH_TOKEN="+token)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		configureWorkbenchCommand(cmd)
 		if err := cmd.Start(); err != nil {
 			return true, err
 		}
@@ -1564,26 +1563,62 @@ func canonicalWorkbenchManifestPaths(deckAbs string, manifest workbenchManifest)
 }
 
 func acquireWorkbenchLock(outDir string) (func(), error) {
-	f, err := openSecureAppendFile(filepath.Join(outDir, workbenchLockName), 0o600)
+	if err := ensureSecureDir(outDir); err != nil {
+		return nil, err
+	}
+	lockPath := filepath.Join(outDir, workbenchLockName)
+	for {
+		if err := rejectSecureWriteTarget(lockPath); err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_, _ = fmt.Fprintf(f, "pid=%d acquired=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+			return func() {
+				_ = f.Close()
+				_ = os.Remove(lockPath)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if staleWorkbenchLock(lockPath) {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func staleWorkbenchLock(lockPath string) bool {
+	info, err := os.Lstat(lockPath)
 	if err != nil {
-		return nil, err
+		return false
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
-		return nil, err
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false
 	}
-	_, _ = fmt.Fprintf(f, "pid=%d acquired=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
-	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}, nil
+	raw, err := os.ReadFile(lockPath)
+	if err != nil {
+		return time.Since(info.ModTime()) > 5*time.Second
+	}
+	for _, field := range strings.Fields(string(raw)) {
+		if strings.HasPrefix(field, "pid=") {
+			pid, err := strconv.Atoi(strings.TrimPrefix(field, "pid="))
+			if err != nil || pid <= 0 {
+				return time.Since(info.ModTime()) > 5*time.Second
+			}
+			return !processAlive(pid)
+		}
+	}
+	return time.Since(info.ModTime()) > 5*time.Second
 }
 
 func stopWorkbenchProcess(manifest workbenchManifest) {
 	if manifest.PID <= 0 {
 		return
 	}
-	_ = syscall.Kill(-manifest.PID, syscall.SIGTERM)
+	signalWorkbenchProcess(manifest.PID)
 	deadline := time.Now().Add(1200 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if !isWorkbenchReady(manifest) {
@@ -1591,7 +1626,7 @@ func stopWorkbenchProcess(manifest workbenchManifest) {
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
-	_ = syscall.Kill(-manifest.PID, syscall.SIGKILL)
+	killWorkbenchProcess(manifest.PID)
 }
 
 func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid int, status string) workbenchManifest {

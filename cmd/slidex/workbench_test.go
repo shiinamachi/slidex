@@ -1308,7 +1308,7 @@ func TestWorkbenchLockSerializesAccessAndRejectsSymlink(t *testing.T) {
 	if err := os.WriteFile(outsideLock, []byte("outside\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(outDir, workbenchLockName)); err != nil {
+	if err := os.Remove(filepath.Join(outDir, workbenchLockName)); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outsideLock, filepath.Join(outDir, workbenchLockName)); err != nil {

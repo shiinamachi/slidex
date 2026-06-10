@@ -23,7 +23,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -1977,7 +1976,7 @@ func runCodexAppServer(args []string) error {
 			return err
 		}
 		fs := flag.NewFlagSet("codex app-server start", flag.ContinueOnError)
-		listen := fs.String("listen", "unix://", "listen URL")
+		listen := fs.String("listen", "", "listen URL; empty selects the platform-native default")
 		deck := fs.String("deck", "", "deck workspace directory")
 		wsAuth := fs.String("ws-auth", "", "websocket auth mode")
 		wsTokenFile := fs.String("ws-token-file", "", "absolute path to capability token file")
@@ -2034,7 +2033,10 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 			_ = stopManagedAppServer(true)
 		}
 	}
-	actualListen := normalizeManagedListenURL(listen)
+	actualListen, err := normalizeManagedListenURL(listen)
+	if err != nil {
+		return err
+	}
 	if strings.HasPrefix(actualListen, "ws://") {
 		if err := validateWebSocketAuth(actualListen, ws); err != nil {
 			return err
@@ -2095,7 +2097,7 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 		"pid":             cmd.Process.Pid,
 		"codexVersion":    installedCodexVersion(),
 		"listen":          actualListen,
-		"ownerUid":        os.Getuid(),
+		"ownerUid":        currentOwnerID(),
 		"authMode":        firstNonEmpty(ws.Mode, "none"),
 		"websocketAuth":   ws,
 		"attachedDeckIds": decks,
@@ -2220,18 +2222,14 @@ func stopManagedAppServer(force bool) error {
 }
 
 func appServerMetadataPath() string {
-	base := os.Getenv("XDG_RUNTIME_DIR")
-	if base == "" {
-		base = filepath.Join(os.TempDir(), fmt.Sprintf("slidex-%d", os.Getuid()))
-	}
-	return filepath.Join(base, "slidex", "codex-app-server.json")
+	return filepath.Join(appServerRuntimeBaseDir(), "slidex", "codex-app-server.json")
 }
 
-func normalizeManagedListenURL(listen string) string {
+func normalizeManagedListenURL(listen string) (string, error) {
 	if listen == "" || listen == "unix://" {
-		return "unix://" + filepath.Join(filepath.Dir(appServerMetadataPath()), "codex-app-server.sock")
+		return managedAppServerDefaultListen()
 	}
-	return listen
+	return listen, nil
 }
 
 func readAppServerMetadata(path string) map[string]any {
@@ -2587,17 +2585,6 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 	return nil
 }
 
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		return false
-	}
-	return true
-}
-
 func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 	loopback := strings.HasPrefix(listen, "ws://127.0.0.1:") || strings.HasPrefix(listen, "ws://localhost:")
 	switch ws.Mode {
@@ -2870,7 +2857,7 @@ func parseTomlStringArray(value string) []string {
 func transportRiskForListen(listen string) string {
 	if strings.HasPrefix(listen, "ws://") {
 		if strings.HasPrefix(listen, "ws://127.0.0.1:") || strings.HasPrefix(listen, "ws://localhost:") {
-			return "WebSocket App Server is experimental/unsupported and limited to loopback."
+			return ""
 		}
 		return "Non-loopback WebSocket App Server requires explicit auth and external TLS or SSH tunnel."
 	}

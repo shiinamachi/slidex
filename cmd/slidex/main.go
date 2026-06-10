@@ -2268,17 +2268,98 @@ func resolveChrome(explicit string) (string, error) {
 		}
 		return "", fmt.Errorf("chrome binary not found: %s", explicit)
 	}
-	if env := os.Getenv("CHROME_BIN"); env != "" {
-		if _, err := os.Stat(env); err == nil {
-			return env, nil
+	for _, envName := range chromeEnvironmentVariables() {
+		if env := os.Getenv(envName); env != "" {
+			if _, err := os.Stat(env); err == nil {
+				return env, nil
+			}
 		}
 	}
-	for _, candidate := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+	for _, candidate := range chromeExecutableCandidates(runtime.GOOS) {
+		if filepath.IsAbs(candidate) {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			continue
+		}
 		if path, err := exec.LookPath(candidate); err == nil {
 			return path, nil
 		}
 	}
 	return "", errors.New("Chrome/Chromium binary not found")
+}
+
+func chromeEnvironmentVariables() []string {
+	return []string{"CHROME_BIN", "GOOGLE_CHROME_BIN", "CHROMIUM_BIN", "MSEDGE_BIN"}
+}
+
+func chromeExecutableCandidates(goos string) []string {
+	candidates := []string{}
+	add := func(values ...string) {
+		for _, value := range values {
+			if value != "" {
+				candidates = append(candidates, value)
+			}
+		}
+	}
+	switch goos {
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		add(
+			"google-chrome",
+			"chrome",
+			"chromium",
+			"microsoft-edge",
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		)
+		if home != "" {
+			add(
+				filepath.Join(home, "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+				filepath.Join(home, "Applications", "Chromium.app", "Contents", "MacOS", "Chromium"),
+				filepath.Join(home, "Applications", "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"),
+				filepath.Join(home, "Applications", "Brave Browser.app", "Contents", "MacOS", "Brave Browser"),
+			)
+		}
+	case "windows":
+		localAppData := os.Getenv("LOCALAPPDATA")
+		programFiles := os.Getenv("ProgramFiles")
+		programFilesX86 := os.Getenv("ProgramFiles(x86)")
+		add(
+			"chrome.exe",
+			"chrome",
+			"msedge.exe",
+			"msedge",
+			"chromium.exe",
+			"chromium",
+		)
+		for _, root := range []string{programFiles, programFilesX86, localAppData} {
+			if root == "" {
+				continue
+			}
+			add(
+				filepath.Join(root, "Google", "Chrome", "Application", "chrome.exe"),
+				filepath.Join(root, "Chromium", "Application", "chrome.exe"),
+				filepath.Join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
+				filepath.Join(root, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+			)
+		}
+	default:
+		add(
+			"google-chrome",
+			"google-chrome-stable",
+			"chrome",
+			"chromium",
+			"chromium-browser",
+			"microsoft-edge",
+			"microsoft-edge-stable",
+			"msedge",
+			"brave-browser",
+		)
+	}
+	return uniqueStrings(candidates)
 }
 
 func chromeVersion(chromePath string) string {

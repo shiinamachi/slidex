@@ -219,6 +219,20 @@ mise exec -- go test ./...
 표기는 사용하지 않습니다. 원격 CSS, 폰트, 브라우저/렌더러, 이미지 처리 도구는 exact
 version을 기록하거나 로컬에 vendoring하고 SHA-256을 남깁니다.
 
+## 플랫폼 지원
+
+`slidex` CLI와 Codex Plugin 경로는 Windows, Linux, macOS를 지원 대상으로 둡니다.
+OS별 기본값은 기능 차이를 만들지 않도록 CLI 내부에서 선택합니다.
+
+- Chrome/Chromium 탐색은 `CHROME_BIN`, `GOOGLE_CHROME_BIN`, `CHROMIUM_BIN`,
+  `MSEDGE_BIN`을 먼저 보고, 이후 Windows Chrome/Edge 설치 경로, macOS app bundle,
+  Linux PATH 명령명을 자동 탐색합니다.
+- `slidex codex app-server start`는 Linux/macOS에서 Unix socket을, Windows에서
+  `127.0.0.1` loopback WebSocket을 기본 transport로 사용합니다. 모든 OS에서
+  `--listen`으로 명시 override할 수 있습니다.
+- plugin doctor helper는 Unix shell용 `scripts/slidex-doctor.sh`와 Windows
+  `cmd.exe`용 `scripts/slidex-doctor.cmd`를 함께 제공합니다.
+
 ## HTML/PDF 계약
 
 - 정적 HTML/CSS slide structure를 사용합니다.

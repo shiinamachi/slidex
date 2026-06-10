@@ -24,6 +24,13 @@ mise exec -- go version
 mise exec -- go install ./cmd/slidex
 ```
 
+## 플랫폼 지원
+
+지원 대상 OS는 Windows, Linux, macOS입니다. 렌더링은 OS별 Chrome/Chromium 또는
+Microsoft Edge 설치 위치를 자동 탐색하며, 필요하면 `CHROME_BIN` 또는 `--chrome`으로
+명시할 수 있습니다. App Server managed mode는 Linux/macOS에서 Unix socket, Windows에서
+`127.0.0.1` loopback WebSocket을 기본 transport로 선택합니다.
+
 ## Primary CLI Workflow
 
 새 deck creation을 Codex App에서 시작할 때는 plugin workbench를 사용합니다.

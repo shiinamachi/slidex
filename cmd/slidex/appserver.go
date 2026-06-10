@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -1142,7 +1143,11 @@ func saveAppServerSkillSmokeInput(deckAbs string, manifest workbenchManifest) (w
 }
 
 func appServerSkillSmokeWorkbenchCommand(workspace, deckID, fromTemplate string) string {
-	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s --from-template %s", shellQuote(workspace), shellQuote(deckID), shellQuote(fromTemplate))
+	quote := shellQuote
+	if runtime.GOOS == "windows" {
+		quote = windowsShellQuote
+	}
+	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s --from-template %s", quote(workspace), quote(deckID), quote(fromTemplate))
 }
 
 func shellQuote(s string) string {
@@ -1155,6 +1160,18 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func windowsShellQuote(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if strings.IndexFunc(s, func(r rune) bool {
+		return strings.ContainsRune(" \t\r\n\"&|<>()^", r)
+	}) == -1 {
+		return s
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
 func appServerSkillSmokePrompt(workspace, deckID, command string) string {

@@ -1093,6 +1093,9 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
 		t.Fatalf("command was not shell quoted as expected: %s", command)
 	}
+	if got := windowsShellQuote(`C:\Users\Me\slidex workspace`); got != `"C:\Users\Me\slidex workspace"` {
+		t.Fatalf("windows shell quote did not preserve spaced path: %s", got)
+	}
 	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
 	if !strings.Contains(prompt, "Do not run render, QA, package") {
 		t.Fatalf("prompt must keep skill smoke scoped: %s", prompt)
@@ -1601,7 +1604,7 @@ func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
 	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	risk := "WebSocket App Server is experimental/unsupported and limited to loopback."
+	risk := "Non-loopback WebSocket App Server requires explicit auth and external TLS or SSH tunnel."
 	if err := recordWebSocketTransportRisk(deck, risk, filepath.Join(outDir, "codex-app-server.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -1642,6 +1645,15 @@ func TestWebSocketRiskIsRecordedInStateAndDeliverySummary(t *testing.T) {
 	findings = verifyTextArtifactFreshness("delivery_summary", path, filepath.Join(outDir, "render_manifest.json"), []string{riskStateHashForDeck(deck)})
 	if !hasFailures(findings) {
 		t.Fatalf("delivery summary should be stale after state risk change")
+	}
+}
+
+func TestTransportRiskForListenTreatsLoopbackWebSocketAsSupported(t *testing.T) {
+	if risk := transportRiskForListen("ws://127.0.0.1:49200/app"); risk != "" {
+		t.Fatalf("loopback websocket should not record transport risk: %q", risk)
+	}
+	if risk := transportRiskForListen("ws://0.0.0.0:49200/app"); !strings.Contains(risk, "Non-loopback") {
+		t.Fatalf("non-loopback websocket should require explicit network protection, got %q", risk)
 	}
 }
 
