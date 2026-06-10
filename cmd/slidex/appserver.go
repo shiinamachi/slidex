@@ -533,7 +533,8 @@ func writeAppServerTurnResult(outDir string, result appServerTurnResult) (string
 	if err := ensureSecureDir(dir); err != nil {
 		return "", result, err
 	}
-	eventPath := filepath.Join(dir, result.Stage+"_appserver_events.jsonl")
+	stageComponent := safeFilenameComponent(result.Stage)
+	eventPath := filepath.Join(dir, stageComponent+"_appserver_events.jsonl")
 	if len(result.Events) > 0 {
 		f, err := openSecureTruncateFile(eventPath, 0o600)
 		if err != nil {
@@ -551,7 +552,7 @@ func writeAppServerTurnResult(outDir string, result appServerTurnResult) (string
 		}
 		result.EventLog = filepath.ToSlash(eventPath)
 	}
-	path := filepath.Join(dir, result.Stage+"_appserver_turn.json")
+	path := filepath.Join(dir, stageComponent+"_appserver_turn.json")
 	return path, result, secureWriteJSON(path, result)
 }
 

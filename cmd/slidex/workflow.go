@@ -2370,9 +2370,13 @@ func probeManagedAppServer(metadata map[string]any) (map[string]any, error) {
 	if !strings.HasPrefix(listen, "unix://") {
 		return map[string]any{"status": "recorded", "listen": listen, "note": "direct health probe is only implemented for managed unix sockets"}, nil
 	}
-	sock := strings.TrimPrefix(listen, "unix://")
-	if sock == "" {
-		return nil, fmt.Errorf("managed unix listen URL has no socket path")
+	u, err := url.Parse(listen)
+	if err != nil {
+		return nil, fmt.Errorf("invalid managed unix listen URL: %v", err)
+	}
+	sock, err := unixSocketPathFromListenURL(u)
+	if err != nil {
+		return nil, err
 	}
 	client, err := newUnixAppServerClient(sock)
 	if err != nil {
@@ -3751,9 +3755,9 @@ func callMCPTool(name string, args map[string]any) (any, error) {
 
 func authoringArtifactCandidates(deckAbs, stage string) []string {
 	outDir := filepath.Join(deckAbs, "out", "agent_runs")
-	safeStage := strings.NewReplacer("/", "_", " ", "_").Replace("authoring_" + stage)
+	safeStage := safeFilenameComponent("authoring_" + stage)
 	return []string{
-		filepath.Join(outDir, "authoring_"+stage+"_appserver_turn.json"),
+		filepath.Join(outDir, safeStage+"_appserver_turn.json"),
 		filepath.Join(outDir, safeStage+"_codex_exec_fresh.json"),
 		filepath.Join(outDir, safeStage+"_codex_exec_resume.json"),
 	}
@@ -4552,7 +4556,7 @@ func writeStructuredReviewPayload(deckAbs, stage string, round int, payload map[
 	if err := ensureSecureDir(outDir); err != nil {
 		return "", err
 	}
-	reportPath := filepath.Join(outDir, "reviewer_"+stage+".json")
+	reportPath := filepath.Join(outDir, "reviewer_"+safeFilenameComponent(stage)+".json")
 	resolutionPath := filepath.Join(outDir, "resolution.md")
 	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
 		return "", err
@@ -5168,13 +5172,54 @@ func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Rea
 	}
 }
 
+func safeFilenameComponent(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.'
+		if ok {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	safe := strings.Trim(b.String(), "._")
+	if safe == "" || safe == "." || safe == ".." {
+		safe = "stage"
+	}
+	if isWindowsReservedFilenameStem(safe) {
+		safe = "_" + safe
+	}
+	return safe
+}
+
+func isWindowsReservedFilenameStem(value string) bool {
+	stem := value
+	if before, _, ok := strings.Cut(stem, "."); ok {
+		stem = before
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
+}
+
 func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bool, resumeTarget string, images []string) (string, map[string]any, error) {
 	outDir := filepath.Join(deckAbs, "out")
 	runDir := filepath.Join(outDir, "agent_runs")
 	if err := ensureSecureDir(runDir); err != nil {
 		return "", nil, err
 	}
-	safeStage := strings.NewReplacer("/", "_", " ", "_").Replace(stage)
+	safeStage := safeFilenameComponent(stage)
 	mode := "fresh"
 	if resume {
 		mode = "resume"

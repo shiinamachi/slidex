@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2659,6 +2660,23 @@ func TestManagedListenURLRejectsUnsupportedUnixSocketPaths(t *testing.T) {
 	}
 }
 
+func TestUnixSocketListenURLDecodesPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix socket path decoding uses native absolute path rules")
+	}
+	u, err := url.Parse("unix:///tmp/slidex%20sock/app.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath, err := unixSocketPathFromListenURL(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if socketPath != "/tmp/slidex sock/app.sock" {
+		t.Fatalf("socket path = %q", socketPath)
+	}
+}
+
 func TestWebSocketSignedBearerAuthIsSentToHealthAndPing(t *testing.T) {
 	dir := t.TempDir()
 	secret := filepath.Join(dir, "secret")
@@ -2803,6 +2821,51 @@ func TestStateAndRunLogUseSecurePermissionsAndRedaction(t *testing.T) {
 	logText := readFileOrEmpty(filepath.Join(outDir, "run_log.jsonl"))
 	if strings.Contains(logText, "secret-token") || strings.Contains(logText, "raw-token") {
 		t.Fatalf("run log was not redacted: %s", logText)
+	}
+}
+
+func TestSafeFilenameComponentIsWindowsPortable(t *testing.T) {
+	cases := map[string]string{
+		"qa":                   "qa",
+		"review start":         "review_start",
+		`../bad\stage:CON*?`:   "bad_stage_CON",
+		"CON":                  "_CON",
+		"aux.txt":              "_aux.txt",
+		" LPT1. ":              "_LPT1",
+		"한글":                   "stage",
+		`name"with<bad>|chars`: "name_with_bad_chars",
+	}
+	for input, want := range cases {
+		if got := safeFilenameComponent(input); got != want {
+			t.Fatalf("safeFilenameComponent(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestAppServerTurnArtifactsUseSafeStageFilename(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	path, result, err := writeAppServerTurnResult(outDir, appServerTurnResult{
+		Stage:    `../bad\stage:CON*?`,
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Events:   []map[string]any{{"event": "ok"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDir := filepath.Join(outDir, "agent_runs")
+	if !pathWithin(runDir, path) {
+		t.Fatalf("turn path escaped agent_runs: %s", path)
+	}
+	if filepath.Base(path) != "bad_stage_CON_appserver_turn.json" {
+		t.Fatalf("turn filename = %q", filepath.Base(path))
+	}
+	if result.EventLog == "" || !strings.HasSuffix(result.EventLog, "bad_stage_CON_appserver_events.jsonl") {
+		t.Fatalf("event log should use safe stage filename: %#v", result)
+	}
+	if strings.ContainsAny(filepath.Base(path), `\/:*?"<>|`) {
+		t.Fatalf("turn filename is not Windows-safe: %q", filepath.Base(path))
 	}
 }
 

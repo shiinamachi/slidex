@@ -4012,7 +4012,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	visualReviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
 	structuredReviewPaths := []string{}
 	for _, stage := range structuredReviewStages() {
-		structuredReviewPaths = append(structuredReviewPaths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+stage+".json"))
+		structuredReviewPaths = append(structuredReviewPaths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+safeFilenameComponent(stage)+".json"))
 	}
 	findings = append(findings, verifyPackageSpec(specPath)...)
 	if raw, err := os.ReadFile(manifestPath); err == nil {
