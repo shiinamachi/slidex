@@ -1618,6 +1618,9 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not use Unix executable mode bits")
+	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatal("scripts/package-release.sh must be executable")
 	}
