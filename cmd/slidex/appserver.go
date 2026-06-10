@@ -64,29 +64,35 @@ type appServerTurnResult struct {
 }
 
 type appServerPluginSmokeResult struct {
-	SchemaVersion        string         `json:"schemaVersion"`
-	ToolName             string         `json:"toolName"`
-	ToolVersion          string         `json:"toolVersion"`
-	Status               string         `json:"status"`
-	GeneratedAt          string         `json:"generatedAt"`
-	CodexVersion         string         `json:"codexVersion"`
-	Workspace            string         `json:"workspace"`
-	DeckID               string         `json:"deckId"`
-	ThreadID             string         `json:"threadId"`
-	MarketplacePath      string         `json:"marketplacePath"`
-	PluginReadOK         bool           `json:"pluginReadOk"`
-	StartSkillFound      bool           `json:"startSkillFound"`
-	MCPServerFound       bool           `json:"mcpServerFound"`
-	WorkbenchToolsFound  []string       `json:"workbenchToolsFound"`
-	WorkbenchURL         string         `json:"workbenchUrl,omitempty"`
-	ServerBind           string         `json:"serverBind,omitempty"`
-	StartStatus          string         `json:"startStatus,omitempty"`
-	StatusStatus         string         `json:"statusStatus,omitempty"`
-	StopStatus           string         `json:"stopStatus,omitempty"`
-	EvidencePath         string         `json:"evidencePath,omitempty"`
-	BrowserOpenStrategy  string         `json:"browserOpenStrategy,omitempty"`
-	ProprietaryCanvasAPI string         `json:"proprietaryCanvasApi,omitempty"`
-	Checks               map[string]any `json:"checks"`
+	SchemaVersion            string         `json:"schemaVersion"`
+	ToolName                 string         `json:"toolName"`
+	ToolVersion              string         `json:"toolVersion"`
+	Status                   string         `json:"status"`
+	GeneratedAt              string         `json:"generatedAt"`
+	CodexVersion             string         `json:"codexVersion"`
+	Workspace                string         `json:"workspace"`
+	DeckID                   string         `json:"deckId"`
+	ThreadID                 string         `json:"threadId"`
+	MarketplacePath          string         `json:"marketplacePath"`
+	PluginReadOK             bool           `json:"pluginReadOk"`
+	PluginVersion            string         `json:"pluginVersion,omitempty"`
+	PluginPath               string         `json:"pluginPath,omitempty"`
+	StartSkillFound          bool           `json:"startSkillFound"`
+	StartSkillPath           string         `json:"startSkillPath,omitempty"`
+	MCPServerFound           bool           `json:"mcpServerFound"`
+	WorkbenchToolsFound      []string       `json:"workbenchToolsFound"`
+	WorkbenchURL             string         `json:"workbenchUrl,omitempty"`
+	ServerBind               string         `json:"serverBind,omitempty"`
+	StartStatus              string         `json:"startStatus,omitempty"`
+	StatusStatus             string         `json:"statusStatus,omitempty"`
+	StopStatus               string         `json:"stopStatus,omitempty"`
+	EvidencePath             string         `json:"evidencePath,omitempty"`
+	BrowserOpenStrategy      string         `json:"browserOpenStrategy,omitempty"`
+	ProprietaryCanvasAPI     string         `json:"proprietaryCanvasApi,omitempty"`
+	RestartRequiredBefore    bool           `json:"restartRequiredBefore"`
+	RestartRequiredAfter     bool           `json:"restartRequiredAfter"`
+	PluginVerificationStatus string         `json:"pluginVerificationStatus,omitempty"`
+	Checks                   map[string]any `json:"checks"`
 }
 
 type appServerSkillSmokeResult struct {
@@ -717,14 +723,30 @@ func appServerWorkbenchPluginSmoke(workspace, deckID string) (appServerPluginSmo
 		return result, err
 	}
 	result.PluginReadOK = pluginResp["result"] != nil
+	result.PluginVersion, result.PluginPath = pluginReadVersionAndPath(pluginResp["result"])
+	if result.PluginPath != "" && !filepath.IsAbs(result.PluginPath) {
+		result.PluginPath = mustAbs(result.PluginPath)
+	}
+	result.PluginPath = filepath.ToSlash(result.PluginPath)
 	result.Checks["pluginRead"] = summarizeJSONForEvidence(pluginResp["result"])
 
 	skillsResp, _, err := client.request("skills/list", map[string]any{"cwds": []string{mustAbs(".")}, "forceReload": true}, 20*time.Second)
 	if err != nil {
 		return result, err
 	}
-	result.StartSkillFound = jsonContainsString(skillsResp["result"], "slidex-start")
-	result.Checks["skillsList"] = map[string]any{"containsSlidexStart": result.StartSkillFound}
+	startSkillPath, startSkillFound := findSkillPathInSkillsList(skillsResp["result"], "slidex:slidex-start")
+	if !startSkillFound {
+		startSkillPath, startSkillFound = findSkillPathInSkillsList(skillsResp["result"], "slidex-start")
+	}
+	if startSkillFound && !filepath.IsAbs(startSkillPath) {
+		startSkillPath = mustAbs(startSkillPath)
+	}
+	result.StartSkillFound = startSkillFound || jsonContainsString(skillsResp["result"], "slidex-start")
+	result.StartSkillPath = filepath.ToSlash(startSkillPath)
+	result.Checks["skillsList"] = map[string]any{
+		"containsSlidexStart": result.StartSkillFound,
+		"startSkillPath":      result.StartSkillPath,
+	}
 
 	threadResp, _, err := client.request("thread/start", map[string]any{
 		"cwd":                   mustAbs("."),
@@ -801,6 +823,7 @@ func appServerWorkbenchPluginSmoke(workspace, deckID string) (appServerPluginSmo
 		result.ServerBind == "127.0.0.1" && result.ProprietaryCanvasAPI == "not_used" {
 		result.Status = "pass"
 	}
+	applyPostRestartPluginVerification(&result)
 	deckAbs := filepath.Join(workspace, "decks", deckID)
 	evidencePath := filepath.Join(deckAbs, "out", appServerPluginSmokeName)
 	result.EvidencePath = filepath.ToSlash(evidencePath)
@@ -1268,6 +1291,94 @@ func skillPathFromObject(obj map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func pluginReadVersionAndPath(v any) (version, path string) {
+	version = firstJSONTextByKey(v, "version", "pluginVersion")
+	path = firstJSONTextByKey(v, "path", "pluginPath", "sourcePath")
+	return version, path
+}
+
+func firstJSONTextByKey(v any, keys ...string) string {
+	keySet := map[string]bool{}
+	for _, key := range keys {
+		keySet[key] = true
+	}
+	if obj, ok := v.(map[string]any); ok {
+		for key, value := range obj {
+			if keySet[key] {
+				if text, _ := value.(string); strings.TrimSpace(text) != "" {
+					return strings.TrimSpace(text)
+				}
+			}
+		}
+		for _, value := range obj {
+			if text := firstJSONTextByKey(value, keys...); text != "" {
+				return text
+			}
+		}
+	}
+	if items, ok := v.([]any); ok {
+		for _, item := range items {
+			if text := firstJSONTextByKey(item, keys...); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func applyPostRestartPluginVerification(result *appServerPluginSmokeResult) {
+	status, err := currentUpdateStatus("", "")
+	if err != nil {
+		result.PluginVerificationStatus = "unknown"
+		result.Checks["pluginVerificationError"] = err.Error()
+		return
+	}
+	result.RestartRequiredBefore = status.RestartRequired
+	result.PluginVerificationStatus = postRestartPluginVerificationStatus(*result, status.InstallRoot)
+	if result.Status == "pass" && result.PluginVerificationStatus == "verified" {
+		if err := markPluginVerified(status.InstallRoot, result.PluginVersion, result.StartSkillPath); err != nil {
+			result.Checks["pluginVerificationError"] = err.Error()
+		}
+	}
+	after, err := currentUpdateStatus(status.InstallRoot, status.MetadataPath)
+	if err == nil {
+		result.RestartRequiredAfter = after.RestartRequired
+	}
+	result.Checks["postRestartPluginVerification"] = map[string]any{
+		"status":                result.PluginVerificationStatus,
+		"restartRequiredBefore": result.RestartRequiredBefore,
+		"restartRequiredAfter":  result.RestartRequiredAfter,
+		"pluginVersion":         result.PluginVersion,
+		"pluginPath":            result.PluginPath,
+		"startSkillPath":        result.StartSkillPath,
+	}
+}
+
+func postRestartPluginVerificationStatus(result appServerPluginSmokeResult, installRoot string) string {
+	if !result.PluginReadOK || !result.StartSkillFound {
+		return "not_verified"
+	}
+	if pluginVersionBase(result.PluginVersion) != toolVersion {
+		return "drift"
+	}
+	if strings.TrimSpace(result.PluginPath) == "" || strings.TrimSpace(result.StartSkillPath) == "" {
+		return "not_verified"
+	}
+	pluginRoot := filepath.Join(filepath.Clean(installRoot), "plugins", "slidex")
+	pluginPath := filepath.Clean(filepath.FromSlash(result.PluginPath))
+	skillPath := filepath.Clean(filepath.FromSlash(result.StartSkillPath))
+	if !filepath.IsAbs(pluginPath) || !filepath.IsAbs(skillPath) {
+		return "not_verified"
+	}
+	if !pathWithin(pluginRoot, pluginPath) || !pathWithin(pluginRoot, skillPath) {
+		return "drift"
+	}
+	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
+		return "drift"
+	}
+	return "verified"
 }
 
 func isLoopbackWorkbenchURL(raw string) bool {

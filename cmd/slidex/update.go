@@ -399,6 +399,26 @@ func markPluginRestartRequired(installRoot, targetVersion, targetTag string) err
 	})
 }
 
+func markPluginVerified(installRoot, pluginVersion, skillPath string) error {
+	if installRoot == "" {
+		installRoot = defaultInstallRoot()
+	}
+	state, _, _ := readUpdateState(installRoot)
+	if state == nil {
+		state = &updateState{}
+	}
+	state.CurrentVersion = toolVersion
+	if state.TargetVersion == "" {
+		state.TargetVersion = pluginVersionBase(pluginVersion)
+	}
+	state.RestartRequired = false
+	state.RestartReason = ""
+	state.VerificationStatus = "verified"
+	state.VerificationCommand = "slidex update verify --json"
+	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return writeUpdateState(installRoot, *state)
+}
+
 func inferUpdateChannel(installRoot string, metadata *installMetadata, metadataErr error) (channel, mode, reason string) {
 	if metadata != nil {
 		switch metadata.Channel {

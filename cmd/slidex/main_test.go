@@ -1235,6 +1235,91 @@ func TestAppServerPluginSmokeHelpers(t *testing.T) {
 	if strings.Contains(string(raw), "secret-value") {
 		t.Fatalf("summary leaked secret: %s", raw)
 	}
+	plugin := map[string]any{
+		"plugin": map[string]any{
+			"version": toolVersion + "+codex.test",
+			"source":  map[string]any{"path": "/opt/slidex/plugins/slidex"},
+		},
+	}
+	version, path := pluginReadVersionAndPath(plugin)
+	if version != toolVersion+"+codex.test" || path != "/opt/slidex/plugins/slidex" {
+		t.Fatalf("plugin read details = %q / %q", version, path)
+	}
+}
+
+func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	result := appServerPluginSmokeResult{
+		Status:          "pass",
+		PluginReadOK:    true,
+		PluginVersion:   toolVersion + "+codex.test",
+		PluginPath:      filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
+		StartSkillFound: true,
+		StartSkillPath:  filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+		Checks:          map[string]any{},
+	}
+	applyPostRestartPluginVerification(&result)
+	if result.PluginVerificationStatus != "verified" {
+		t.Fatalf("verification status = %q, checks = %#v", result.PluginVerificationStatus, result.Checks)
+	}
+	if !result.RestartRequiredBefore || result.RestartRequiredAfter {
+		t.Fatalf("restart state before/after = %v/%v", result.RestartRequiredBefore, result.RestartRequiredAfter)
+	}
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RestartRequired || status.PluginVerificationStatus != "verified" {
+		t.Fatalf("persisted status = %#v", status)
+	}
+}
+
+func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	result := appServerPluginSmokeResult{
+		Status:          "pass",
+		PluginReadOK:    true,
+		PluginVersion:   toolVersion + "+codex.test",
+		PluginPath:      filepath.ToSlash(filepath.Join(t.TempDir(), "plugins", "slidex")),
+		StartSkillFound: true,
+		StartSkillPath:  filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+		Checks:          map[string]any{},
+	}
+	applyPostRestartPluginVerification(&result)
+	if result.PluginVerificationStatus != "drift" {
+		t.Fatalf("verification status = %q", result.PluginVerificationStatus)
+	}
+	if !result.RestartRequiredAfter {
+		t.Fatalf("restart-required should remain after drift: %#v", result)
+	}
 }
 
 func TestAppServerSkillSmokeHelpers(t *testing.T) {
