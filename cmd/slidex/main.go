@@ -2614,11 +2614,11 @@ func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) 
 		fileURLFromPath(htmlPath),
 	)
 	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
-	if err != nil {
-		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
-	}
 	re := regexp.MustCompile(`(?is)<script id="slidex-overflow-data" type="application/json">(.*?)</script>`)
 	m := re.FindStringSubmatch(string(out))
+	if err != nil && !(isChromeCommandTimeout(err) && len(m) >= 2) {
+		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
+	}
 	if len(m) < 2 {
 		return nil, errors.New("overflow report missing from dumped DOM")
 	}

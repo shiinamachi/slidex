@@ -48,11 +48,11 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 		fileURLFromPath(tmpHTML),
 	)
 	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
-	if err != nil {
-		return nil, "", fmt.Errorf("chrome DOM enumeration failed: %w\n%s", err, string(out))
-	}
 	re := regexp.MustCompile(`(?is)<script id="slidex-slide-enumeration" type="application/json">(.*?)</script>`)
 	m := re.FindStringSubmatch(string(out))
+	if err != nil && !(isChromeCommandTimeout(err) && len(m) >= 2) {
+		return nil, "", fmt.Errorf("chrome DOM enumeration failed: %w\n%s", err, string(out))
+	}
 	if len(m) < 2 {
 		return nil, "", errorsNew("slide enumeration data missing from dumped DOM")
 	}
