@@ -7024,6 +7024,10 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 	if err != nil {
 		return err
 	}
+	return validateRawJSONAgainstSchema(raw, schemaPath)
+}
+
+func validateRawJSONAgainstSchema(instanceRaw []byte, schemaPath string) error {
 	schemaRaw, err := os.ReadFile(schemaPath)
 	if err != nil {
 		return err
@@ -7032,7 +7036,7 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
 		return err
 	}
-	findings := validateWithFullJSONSchema(raw, schema, schemaPath)
+	findings := validateWithFullJSONSchema(instanceRaw, schema, schemaPath)
 	if hasFailures(findings) {
 		return fmt.Errorf("payload failed %s validation: %v", schemaPath, findings)
 	}

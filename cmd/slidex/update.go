@@ -72,6 +72,7 @@ type installMetadata struct {
 	InstallMode      string `json:"installMode"`
 	OS               string `json:"os"`
 	Arch             string `json:"arch"`
+	Raw              []byte `json:"-"`
 }
 
 type updateState struct {
@@ -1399,6 +1400,9 @@ func readPendingUpdate(installRoot string) (*pendingUpdate, string, error) {
 	if err := json.Unmarshal(raw, &pending); err != nil {
 		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
 	}
+	if err := validateRawJSONAgainstBundledSchema(raw, pendingUpdateSchemaFile); err != nil {
+		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
+	}
 	if pending.SchemaVersion != "" && pending.SchemaVersion != pendingUpdateSchemaVersion {
 		return nil, path, fmt.Errorf("%s: unsupported schemaVersion %q", filepath.ToSlash(path), pending.SchemaVersion)
 	}
@@ -1686,7 +1690,20 @@ func installedReleaseMetadataIssue(metadata *installMetadata) string {
 	if metadata.Arch != runtime.GOARCH {
 		return "install metadata arch must be " + runtime.GOARCH + ", got " + metadata.Arch
 	}
+	if err := validateInstallMetadataSchema(metadata); err != nil {
+		return "install metadata schema validation failed: " + err.Error()
+	}
 	return ""
+}
+
+func validateInstallMetadataSchema(metadata *installMetadata) error {
+	if metadata == nil {
+		return errors.New("install metadata is missing")
+	}
+	if len(metadata.Raw) > 0 {
+		return validateRawJSONAgainstBundledSchema(metadata.Raw, installMetadataSchemaFile)
+	}
+	return validatePayloadAgainstBundledSchema(*metadata, installMetadataSchemaFile)
 }
 
 func defaultInstallRoot() string {
@@ -1723,6 +1740,10 @@ func validatePayloadAgainstBundledSchema(payload any, schemaName string) error {
 	return validatePayloadAgainstSchema(payload, bundledSchemaPath(schemaName))
 }
 
+func validateRawJSONAgainstBundledSchema(raw []byte, schemaName string) error {
+	return validateRawJSONAgainstSchema(raw, bundledSchemaPath(schemaName))
+}
+
 func readInstallMetadata(path string) (*installMetadata, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -1738,6 +1759,7 @@ func readInstallMetadata(path string) (*installMetadata, error) {
 	if metadata.ToolName != "" && metadata.ToolName != toolName {
 		return nil, fmt.Errorf("%s: toolName must be %s", filepath.ToSlash(path), toolName)
 	}
+	metadata.Raw = append([]byte(nil), raw...)
 	return &metadata, nil
 }
 
@@ -1749,6 +1771,9 @@ func readUpdateState(installRoot string) (*updateState, string, error) {
 	}
 	var state updateState
 	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
+	}
+	if err := validateRawJSONAgainstBundledSchema(raw, updateStateSchemaFile); err != nil {
 		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
 	}
 	if state.SchemaVersion != updateStateSchemaVersion {
@@ -2291,7 +2316,7 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 	if metadata, err := readInstallMetadata(metadataPath); err != nil {
 		findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
 	} else {
-		if err := validatePayloadAgainstBundledSchema(*metadata, installMetadataSchemaFile); err != nil {
+		if err := validateInstallMetadataSchema(metadata); err != nil {
 			findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
 		}
 		if metadata.Version != expectedVersion {

@@ -288,6 +288,42 @@ func TestUpdateStatusDisablesIncompleteReleaseMetadata(t *testing.T) {
 	}
 }
 
+func TestUpdateStatusDisablesSchemaInvalidReleaseMetadata(t *testing.T) {
+	temp := t.TempDir()
+	metadataPath := filepath.Join(temp, "install.json")
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["unexpectedField"] = true
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(filepath.Join(temp, "slidex"), metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled || status.Status != "disabled" {
+		t.Fatalf("schema-invalid release metadata should disable updates: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "schema validation failed") {
+		t.Fatalf("schema-invalid metadata reason missing: %#v", status)
+	}
+}
+
 func TestUpdateCheckIncompleteReleaseMetadataDoesNotFetchReleaseAPI(t *testing.T) {
 	temp := t.TempDir()
 	metadataPath := filepath.Join(temp, "install.json")
@@ -587,6 +623,33 @@ func TestValidateCandidateBundleChecksInstallMetadataFields(t *testing.T) {
 	findings := validateCandidateBundle(root, "0.2.0")
 	if !findingCheckPresent(findings, "update.candidate_install_metadata") {
 		t.Fatalf("candidate install metadata omission should fail: %#v", findings)
+	}
+}
+
+func TestValidateCandidateBundleRejectsInstallMetadataAdditionalProperties(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	metadataPath := filepath.Join(root, ".slidex", "install.json")
+	raw, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["unexpectedField"] = true
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings := validateCandidateBundle(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_install_metadata") {
+		t.Fatalf("candidate install metadata additional property should fail: %#v", findings)
 	}
 }
 
@@ -1311,6 +1374,38 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	}
 }
 
+func TestReadPendingUpdateRejectsAdditionalProperties(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	path := pendingUpdatePath(installRoot)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["unexpectedField"] = true
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = readPendingUpdate(installRoot)
+	if err == nil || !strings.Contains(err.Error(), "validation") {
+		t.Fatalf("pending update with additional field should fail schema validation, got %v", err)
+	}
+}
+
 func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
@@ -1515,6 +1610,46 @@ func TestUpdateStatusRejectsForgedVerifiedUpdateState(t *testing.T) {
 	err = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath})
 	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
 		t.Fatalf("forged verified state should not pass update verify: %v", err)
+	}
+}
+
+func TestUpdateStatusRejectsUpdateStateAdditionalProperties(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	if err := os.MkdirAll(filepath.Dir(updateStatePath(installRoot)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]any{
+		"schemaVersion":       updateStateSchemaVersion,
+		"toolName":            toolName,
+		"currentVersion":      toolVersion,
+		"targetVersion":       "0.2.0",
+		"targetTag":           "v0.2.0",
+		"channel":             updateChannelProduction,
+		"restartRequired":     true,
+		"verificationStatus":  "restart_required",
+		"verificationCommand": "slidex codex app-server plugin-smoke --json",
+		"updatedAt":           "2026-06-10T00:00:00Z",
+		"unexpectedField":     true,
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(updateStatePath(installRoot), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("schema-invalid update state should fail closed: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "update state is invalid") || !strings.Contains(status.Reason, "validation") {
+		t.Fatalf("schema-invalid update state reason missing: %#v", status)
 	}
 }
 
