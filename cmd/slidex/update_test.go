@@ -571,6 +571,15 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if !status.PendingActivation || status.PendingActivationCommand == "" {
 		t.Fatalf("pending activation not exposed in update status: %#v", status)
 	}
+	if status.PendingUpdate == nil || status.PendingUpdate.ActivatorPath == "" {
+		t.Fatalf("pending activator not recorded: %#v", status.PendingUpdate)
+	}
+	if _, err := os.Stat(filepath.FromSlash(status.PendingUpdate.ActivatorPath)); err != nil {
+		t.Fatalf("pending activator missing: %v", err)
+	}
+	if !strings.Contains(status.PendingActivationCommand, filepath.ToSlash(status.PendingUpdate.ActivatorPath)) {
+		t.Fatalf("pending activation command should use activator path: %s", status.PendingActivationCommand)
+	}
 	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" || status.TargetVersion != "0.2.0" {
 		t.Fatalf("pending handoff update status = %#v", status)
 	}

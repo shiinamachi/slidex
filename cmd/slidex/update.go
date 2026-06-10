@@ -138,14 +138,16 @@ type attestationVerification struct {
 }
 
 type pendingUpdate struct {
-	SchemaVersion string `json:"schemaVersion"`
-	ToolName      string `json:"toolName"`
-	TargetVersion string `json:"targetVersion"`
-	TargetTag     string `json:"targetTag,omitempty"`
-	InstallRoot   string `json:"installRoot"`
-	StagedRoot    string `json:"stagedRoot"`
-	Reason        string `json:"reason"`
-	CreatedAt     string `json:"createdAt"`
+	SchemaVersion     string `json:"schemaVersion"`
+	ToolName          string `json:"toolName"`
+	TargetVersion     string `json:"targetVersion"`
+	TargetTag         string `json:"targetTag,omitempty"`
+	InstallRoot       string `json:"installRoot"`
+	StagedRoot        string `json:"stagedRoot"`
+	ActivatorPath     string `json:"activatorPath,omitempty"`
+	ActivationCommand string `json:"activationCommand,omitempty"`
+	Reason            string `json:"reason"`
+	CreatedAt         string `json:"createdAt"`
 }
 
 type statusBanner struct {
@@ -538,7 +540,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		status.TargetTag = pending.TargetTag
 		status.RestartRequired = true
 		status.PluginVerificationStatus = "restart_required"
-		status.PendingActivationCommand = "slidex update activate-pending --yes --json"
+		status.PendingActivationCommand = firstNonEmpty(pending.ActivationCommand, pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot))
 	}
 	return status, nil
 }
@@ -1002,6 +1004,14 @@ func shellQuoteCommand(args []string) string {
 	return strings.Join(quoted, " ")
 }
 
+func pendingActivationCommand(activatorPath, installRoot string) string {
+	command := "slidex"
+	if strings.TrimSpace(activatorPath) != "" {
+		command = filepath.ToSlash(activatorPath)
+	}
+	return shellQuoteCommand([]string{command, "update", "activate-pending", "--install-root", filepath.ToSlash(installRoot), "--yes", "--json"})
+}
+
 func truncateForJSON(value string, limit int) string {
 	if limit <= 0 || len(value) <= limit {
 		return value
@@ -1073,7 +1083,11 @@ func stagePendingUpdateHandoff(installRoot, candidateRoot, targetVersion, target
 	if err != nil {
 		return "", "", err
 	}
-	pendingPath, err = writePendingUpdate(installRoot, stagedRoot, targetVersion, targetTag)
+	activatorPath, err := stagePendingActivator(installRoot, candidateRoot, targetVersion)
+	if err != nil {
+		return stagedRoot, "", err
+	}
+	pendingPath, err = writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, targetTag)
 	if err != nil {
 		return stagedRoot, "", err
 	}
@@ -1085,6 +1099,35 @@ func stagePendingUpdateHandoff(installRoot, candidateRoot, targetVersion, target
 
 func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion string) (string, error) {
 	return copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, "pending")
+}
+
+func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (string, error) {
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	source := filepath.Join(candidateRoot, binary)
+	if _, err := os.Stat(source); err != nil {
+		return "", err
+	}
+	parent := filepath.Dir(filepath.Clean(installRoot))
+	base := filepath.Base(filepath.Clean(installRoot))
+	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
+	activatorRoot := filepath.Join(parent, "."+base+".activator-"+stamp)
+	_ = os.RemoveAll(activatorRoot)
+	if err := os.MkdirAll(activatorRoot, 0o755); err != nil {
+		return "", err
+	}
+	destination := filepath.Join(activatorRoot, binary)
+	if err := copyFile(source, destination); err != nil {
+		return "", err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(destination, 0o755); err != nil {
+			return "", err
+		}
+	}
+	return destination, nil
 }
 
 func pendingUpdatePath(installRoot string) string {
@@ -1110,17 +1153,19 @@ func readPendingUpdate(installRoot string) (*pendingUpdate, string, error) {
 	return &pending, path, nil
 }
 
-func writePendingUpdate(installRoot, stagedRoot, targetVersion, targetTag string) (string, error) {
+func writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, targetTag string) (string, error) {
 	path := pendingUpdatePath(installRoot)
 	pending := pendingUpdate{
-		SchemaVersion: pendingUpdateSchemaVersion,
-		ToolName:      toolName,
-		TargetVersion: targetVersion,
-		TargetTag:     targetTag,
-		InstallRoot:   filepath.ToSlash(installRoot),
-		StagedRoot:    filepath.ToSlash(stagedRoot),
-		Reason:        "Windows may lock the running slidex executable; activate this staged bundle on next run.",
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		SchemaVersion:     pendingUpdateSchemaVersion,
+		ToolName:          toolName,
+		TargetVersion:     targetVersion,
+		TargetTag:         targetTag,
+		InstallRoot:       filepath.ToSlash(installRoot),
+		StagedRoot:        filepath.ToSlash(stagedRoot),
+		ActivatorPath:     filepath.ToSlash(activatorPath),
+		ActivationCommand: pendingActivationCommand(activatorPath, installRoot),
+		Reason:            "Windows may lock the running slidex executable; activate this staged bundle on next run.",
+		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
@@ -1190,6 +1235,11 @@ func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
 	}
 	if strings.TrimSpace(pending.StagedRoot) == "" {
 		return errors.New("pending update stagedRoot is required")
+	}
+	if strings.TrimSpace(pending.ActivatorPath) != "" {
+		if _, err := os.Stat(filepath.FromSlash(pending.ActivatorPath)); err != nil {
+			return fmt.Errorf("pending activator is unavailable: %w", err)
+		}
 	}
 	if pending.InstallRoot != "" && filepath.Clean(filepath.FromSlash(pending.InstallRoot)) != filepath.Clean(installRoot) {
 		return fmt.Errorf("pending update installRoot must be %s, got %s", filepath.ToSlash(installRoot), pending.InstallRoot)

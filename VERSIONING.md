@@ -74,6 +74,7 @@ Codex plugin restart verification as required when bundled plugin content may
 have changed. `--attestation-policy allow-unverified` is an explicit manual
 override and is not treated as an unattended verified update.
 When a Windows handoff is pending, `slidex update status --json` reports
-`pendingActivation: true`; `slidex update activate-pending --yes --json`
+`pendingActivation: true` and a `pendingActivationCommand` that runs from an
+activator binary outside the old install root and staged candidate. That command
 validates and activates the staged bundle before the normal Codex restart
 verification workflow continues.

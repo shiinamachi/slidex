@@ -617,6 +617,42 @@ func TestWorkbenchHTMLRendersPluginDriftBanner(t *testing.T) {
 	}
 }
 
+func TestWorkbenchHTMLRendersPendingActivationBanner(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	for _, want := range []string{
+		`data-banner-id="pending_update_activation"`,
+		"activate-pending",
+		`<form id="deck-form">`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
+		}
+	}
+	if strings.Index(html, `data-banner-id="pending_update_activation"`) > strings.Index(html, `<form id="deck-form">`) {
+		t.Fatal("pending activation banner should render before the deck form without replacing it")
+	}
+}
+
 func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
@@ -798,6 +834,43 @@ func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	}
 	if !hasStatusBannerForTest(banners, "canary_channel") || !hasStatusBannerForTest(banners, "codex_restart_required") {
 		t.Fatalf("missing update banners: %#v", banners)
+	}
+}
+
+func TestPublicWorkbenchStatusIncludesPendingActivationBanner(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatus(manifest)
+	update, ok := status["update"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing update snapshot: %#v", status)
+	}
+	if update["pendingActivation"] != true || update["pendingActivationCommand"] == "" {
+		t.Fatalf("pending activation missing from update snapshot: %#v", update)
+	}
+	banners, ok := status["statusBanners"].([]statusBanner)
+	if !ok {
+		t.Fatalf("missing status banners: %#v", status["statusBanners"])
+	}
+	if !hasStatusBannerForTest(banners, "pending_update_activation") {
+		t.Fatalf("missing pending activation banner: %#v", banners)
 	}
 }
 

@@ -288,10 +288,12 @@ systems it stages the candidate, keeps a backup of the previous install root,
 and marks Codex plugin restart verification as required. On Windows it writes a
 pending update handoff because the running executable may be locked. If
 `update status --json` reports `pendingActivation: true`, complete the handoff
-before plugin smoke:
+before plugin smoke by running the reported `pendingActivationCommand`. On
+Windows this command uses an activator binary outside both the old install root
+and the staged candidate so those directories can be renamed safely:
 
 ```bash
-slidex update activate-pending --yes --json
+<pendingActivationCommand from update status>
 ```
 
 `--attestation-policy allow-unverified` exists only for an explicit manual
