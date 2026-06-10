@@ -159,13 +159,15 @@ type statusBanner struct {
 }
 
 type updateRelease struct {
-	TagName    string                 `json:"tagName"`
-	Version    string                 `json:"version"`
-	Prerelease bool                   `json:"prerelease"`
-	Draft      bool                   `json:"draft"`
-	Assets     []updateAsset          `json:"assets"`
-	Raw        map[string]any         `json:"-"`
-	AssetByKey map[string]updateAsset `json:"-"`
+	TagName     string                 `json:"tagName"`
+	Version     string                 `json:"version"`
+	Prerelease  bool                   `json:"prerelease"`
+	Draft       bool                   `json:"draft"`
+	PublishedAt string                 `json:"publishedAt,omitempty"`
+	CreatedAt   string                 `json:"createdAt,omitempty"`
+	Assets      []updateAsset          `json:"assets"`
+	Raw         map[string]any         `json:"-"`
+	AssetByKey  map[string]updateAsset `json:"-"`
 }
 
 type updateAsset struct {
@@ -1533,12 +1535,14 @@ func parseUpdateReleases(raw []byte) ([]updateRelease, error) {
 			continue
 		}
 		release := updateRelease{
-			TagName:    tag,
-			Version:    version,
-			Prerelease: metadataBool(value["prerelease"]),
-			Draft:      metadataBool(value["draft"]),
-			Raw:        value,
-			AssetByKey: map[string]updateAsset{},
+			TagName:     tag,
+			Version:     version,
+			Prerelease:  metadataBool(value["prerelease"]),
+			Draft:       metadataBool(value["draft"]),
+			PublishedAt: metadataString(value["published_at"]),
+			CreatedAt:   metadataString(value["created_at"]),
+			Raw:         value,
+			AssetByKey:  map[string]updateAsset{},
 		}
 		rawAssets, _ := value["assets"].([]any)
 		for _, rawAsset := range rawAssets {
@@ -1576,6 +1580,7 @@ func selectUpdateReleaseForCurrent(channel, currentVersion string, releases []up
 	if channel == updateChannelCanary && canaryPackageVersionPattern.MatchString(currentVersion) {
 		return selectCanaryUpdateRelease(currentVersion, releases)
 	}
+	var candidates []updateRelease
 	for _, release := range releases {
 		if release.Draft {
 			continue
@@ -1583,22 +1588,30 @@ func selectUpdateReleaseForCurrent(channel, currentVersion string, releases []up
 		switch channel {
 		case updateChannelProduction:
 			if !release.Prerelease && channelFromPackageVersion(release.Version) == updateChannelProduction && releaseIsNotOlder(release.Version, currentVersion) {
-				return release, nil
+				candidates = append(candidates, release)
 			}
 		case updateChannelCanary:
 			if release.Prerelease && channelFromPackageVersion(release.Version) == updateChannelCanary && canaryReleaseIsNotOlder(release.Version, currentVersion) {
-				return release, nil
+				candidates = append(candidates, release)
 			}
 		default:
 			return updateRelease{}, fmt.Errorf("updates are disabled for channel %q", channel)
 		}
+	}
+	if len(candidates) > 0 {
+		release, err := bestUpdateRelease(candidates)
+		if err != nil {
+			return updateRelease{}, err
+		}
+		return release, nil
 	}
 	return updateRelease{}, fmt.Errorf("no matching %s release found", channel)
 }
 
 func selectCanaryUpdateRelease(currentVersion string, releases []updateRelease) (updateRelease, error) {
 	currentBase := releaseBaseVersion(currentVersion)
-	var sameBaseBeforeCurrent *updateRelease
+	var candidates []updateRelease
+	currentFound := false
 	for _, release := range releases {
 		if release.Draft || !release.Prerelease || channelFromPackageVersion(release.Version) != updateChannelCanary {
 			continue
@@ -1607,27 +1620,29 @@ func selectCanaryUpdateRelease(currentVersion string, releases []updateRelease) 
 		if !ok {
 			continue
 		}
-		if cmp > 0 {
-			return release, nil
-		}
 		if cmp < 0 {
 			continue
 		}
-		if release.Version == currentVersion {
-			if sameBaseBeforeCurrent != nil {
-				return *sameBaseBeforeCurrent, nil
-			}
-			return release, nil
+		if cmp == 0 && release.Version == currentVersion {
+			currentFound = true
 		}
-		if sameBaseBeforeCurrent == nil {
-			candidate := release
-			sameBaseBeforeCurrent = &candidate
-		}
+		candidates = append(candidates, release)
 	}
-	if sameBaseBeforeCurrent != nil {
+	if len(candidates) == 0 {
+		return updateRelease{}, fmt.Errorf("no matching %s release found", updateChannelCanary)
+	}
+	release, err := bestUpdateRelease(candidates)
+	if err != nil {
+		return updateRelease{}, err
+	}
+	cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(release.Version), currentBase)
+	if !ok {
+		return updateRelease{}, fmt.Errorf("no matching %s release found", updateChannelCanary)
+	}
+	if cmp == 0 && !currentFound {
 		return updateRelease{}, fmt.Errorf("current canary release %s was not found in release metadata; refusing to infer same-base canary ordering", currentVersion)
 	}
-	return updateRelease{}, fmt.Errorf("no matching %s release found", updateChannelCanary)
+	return release, nil
 }
 
 func releaseIsNotOlder(candidateVersion, currentVersion string) bool {
@@ -1664,6 +1679,58 @@ func compareReleaseBaseVersions(left, right string) (int, bool) {
 		}
 	}
 	return 0, true
+}
+
+func bestUpdateRelease(candidates []updateRelease) (updateRelease, error) {
+	if len(candidates) == 0 {
+		return updateRelease{}, errors.New("no update release candidates")
+	}
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		cmp, ok := compareUpdateReleaseRecency(candidate, best)
+		if !ok {
+			return updateRelease{}, fmt.Errorf("release metadata does not determine ordering between %s and %s", candidate.TagName, best.TagName)
+		}
+		if cmp > 0 {
+			best = candidate
+		}
+	}
+	return best, nil
+}
+
+func compareUpdateReleaseRecency(left, right updateRelease) (int, bool) {
+	cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(left.Version), releaseBaseVersion(right.Version))
+	if !ok || cmp != 0 {
+		return cmp, ok
+	}
+	if left.Version == right.Version {
+		return 0, true
+	}
+	leftTime, leftOK := releaseMetadataTime(left)
+	rightTime, rightOK := releaseMetadataTime(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	if leftTime.After(rightTime) {
+		return 1, true
+	}
+	if leftTime.Before(rightTime) {
+		return -1, true
+	}
+	return strings.Compare(left.Version, right.Version), true
+}
+
+func releaseMetadataTime(release updateRelease) (time.Time, bool) {
+	for _, raw := range []string{release.PublishedAt, release.CreatedAt} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseReleaseBaseVersionParts(version string) ([3]int, bool) {

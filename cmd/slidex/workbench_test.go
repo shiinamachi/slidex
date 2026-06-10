@@ -590,6 +590,28 @@ func TestWorkbenchHTMLRendersRestartRequiredBannerWithoutBlockingForm(t *testing
 	}
 }
 
+func TestWorkbenchHTMLRendersUpdatesDisabledBanner(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := filepath.Join(installRoot, ".slidex", "missing-install.json")
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	for _, want := range []string{
+		`data-banner-id="updates_disabled"`,
+		"Automatic updates disabled",
+		"local-development",
+		`<form id="deck-form">`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
+		}
+	}
+}
+
 func TestWorkbenchHTMLRendersPluginDriftBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
@@ -615,6 +637,39 @@ func TestWorkbenchHTMLRendersPluginDriftBanner(t *testing.T) {
 	}
 	if !strings.Contains(html, `data-banner-id="codex_restart_required"`) {
 		t.Fatalf("workbench HTML should keep restart banner with drift:\n%s", html)
+	}
+}
+
+func TestWorkbenchHTMLRendersPluginVerifiedBanner(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	if !strings.Contains(html, `data-banner-id="codex_plugin_verified"`) {
+		t.Fatalf("workbench HTML missing verified banner:\n%s", html)
+	}
+	if strings.Contains(html, `data-banner-id="codex_restart_required"`) {
+		t.Fatalf("verified workbench HTML should not keep restart banner:\n%s", html)
+	}
+	status := publicWorkbenchStatus(manifest)
+	banners, ok := status["statusBanners"].([]statusBanner)
+	if !ok || !hasStatusBannerForTest(banners, "codex_plugin_verified") {
+		t.Fatalf("public workbench status missing verified banner: %#v", status["statusBanners"])
 	}
 }
 

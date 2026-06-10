@@ -171,10 +171,28 @@ func TestUpdateDiscoveryDoesNotSelectOlderProductionRelease(t *testing.T) {
 	}
 }
 
+func TestUpdateDiscoverySelectsNewestProductionReleaseWithoutAPISorting(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v0.1.0","draft":false,"prerelease":false,"published_at":"2026-01-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.3.0","draft":false,"prerelease":false,"published_at":"2026-03-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.2.0","draft":false,"prerelease":false,"published_at":"2026-02-01T00:00:00Z","assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := selectUpdateReleaseForCurrent(updateChannelProduction, "0.1.0", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Version != "0.3.0" {
+		t.Fatalf("production selected %s", release.Version)
+	}
+}
+
 func TestUpdateDiscoveryOrdersSameBaseCanaryOnlyWhenCurrentReleaseIsKnown(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
-	  {"tag_name":"v0.2.0-bbbbbbb","draft":false,"prerelease":true,"assets":[]},
-	  {"tag_name":"v0.2.0-aaaaaaa","draft":false,"prerelease":true,"assets":[]}
+	  {"tag_name":"v0.2.0-aaaaaaa","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.2.0-bbbbbbb","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]}
 	]`))
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +206,37 @@ func TestUpdateDiscoveryOrdersSameBaseCanaryOnlyWhenCurrentReleaseIsKnown(t *tes
 	}
 	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-ccccccc", releases); err == nil || !strings.Contains(err.Error(), "refusing to infer same-base canary ordering") {
 		t.Fatalf("expected unknown same-base canary ordering to fail closed, got %v", err)
+	}
+}
+
+func TestUpdateDiscoverySelectsNewestCanaryReleaseWithoutAPISorting(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v0.2.0-1111111","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.2.0-2222222","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.1.0-fffffff","draft":false,"prerelease":true,"published_at":"2026-01-01T00:00:00Z","assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.1.0-fffffff", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Version != "0.2.0-2222222" {
+		t.Fatalf("canary selected %s", release.Version)
+	}
+}
+
+func TestUpdateDiscoveryFailsClosedWhenSameBaseCanaryOrderingIsMissing(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v0.2.0-aaaaaaa","draft":false,"prerelease":true,"assets":[]},
+	  {"tag_name":"v0.2.0-bbbbbbb","draft":false,"prerelease":true,"assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-aaaaaaa", releases); err == nil || !strings.Contains(err.Error(), "release metadata does not determine ordering") {
+		t.Fatalf("expected missing same-base canary metadata to fail closed, got %v", err)
 	}
 }
 
@@ -751,6 +800,104 @@ func TestUpdateVerifyFailsOnPluginDrift(t *testing.T) {
 	}
 }
 
+func TestUpdateVerifyJSONReportsRestartRequiredContract(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath, "--json"})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "update verification failed") {
+		t.Fatalf("restart-required verify err = %v", runErr)
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid update verify JSON: %v\n%s", err, output)
+	}
+	if status.Channel != updateChannelProduction || status.CurrentVersion != toolVersion || status.TargetVersion != "0.2.0" || status.TargetTag != "v0.2.0" {
+		t.Fatalf("version/channel fields missing from verify JSON: %#v", status)
+	}
+	if status.Status != "verification-failed" || !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("restart/plugin fields missing from verify JSON: %#v", status)
+	}
+	if status.NextVerificationCommand != "slidex codex app-server plugin-smoke --json" {
+		t.Fatalf("next verification command = %q", status.NextVerificationCommand)
+	}
+	for _, check := range []string{"update.restart_required", "update.plugin_not_verified"} {
+		if !findingCheckPresent(status.VerificationFindings, check) {
+			t.Fatalf("verify JSON missing finding %q: %#v", check, status.VerificationFindings)
+		}
+	}
+}
+
+func TestUpdateStatusHumanAndJSONReportPendingActivation(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	_, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	jsonOutput := captureStdoutForTest(t, func() {
+		runErr = runUpdateStatus([]string{"--install-root", installRoot, "--metadata", metadataPath, "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("update status JSON failed: %v", runErr)
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(jsonOutput), &status); err != nil {
+		t.Fatalf("invalid update status JSON: %v\n%s", err, jsonOutput)
+	}
+	if status.Status != "pending-activation" || !status.PendingActivation || status.PendingActivationCommand == "" {
+		t.Fatalf("pending activation missing from status JSON: %#v", status)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" || status.NextVerificationCommand != "slidex codex app-server plugin-smoke --json" {
+		t.Fatalf("restart verification missing from status JSON: %#v", status)
+	}
+
+	humanOutput := captureStdoutForTest(t, func() {
+		runErr = runUpdateStatus([]string{"--install-root", installRoot, "--metadata", metadataPath})
+	})
+	if runErr != nil {
+		t.Fatalf("update status human failed: %v", runErr)
+	}
+	for _, want := range []string{
+		"slidex update pending-activation",
+		"channel: production",
+		"current version: " + toolVersion,
+		"target version: 0.2.0 (v0.2.0)",
+		"plugin status: restart_required",
+		"restart required: restart Codex and start a new thread",
+		"pending activation: " + status.PendingActivationCommand,
+		"next verification: slidex codex app-server plugin-smoke --json",
+	} {
+		if !strings.Contains(humanOutput, want) {
+			t.Fatalf("human update status missing %q:\n%s", want, humanOutput)
+		}
+	}
+}
+
 func allowUnverifiedAttestationForTest() attestationVerification {
 	return attestationVerification{Policy: attestationPolicyAllowUnverified, Status: "skipped"}
 }
@@ -862,6 +1009,40 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	checksum := filepath.Join(dist, "slidex_"+toolVersion+"_checksums.txt")
 	if _, err := os.Stat(checksum); err != nil {
 		t.Fatalf("checksum name should use asset version without v: %v", err)
+	}
+
+	canaryVersion := toolVersion + "-abcdef0"
+	canaryDist := t.TempDir()
+	cmd = exec.Command("bash", filepath.Join(root, "scripts", "package-release.sh"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"SLIDEX_RELEASE_VERSION="+canaryVersion,
+		"SLIDEX_BUILD_CHANNEL=canary",
+		"SLIDEX_TARGETS=linux/amd64",
+		"SLIDEX_DIST_DIR="+canaryDist,
+		"SLIDEX_BUILD_TIME=2026-06-10T01:00:00Z",
+		"SLIDEX_COMMIT_SHA=abcdef0123456789",
+	)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("canary package release failed: %v\n%s", err, out)
+	}
+	canaryArchive := filepath.Join(canaryDist, "slidex_"+canaryVersion+"_linux_amd64.tar.gz")
+	canaryMetadata := readInstallMetadataFromTarGzForTest(t, canaryArchive, "slidex_"+canaryVersion+"_linux_amd64/.slidex/install.json")
+	if canaryMetadata.Channel != updateChannelCanary {
+		t.Fatalf("canary metadata channel = %q", canaryMetadata.Channel)
+	}
+	if canaryMetadata.Tag != "v"+canaryVersion {
+		t.Fatalf("canary metadata tag = %q", canaryMetadata.Tag)
+	}
+	if canaryMetadata.Version != canaryVersion {
+		t.Fatalf("canary metadata version = %q", canaryMetadata.Version)
+	}
+	if canaryMetadata.ReleaseAssetName != "slidex_"+canaryVersion+"_linux_amd64.tar.gz" {
+		t.Fatalf("canary metadata asset = %q", canaryMetadata.ReleaseAssetName)
+	}
+	if canaryMetadata.Commit != "abcdef0123456789" || canaryMetadata.BuildTime != "2026-06-10T01:00:00Z" {
+		t.Fatalf("canary metadata build identity = %q / %q", canaryMetadata.Commit, canaryMetadata.BuildTime)
 	}
 }
 

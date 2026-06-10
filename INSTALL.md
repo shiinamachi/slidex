@@ -51,6 +51,12 @@ ASSET_VERSION="${TAG#v}"
 $ASSET_VERSION = $TAG.TrimStart("v")
 ```
 
+Default installs use the latest stable release. If the user explicitly asks for
+a canary install, choose the newest prerelease tag that matches
+`v<VERSION>-<short-commit-sha>` and use its matching canary assets instead. Do
+not switch an existing install between production and canary in place; the
+package's `.slidex/install.json` records the immutable channel for that install.
+
 ---
 
 ## Step 3 — Download the release package and checksums

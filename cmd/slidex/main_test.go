@@ -1520,6 +1520,36 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	}
 }
 
+func TestCodexPluginCacheIsNotMutatedDirectly(t *testing.T) {
+	root := repoRootForTest(t)
+	var offenders []string
+	err := filepath.Walk(filepath.Join(root, "cmd", "slidex"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		for _, forbidden := range []string{".codex/plugins/cache", `.codex\plugins\cache`, "plugins/cache"} {
+			if strings.Contains(text, forbidden) {
+				offenders = append(offenders, filepath.ToSlash(path)+": "+forbidden)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("slidex must verify Codex plugins through documented App Server/CLI surfaces, not direct cache paths: %v", offenders)
+	}
+}
+
 func decodeWindowsPowerShellCommandForTest(t *testing.T, command string) string {
 	t.Helper()
 	_, encoded, ok := strings.Cut(command, "-EncodedCommand ")
@@ -1819,7 +1849,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "Code signing is deferred"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "SHA-256", "Code signing is deferred", "canary install", "immutable channel"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
