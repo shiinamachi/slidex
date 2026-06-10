@@ -524,6 +524,16 @@ func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 	if !hasFailures(findings) {
 		t.Fatalf("candidate drift should fail: %#v", findings)
 	}
+
+	codexRoot := t.TempDir()
+	writeCandidateBundleForTest(t, codexRoot, "0.2.0")
+	if err := os.WriteFile(filepath.Join(codexRoot, "plugins", "slidex", ".codex-plugin", "version-lock.json"), []byte(`{"pluginVersion":"0.2.0","slidexCliVersion":"0.2.0","requiredCodexCliVersion":"0.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings = validateCandidateBundle(codexRoot, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_version_lock") {
+		t.Fatalf("candidate required Codex version drift should fail: %#v", findings)
+	}
 }
 
 func TestValidateCandidateBundleChecksBinaryVersion(t *testing.T) {

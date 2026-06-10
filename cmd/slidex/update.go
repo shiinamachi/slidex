@@ -2197,8 +2197,8 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 				findings = append(findings, fail("update.candidate_version_lock", key+" must be "+expectedBaseVersion+", got "+got, filepath.ToSlash(lockPath)))
 			}
 		}
-		if got := metadataString(lock["requiredCodexCliVersion"]); got == "" {
-			findings = append(findings, fail("update.candidate_version_lock", "requiredCodexCliVersion is required", filepath.ToSlash(lockPath)))
+		if got := metadataString(lock["requiredCodexCliVersion"]); got != requiredCodexVersion {
+			findings = append(findings, fail("update.candidate_version_lock", "requiredCodexCliVersion must be "+requiredCodexVersion+", got "+got, filepath.ToSlash(lockPath)))
 		}
 	}
 	marketplacePath := filepath.Join(root, ".agents", "plugins", "marketplace.json")
