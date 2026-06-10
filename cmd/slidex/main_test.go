@@ -1671,6 +1671,24 @@ func TestChromeDiscoveryPolicyCoversSupportedPlatforms(t *testing.T) {
 	}
 }
 
+func TestResolveChromeAcceptsMacOSAppBundle(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "Google Chrome.app")
+	exe := filepath.Join(bundle, "Contents", "MacOS", "Google Chrome")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveChrome(bundle); err != nil || got != exe {
+		t.Fatalf("explicit app bundle resolved to %q, %v; want %q", got, err, exe)
+	}
+	t.Setenv("CHROME_BIN", bundle)
+	if got, err := resolveChrome(""); err != nil || got != exe {
+		t.Fatalf("env app bundle resolved to %q, %v; want %q", got, err, exe)
+	}
+}
+
 func testStringSliceContains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

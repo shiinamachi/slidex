@@ -2270,22 +2270,22 @@ func fontFamilyForPreset(preset string) string {
 func resolveChrome(explicit string) (string, error) {
 	explicit = cleanExecutablePath(explicit)
 	if explicit != "" {
-		if _, err := os.Stat(explicit); err == nil {
-			return explicit, nil
+		if path, ok := resolveChromeExecutablePath(explicit); ok {
+			return path, nil
 		}
 		return "", fmt.Errorf("chrome binary not found: %s", explicit)
 	}
 	for _, envName := range chromeEnvironmentVariables() {
 		if env := cleanExecutablePath(os.Getenv(envName)); env != "" {
-			if _, err := os.Stat(env); err == nil {
-				return env, nil
+			if path, ok := resolveChromeExecutablePath(env); ok {
+				return path, nil
 			}
 		}
 	}
 	for _, candidate := range chromeExecutableCandidates(runtime.GOOS) {
 		if filepath.IsAbs(candidate) {
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
+			if path, ok := resolveChromeExecutablePath(candidate); ok {
+				return path, nil
 			}
 			continue
 		}
@@ -2294,6 +2294,35 @@ func resolveChrome(explicit string) (string, error) {
 		}
 	}
 	return "", errors.New("Chrome/Chromium binary not found")
+}
+
+func resolveChromeExecutablePath(candidate string) (string, bool) {
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", false
+	}
+	if info.IsDir() {
+		if path, ok := chromeExecutableFromAppBundle(candidate); ok {
+			return path, true
+		}
+		return "", false
+	}
+	return candidate, true
+}
+
+func chromeExecutableFromAppBundle(bundlePath string) (string, bool) {
+	if !strings.EqualFold(filepath.Ext(bundlePath), ".app") {
+		return "", false
+	}
+	macOSDir := filepath.Join(bundlePath, "Contents", "MacOS")
+	appName := strings.TrimSuffix(filepath.Base(bundlePath), filepath.Ext(bundlePath))
+	for _, name := range uniqueStrings([]string{appName, "Google Chrome", "Chromium", "Microsoft Edge", "Brave Browser", "chrome", "chromium"}) {
+		candidate := filepath.Join(macOSDir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func chromeEnvironmentVariables() []string {
