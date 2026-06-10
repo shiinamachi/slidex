@@ -4227,8 +4227,8 @@ func writeDeliverySummary(deck string) (string, error) {
 	qaHash := mustSHA256(qaPath)
 	pngSet := hashFileSet(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
 	var manifest renderManifest
-	if raw, err := os.ReadFile(manifestPath); err == nil {
-		_ = json.Unmarshal(raw, &manifest)
+	if loaded, ok := readRenderManifest(manifestPath); ok {
+		manifest = loaded
 	}
 	approvedAssumptions := approvedAssumptionsFromSpec(specPath)
 	state := readStateOrNew(deckAbs, "app-server", false)
@@ -5806,8 +5806,8 @@ func readRenderManifest(path string) (renderManifest, bool) {
 	if err != nil {
 		return renderManifest{}, false
 	}
-	var manifest renderManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
+	manifest, err := decodeRenderManifest(raw, path)
+	if err != nil {
 		return renderManifest{}, false
 	}
 	return manifest, true

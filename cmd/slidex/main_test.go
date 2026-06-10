@@ -100,6 +100,21 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 	if manifest.SlideEnumerationMethod != "chrome-dom" {
 		t.Fatalf("expected chrome-dom enumeration, got %q", manifest.SlideEnumerationMethod)
 	}
+	var storedManifest renderManifest
+	manifestRaw, err := os.ReadFile(filepath.Join(outDir, "render_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(manifestRaw, &storedManifest); err != nil {
+		t.Fatal(err)
+	}
+	if storedManifest.SourceHTML.Path != "out/final_deck.html" ||
+		storedManifest.PDF.Path != "out/final_deck.pdf" ||
+		storedManifest.QAMontage.Path != "out/qa_montage.png" ||
+		len(storedManifest.PNGFiles) == 0 ||
+		!strings.HasPrefix(storedManifest.PNGFiles[0].Path, "out/rendered_slides/") {
+		t.Fatalf("stored render manifest should use deck-relative slash paths: %#v", storedManifest)
+	}
 	qa, err := qaDeckWithVisualReviewRunner(deck, true, "manual", func(string, renderManifest, string) (string, []qaFinding) {
 		return "pass", nil
 	})
@@ -1971,6 +1986,57 @@ func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 		if got := fileURLFromPathForOS(tc.goos, tc.path); got != tc.want {
 			t.Fatalf("%s file URL = %q, want %q", tc.goos, got, tc.want)
 		}
+	}
+}
+
+func TestRenderManifestPortablePathsRoundTrip(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	renderedDir := filepath.Join(outDir, "rendered_slides")
+	if err := os.MkdirAll(renderedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	htmlPath := filepath.Join(outDir, "final_deck.html")
+	pngPath := filepath.Join(renderedDir, "slide_01.png")
+	pdfPath := filepath.Join(outDir, "final_deck.pdf")
+	montagePath := filepath.Join(outDir, "qa_montage.png")
+	for _, path := range []string{htmlPath, pngPath, pdfPath, montagePath} {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifestPath := filepath.Join(outDir, "render_manifest.json")
+	base := renderManifestBaseDir(manifestPath)
+	manifest := renderManifest{
+		RepoRelativePaths: true,
+		SourceHTML:        artifactFromPathRelative(htmlPath, base),
+		PNGFiles: []renderedImage{{
+			SlideID: "slide_01",
+			Path:    portableManifestPath(base, pngPath),
+			SHA256:  mustSHA256(pngPath),
+		}},
+		PDF:       artifactFromPathRelative(pdfPath, base),
+		QAMontage: artifactFromPathRelative(montagePath, base),
+	}
+	if manifest.SourceHTML.Path != "out/final_deck.html" ||
+		manifest.PNGFiles[0].Path != "out/rendered_slides/slide_01.png" ||
+		manifest.PDF.Path != "out/final_deck.pdf" ||
+		manifest.QAMontage.Path != "out/qa_montage.png" {
+		t.Fatalf("manifest paths should be deck-relative slash paths: %#v", manifest)
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeRenderManifest(raw, manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.SourceHTML.Path != htmlPath ||
+		decoded.PNGFiles[0].Path != pngPath ||
+		decoded.PDF.Path != pdfPath ||
+		decoded.QAMontage.Path != montagePath {
+		t.Fatalf("decoded manifest paths were not restored to native paths: %#v", decoded)
 	}
 }
 

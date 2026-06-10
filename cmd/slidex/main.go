@@ -2035,6 +2035,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	manifest.RenderMethod = "headless Chrome DOM enumeration and element-isolated wrapper screenshots, then PNG-to-PDF assembly"
 	manifest.SlideEnumerationMethod = enumMethod
 	manifest.RepoRelativePaths = true
+	manifestBase := renderManifestBaseDir(cfg.ManifestPath)
 
 	for i, slide := range slides {
 		if slide.ID == "" {
@@ -2067,7 +2068,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		}
 		img := renderedImage{
 			SlideID:    slide.ID,
-			Path:       pngPath,
+			Path:       portableManifestPath(manifestBase, pngPath),
 			SHA256:     mustSHA256(pngPath),
 			Dimensions: dim,
 			Blank:      blank,
@@ -2077,19 +2078,20 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	}
 
 	pageW, pageH := pdfPageSizePoints(cfg.Width, cfg.Height)
-	if err := writePDFFromPNGs(cfg.PDFPath, pngPaths(manifest.PNGFiles), pageW, pageH); err != nil {
+	if err := writePDFFromPNGs(cfg.PDFPath, renderManifestImagePaths(manifestBase, manifest.PNGFiles), pageW, pageH); err != nil {
 		return manifest, err
 	}
-	manifest.PDF = artifactFromPath(cfg.PDFPath)
+	manifest.PDF = artifactFromPathRelative(cfg.PDFPath, manifestBase)
 	manifest.PDFPageCount = len(manifest.PNGFiles)
 	manifest.PDFPageSizePoints = dimension{Width: int(math.Round(pageW)), Height: int(math.Round(pageH))}
 
-	montageDim, err := createMontage(cfg.MontagePath, pngPaths(manifest.PNGFiles))
+	montageDim, err := createMontage(cfg.MontagePath, renderManifestImagePaths(manifestBase, manifest.PNGFiles))
 	if err != nil {
 		return manifest, err
 	}
-	manifest.QAMontage = artifactFromPath(cfg.MontagePath)
+	manifest.QAMontage = artifactFromPathRelative(cfg.MontagePath, manifestBase)
 	manifest.QAMontageDimensions = montageDim
+	manifest.SourceHTML = artifactFromPathRelative(cfg.HTMLPath, manifestBase)
 
 	if err := os.MkdirAll(filepath.Dir(cfg.ManifestPath), 0o755); err != nil {
 		return manifest, err
@@ -2097,7 +2099,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err := writeJSONFile(cfg.ManifestPath, manifest); err != nil {
 		return manifest, err
 	}
-	return manifest, nil
+	return resolveRenderManifestPaths(cfg.ManifestPath, manifest), nil
 }
 
 func extractSlides(src string) []slideInfo {
@@ -3012,9 +3014,10 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	var manifest renderManifest
 	manifestLoaded := false
 	if raw, err := os.ReadFile(manifestPath); err == nil {
-		if err := json.Unmarshal(raw, &manifest); err != nil {
+		if decoded, err := decodeRenderManifest(raw, manifestPath); err != nil {
 			result.Findings = append(result.Findings, fail("manifest.parse", err.Error(), manifestPath))
 		} else {
+			manifest = decoded
 			manifestLoaded = true
 			expected = manifest.ExpectedDimensions
 			if currentHash, err := sha256File(htmlPath); err == nil && currentHash != manifest.SourceHTML.SHA256 {
@@ -3839,8 +3842,8 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	}
 	findings = append(findings, verifyPackageSpec(specPath)...)
 	if raw, err := os.ReadFile(manifestPath); err == nil {
-		var manifest renderManifest
-		if err := json.Unmarshal(raw, &manifest); err != nil {
+		manifest, err := decodeRenderManifest(raw, manifestPath)
+		if err != nil {
 			findings = append(findings, fail("package.manifest_parse", err.Error(), manifestPath))
 		} else if hash, err := sha256File(htmlPath); err == nil && hash != manifest.SourceHTML.SHA256 {
 			findings = append(findings, fail("package.manifest_freshness", "manifest source HTML hash is stale", manifestPath))
@@ -4107,6 +4110,67 @@ func artifactFromPath(path string) artifact {
 		return artifact{Path: path}
 	}
 	return artifact{Path: path, SHA256: mustSHA256(path), Size: info.Size()}
+}
+
+func artifactFromPathRelative(path, base string) artifact {
+	artifact := artifactFromPath(path)
+	artifact.Path = portableManifestPath(base, path)
+	return artifact
+}
+
+func renderManifestBaseDir(manifestPath string) string {
+	base := filepath.Dir(mustAbs(manifestPath))
+	if filepath.Base(base) == "out" {
+		return filepath.Dir(base)
+	}
+	return base
+}
+
+func portableManifestPath(base, path string) string {
+	cleanPath := mustAbs(path)
+	cleanBase := mustAbs(base)
+	if rel, err := filepath.Rel(cleanBase, cleanPath); err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".." {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(cleanPath)
+}
+
+func resolveManifestPath(base, path string) string {
+	if path == "" {
+		return ""
+	}
+	native := filepath.FromSlash(path)
+	if filepath.IsAbs(native) {
+		return native
+	}
+	return filepath.Join(base, native)
+}
+
+func resolveRenderManifestPaths(manifestPath string, manifest renderManifest) renderManifest {
+	base := renderManifestBaseDir(manifestPath)
+	manifest.SourceHTML.Path = resolveManifestPath(base, manifest.SourceHTML.Path)
+	manifest.PDF.Path = resolveManifestPath(base, manifest.PDF.Path)
+	manifest.QAMontage.Path = resolveManifestPath(base, manifest.QAMontage.Path)
+	for i := range manifest.PNGFiles {
+		manifest.PNGFiles[i].Path = resolveManifestPath(base, manifest.PNGFiles[i].Path)
+	}
+	return manifest
+}
+
+func decodeRenderManifest(raw []byte, manifestPath string) (renderManifest, error) {
+	var manifest renderManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return renderManifest{}, err
+	}
+	return resolveRenderManifestPaths(manifestPath, manifest), nil
+}
+
+func renderManifestImagePaths(base string, images []renderedImage) []string {
+	out := make([]string, len(images))
+	for i, img := range images {
+		out[i] = resolveManifestPath(base, img.Path)
+	}
+	return out
 }
 
 func pngPaths(images []renderedImage) []string {
