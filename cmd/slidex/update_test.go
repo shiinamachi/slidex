@@ -453,6 +453,58 @@ func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	}
 }
 
+func TestUpdateVerifyFailsUntilPluginVerified(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	err := runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath})
+	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
+		t.Fatalf("restart-required verify err = %v", err)
+	}
+	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath}); err != nil {
+		t.Fatalf("verified update should pass: %v", err)
+	}
+}
+
+func TestUpdateVerifyFailsOnPluginDrift(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelProduction,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginDrift(installRoot, toolVersion+"+codex.test", filepath.Join(t.TempDir(), "plugins", "slidex", "skills", "slidex-start", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := updateVerificationFindings(status)
+	if !findingCheckPresent(findings, "update.plugin_drift") {
+		t.Fatalf("drift finding missing: %#v", findings)
+	}
+	err = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath})
+	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
+		t.Fatalf("drift verify err = %v", err)
+	}
+}
+
 func allowUnverifiedAttestationForTest() attestationVerification {
 	return attestationVerification{Policy: attestationPolicyAllowUnverified, Status: "skipped"}
 }

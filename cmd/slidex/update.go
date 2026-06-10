@@ -100,6 +100,7 @@ type updateStatus struct {
 	RestartRequired           bool             `json:"restartRequired"`
 	PluginVerificationStatus  string           `json:"pluginVerificationStatus"`
 	NextVerificationCommand   string           `json:"nextVerificationCommand"`
+	VerificationFindings      []qaFinding      `json:"verificationFindings,omitempty"`
 	DiscoveredRelease         *updateRelease   `json:"discoveredRelease,omitempty"`
 	CandidateValidation       []qaFinding      `json:"candidateValidation,omitempty"`
 	InstalledMetadata         *installMetadata `json:"installedMetadata,omitempty"`
@@ -382,15 +383,46 @@ func runUpdateVerify(args []string) error {
 		} else {
 			status.Status = "candidate-valid"
 		}
+	} else {
+		status.VerificationFindings = updateVerificationFindings(status)
+		if hasFailures(status.VerificationFindings) {
+			status.Status = "verification-failed"
+		} else if status.UpdatesEnabled {
+			status.Status = "verified"
+		}
 	}
 	if *jsonOut {
-		return printJSON(status)
+		if err := printJSON(status); err != nil {
+			return err
+		}
+	} else {
+		printUpdateStatus(status)
 	}
-	printUpdateStatus(status)
 	if hasFailures(status.CandidateValidation) {
 		return exitCodeError(4, "candidate bundle validation failed")
 	}
+	if hasFailures(status.VerificationFindings) {
+		return exitCodeError(4, "update verification failed")
+	}
 	return nil
+}
+
+func updateVerificationFindings(status updateStatus) []qaFinding {
+	if !status.UpdatesEnabled {
+		return nil
+	}
+	var findings []qaFinding
+	if status.RestartRequired {
+		findings = append(findings, fail("update.restart_required", "Codex restart and post-restart plugin smoke are still required", status.PersistedRestartStatePath))
+	}
+	switch status.PluginVerificationStatus {
+	case "verified":
+	case "drift":
+		findings = append(findings, fail("update.plugin_drift", "visible Codex plugin or bundled skill path does not match the active install root", status.PersistedRestartStatePath))
+	default:
+		findings = append(findings, fail("update.plugin_not_verified", "post-restart Codex plugin verification has not passed", status.PersistedRestartStatePath))
+	}
+	return findings
 }
 
 func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, error) {
