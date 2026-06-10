@@ -31,7 +31,6 @@ pnpm run dev
 pnpm run dev:wsl
 pnpm run typecheck
 pnpm run build
-pnpm run pack
 ```
 
 아래 명령은 과거 prototype을 조사해야 할 때만 사용합니다. `pnpm run dev:wsl`은 WSL에서 renderer/dev main watch를 실행하고 Windows host에서
@@ -40,6 +39,9 @@ PATH에 없더라도 WinGet/Scoop/mise shims의 일반 설치 위치를 찾아
 `mise exec node@24.16.0 npm:pnpm@11.5.2 -- pnpm add --allow-build=electron`로
 Windows 전용 Electron cache를 준비한 뒤 실행합니다. 없으면 `pnpm.cmd`,
 `npm.cmd`, 그 다음 Windows Node.js의 `npx.cmd`를 fallback으로 사용합니다.
+
+`pnpm run pack`과 `pnpm run dist`는 의도적으로 실패합니다. Electron prototype은
+shipping path가 아니며 새 배포 가능한 UX는 Codex Plugin workbench 경로에 둡니다.
 
 ## Structure
 

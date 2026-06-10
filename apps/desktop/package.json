@@ -23,8 +23,8 @@
     "build:main": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
     "preview": "pnpm run build && electron .",
-    "pack": "pnpm run build && electron-builder --dir",
-    "dist": "pnpm run build && electron-builder"
+    "pack": "node scripts/tombstone.cjs pack",
+    "dist": "node scripts/tombstone.cjs dist"
   },
   "dependencies": {
     "@tanstack/react-router": "1.170.15",
