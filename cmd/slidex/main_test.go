@@ -1237,13 +1237,22 @@ func TestAppServerPluginSmokeHelpers(t *testing.T) {
 	}
 	plugin := map[string]any{
 		"plugin": map[string]any{
-			"version": toolVersion + "+codex.test",
-			"source":  map[string]any{"path": "/opt/slidex/plugins/slidex"},
+			"summary": map[string]any{
+				"name":         "slidex",
+				"localVersion": toolVersion + "+codex.test",
+				"installed":    true,
+				"enabled":      true,
+				"source":       map[string]any{"path": "/opt/slidex/plugins/slidex"},
+			},
 		},
 	}
 	version, path := pluginReadVersionAndPath(plugin)
 	if version != toolVersion+"+codex.test" || path != "/opt/slidex/plugins/slidex" {
 		t.Fatalf("plugin read details = %q / %q", version, path)
+	}
+	installed, enabled, found := pluginReadInstallState(plugin, "slidex")
+	if !found || !installed || !enabled {
+		t.Fatalf("plugin install state = found:%v installed:%v enabled:%v", found, installed, enabled)
 	}
 }
 
@@ -1264,13 +1273,16 @@ func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 	t.Setenv(updateInstallMetadataEnv, metadataPath)
 
 	result := appServerPluginSmokeResult{
-		Status:          "pass",
-		PluginReadOK:    true,
-		PluginVersion:   toolVersion + "+codex.test",
-		PluginPath:      filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
-		StartSkillFound: true,
-		StartSkillPath:  filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
-		Checks:          map[string]any{},
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           true,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+		Checks:                  map[string]any{},
 	}
 	applyPostRestartPluginVerification(&result)
 	if result.PluginVerificationStatus != "verified" {
@@ -1305,13 +1317,16 @@ func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 	t.Setenv(updateInstallMetadataEnv, metadataPath)
 
 	result := appServerPluginSmokeResult{
-		Status:          "pass",
-		PluginReadOK:    true,
-		PluginVersion:   toolVersion + "+codex.test",
-		PluginPath:      filepath.ToSlash(filepath.Join(t.TempDir(), "plugins", "slidex")),
-		StartSkillFound: true,
-		StartSkillPath:  filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
-		Checks:          map[string]any{},
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           true,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(filepath.Join(t.TempDir(), "plugins", "slidex")),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+		Checks:                  map[string]any{},
 	}
 	applyPostRestartPluginVerification(&result)
 	if result.PluginVerificationStatus != "drift" {
@@ -1329,6 +1344,29 @@ func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 	}
 	if !hasStatusBannerForTest(updateStatusBanners(status), "codex_plugin_drift") {
 		t.Fatalf("drift banner missing: %#v", updateStatusBanners(status))
+	}
+}
+
+func TestPostRestartPluginVerificationRequiresInstalledEnabledPlugin(t *testing.T) {
+	installRoot := t.TempDir()
+	result := appServerPluginSmokeResult{
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           false,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+	}
+	if got := postRestartPluginVerificationStatus(result, installRoot); got != "not_verified" {
+		t.Fatalf("disabled plugin verification status = %q", got)
+	}
+	result.PluginEnabled = true
+	result.PluginInstalled = false
+	if got := postRestartPluginVerificationStatus(result, installRoot); got != "not_verified" {
+		t.Fatalf("uninstalled plugin verification status = %q", got)
 	}
 }
 

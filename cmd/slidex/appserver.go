@@ -75,6 +75,9 @@ type appServerPluginSmokeResult struct {
 	ThreadID                 string         `json:"threadId"`
 	MarketplacePath          string         `json:"marketplacePath"`
 	PluginReadOK             bool           `json:"pluginReadOk"`
+	PluginInstallStateFound  bool           `json:"pluginInstallStateFound"`
+	PluginInstalled          bool           `json:"pluginInstalled"`
+	PluginEnabled            bool           `json:"pluginEnabled"`
 	PluginVersion            string         `json:"pluginVersion,omitempty"`
 	PluginPath               string         `json:"pluginPath,omitempty"`
 	StartSkillFound          bool           `json:"startSkillFound"`
@@ -724,11 +727,17 @@ func appServerWorkbenchPluginSmoke(workspace, deckID string) (appServerPluginSmo
 	}
 	result.PluginReadOK = pluginResp["result"] != nil
 	result.PluginVersion, result.PluginPath = pluginReadVersionAndPath(pluginResp["result"])
+	result.PluginInstalled, result.PluginEnabled, result.PluginInstallStateFound = pluginReadInstallState(pluginResp["result"], toolName)
 	if result.PluginPath != "" && !filepath.IsAbs(result.PluginPath) {
 		result.PluginPath = mustAbs(result.PluginPath)
 	}
 	result.PluginPath = filepath.ToSlash(result.PluginPath)
 	result.Checks["pluginRead"] = summarizeJSONForEvidence(pluginResp["result"])
+	result.Checks["pluginInstallState"] = map[string]any{
+		"found":     result.PluginInstallStateFound,
+		"installed": result.PluginInstalled,
+		"enabled":   result.PluginEnabled,
+	}
 
 	skillsResp, _, err := client.request("skills/list", map[string]any{"cwds": []string{mustAbs(".")}, "forceReload": true}, 20*time.Second)
 	if err != nil {
@@ -1294,9 +1303,53 @@ func skillPathFromObject(obj map[string]any) string {
 }
 
 func pluginReadVersionAndPath(v any) (version, path string) {
-	version = firstJSONTextByKey(v, "version", "pluginVersion")
+	version = firstJSONTextByKey(v, "version", "pluginVersion", "localVersion")
 	path = firstJSONTextByKey(v, "path", "pluginPath", "sourcePath")
 	return version, path
+}
+
+func pluginReadInstallState(v any, pluginName string) (installed, enabled, found bool) {
+	if obj, ok := v.(map[string]any); ok {
+		if metadataString(obj["name"]) == pluginName {
+			installedValue, hasInstalled := jsonBoolField(obj, "installed")
+			enabledValue, hasEnabled := jsonBoolField(obj, "enabled")
+			if hasInstalled && hasEnabled {
+				return installedValue, enabledValue, true
+			}
+		}
+		for _, value := range obj {
+			if installed, enabled, found := pluginReadInstallState(value, pluginName); found {
+				return installed, enabled, true
+			}
+		}
+	}
+	if items, ok := v.([]any); ok {
+		for _, item := range items {
+			if installed, enabled, found := pluginReadInstallState(item, pluginName); found {
+				return installed, enabled, true
+			}
+		}
+	}
+	return false, false, false
+}
+
+func jsonBoolField(obj map[string]any, key string) (bool, bool) {
+	value, ok := obj[key]
+	if !ok {
+		return false, false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		if strings.EqualFold(v, "true") {
+			return true, true
+		}
+		if strings.EqualFold(v, "false") {
+			return false, true
+		}
+	}
+	return false, false
 }
 
 func firstJSONTextByKey(v any, keys ...string) string {
@@ -1356,12 +1409,20 @@ func applyPostRestartPluginVerification(result *appServerPluginSmokeResult) {
 		"restartRequiredAfter":  result.RestartRequiredAfter,
 		"pluginVersion":         result.PluginVersion,
 		"pluginPath":            result.PluginPath,
-		"startSkillPath":        result.StartSkillPath,
+		"pluginInstallState": map[string]any{
+			"found":     result.PluginInstallStateFound,
+			"installed": result.PluginInstalled,
+			"enabled":   result.PluginEnabled,
+		},
+		"startSkillPath": result.StartSkillPath,
 	}
 }
 
 func postRestartPluginVerificationStatus(result appServerPluginSmokeResult, installRoot string) string {
 	if !result.PluginReadOK || !result.StartSkillFound {
+		return "not_verified"
+	}
+	if !result.PluginInstallStateFound || !result.PluginInstalled || !result.PluginEnabled {
 		return "not_verified"
 	}
 	if pluginVersionBase(result.PluginVersion) != toolVersion {
