@@ -639,6 +639,31 @@ func TestWorkbenchLogRejectsSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestSecureTruncateRejectsSymlinkTarget(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runtime")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideLog := filepath.Join(t.TempDir(), "codex-app-server.stdout.log")
+	if err := os.WriteFile(outsideLog, []byte("outside log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideLog, filepath.Join(outDir, "codex-app-server.stdout.log")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	f, err := openSecureTruncateFile(filepath.Join(outDir, "codex-app-server.stdout.log"), 0o600)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("expected symlink truncate open to fail")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink error, got %v", err)
+	}
+	if got := readFileOrEmpty(outsideLog); got != "outside log\n" {
+		t.Fatalf("outside log was modified: %q", got)
+	}
+}
+
 func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")

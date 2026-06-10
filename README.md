@@ -275,6 +275,10 @@ go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
 go run ./cmd/slidex doctor --json
 ```
 
+GitHub Actions `Cross Platform` workflow는 `ubuntu-24.04`, `macos-15`,
+`windows-2025`에서 같은 검증을 실행하고, Linux/macOS/Windows `amd64`와 `arm64`
+test binary cross-compile을 확인합니다. Actions는 SHA로 고정합니다.
+
 template 변경은 임시 deck으로 `slidex init`을 smoke-test한 뒤 해당 deck을 제거합니다.
 render/PDF 변경은 현재 HTML에서 PNG/PDF를 다시 만들고 `slidex qa`와 `slidex package`
 freshness를 확인합니다.

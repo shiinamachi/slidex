@@ -61,3 +61,7 @@ func appServerRuntimeBaseDir() string {
 func managedAppServerDefaultListen() (string, error) {
 	return "unix://" + filepath.Join(appServerRuntimeBaseDir(), "slidex", "codex-app-server.sock"), nil
 }
+
+func replaceFile(src, dst string) error {
+	return os.Rename(src, dst)
+}

@@ -15,11 +15,13 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -2048,12 +2050,12 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	}
 	stdoutPath := filepath.Join(runtimeDir, "codex-app-server.stdout.log")
 	stderrPath := filepath.Join(runtimeDir, "codex-app-server.stderr.log")
-	stdout, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	stdout, err := openSecureTruncateFile(stdoutPath, 0o600)
 	if err != nil {
 		return err
 	}
 	defer stdout.Close()
-	stderr, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	stderr, err := openSecureTruncateFile(stderrPath, 0o600)
 	if err != nil {
 		return err
 	}
@@ -2584,7 +2586,7 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 }
 
 func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
-	loopback := strings.HasPrefix(listen, "ws://127.0.0.1:") || strings.HasPrefix(listen, "ws://localhost:")
+	loopback := isLoopbackWebSocketListen(listen)
 	switch ws.Mode {
 	case "", "none":
 		if loopback {
@@ -2639,10 +2641,17 @@ func requirePrivateFile(path, flagName string) error {
 	if info.IsDir() {
 		return exitCodeError(4, "%s must be a file", flagName)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if !privateFileModeAllowed(runtime.GOOS, info.Mode().Perm()) {
 		return exitCodeError(4, "%s must be private mode 0600 or stricter", flagName)
 	}
 	return nil
+}
+
+func privateFileModeAllowed(goos string, perm os.FileMode) bool {
+	if goos == "windows" {
+		return true
+	}
+	return perm&0o077 == 0
 }
 
 func webSocketTunnelAcknowledged() bool {
@@ -2854,12 +2863,28 @@ func parseTomlStringArray(value string) []string {
 
 func transportRiskForListen(listen string) string {
 	if strings.HasPrefix(listen, "ws://") {
-		if strings.HasPrefix(listen, "ws://127.0.0.1:") || strings.HasPrefix(listen, "ws://localhost:") {
+		if isLoopbackWebSocketListen(listen) {
 			return ""
 		}
 		return "Non-loopback WebSocket App Server requires explicit auth and external TLS or SSH tunnel."
 	}
 	return ""
+}
+
+func isLoopbackWebSocketListen(listen string) bool {
+	u, err := url.Parse(listen)
+	if err != nil || u.Scheme != "ws" {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return addr.IsLoopback()
 }
 
 func nullOrRawJSON(s string) any {
@@ -5904,11 +5929,44 @@ func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
 	if err := rejectSymlinkAncestors(dir); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceFile(tmpPath, path); err != nil {
 		return err
 	}
 	cleanup = false
 	return nil
+}
+
+func openSecureTruncateFile(path string, mode os.FileMode) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if err := ensureSecureDir(dir); err != nil {
+		return nil, err
+	}
+	if err := rejectSecureWriteTarget(path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return nil, err
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("secure write target must not be a symlink: %s", filepath.ToSlash(path))
+	}
+	fileInfo, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !os.SameFile(pathInfo, fileInfo) {
+		_ = f.Close()
+		return nil, fmt.Errorf("secure write target changed while opening: %s", filepath.ToSlash(path))
+	}
+	return f, nil
 }
 
 func openSecureAppendFile(path string, mode os.FileMode) (*os.File, error) {
@@ -5992,10 +6050,25 @@ func rejectSymlinkAncestors(path string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			if systemSymlinkAncestorAllowed(runtime.GOOS, current) {
+				continue
+			}
 			return fmt.Errorf("secure write path must not contain symlinks: %s", filepath.ToSlash(current))
 		}
 	}
 	return nil
+}
+
+func systemSymlinkAncestorAllowed(goos, path string) bool {
+	if goos != "darwin" {
+		return false
+	}
+	switch filepath.Clean(path) {
+	case "/var", "/tmp", "/etc":
+		return true
+	default:
+		return false
+	}
 }
 
 func redactSecretsInAny(v any) any {

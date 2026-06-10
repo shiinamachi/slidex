@@ -109,6 +109,24 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 mise exec -- go test ./...
 ```
 
+Windows PowerShell에서는 `export` 대신 다음 형태를 사용합니다.
+
+```powershell
+$env:Path = "$(go env GOPATH)\bin;$env:Path"
+go test ./...
+```
+
+Windows `cmd.exe`에서는 다음 형태를 사용합니다.
+
+```bat
+for /f "delims=" %G in ('go env GOPATH') do set "PATH=%G\bin;%PATH%"
+go test ./...
+```
+
 배포 전에는 Go/Codex exact pin, `go.sum`, vendored App Server protocol schema,
 companion skill/plugin package, hook manifest, README/commands 문서, shell completion
 생성 절차를 함께 검증합니다.
+
+GitHub Actions `Cross Platform` workflow는 `ubuntu-24.04`, `macos-15`,
+`windows-2025` 테스트와 Linux/macOS/Windows `amd64`, `arm64` cross-compile을
+실행합니다.

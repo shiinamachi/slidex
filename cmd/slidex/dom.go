@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,14 +38,13 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if err := os.WriteFile(tmpHTML, []byte(injected), 0o644); err != nil {
 		return nil, "", err
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(tmpHTML)}
 	args := []string{
 		"--headless=new",
 		"--disable-gpu",
 		"--hide-scrollbars",
 		"--virtual-time-budget=3000",
 		"--dump-dom",
-		u.String(),
+		fileURLFromPath(tmpHTML),
 	}
 	if chromeNoSandbox {
 		args = append([]string{"--no-sandbox"}, args...)

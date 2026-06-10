@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1846,7 +1847,11 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	}
 	tokenHash := sha256Bytes([]byte("token"))
 	err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash})
-	if err == nil {
+	if runtime.GOOS == "windows" {
+		if err == nil || !strings.Contains(err.Error(), "tunnel") {
+			t.Fatalf("expected Windows public token file to pass mode check and fail tunnel ack, got %v", err)
+		}
+	} else if err == nil {
 		t.Fatal("expected public token file to fail")
 	}
 	if err := os.Chmod(token, 0o600); err != nil {
@@ -1887,6 +1892,90 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "1")
 	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30}); err != nil {
 		t.Fatalf("signed bearer with tunnel acknowledgement should pass: %v", err)
+	}
+}
+
+func TestPrivateFileModePolicyIsPlatformAware(t *testing.T) {
+	if privateFileModeAllowed("linux", 0o644) {
+		t.Fatal("linux token files must reject group/world readable permissions")
+	}
+	if !privateFileModeAllowed("linux", 0o600) {
+		t.Fatal("linux token files should allow owner-only permissions")
+	}
+	if !privateFileModeAllowed("darwin", 0o600) {
+		t.Fatal("darwin token files should allow owner-only permissions")
+	}
+	if !privateFileModeAllowed("windows", 0o644) {
+		t.Fatal("windows token files should not be rejected based on Unix permission bits")
+	}
+}
+
+func TestSecureWriteFileReplacesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload.json")
+	if err := secureWriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureWriteFile(path, []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileOrEmpty(path); got != "second\n" {
+		t.Fatalf("secure write did not replace existing file: %q", got)
+	}
+}
+
+func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
+	cases := []struct {
+		goos string
+		path string
+		want string
+	}{
+		{goos: "linux", path: "/tmp/slidex deck/a b.html", want: "file:///tmp/slidex%20deck/a%20b.html"},
+		{goos: "darwin", path: "/private/var/folders/slidex deck/a b.html", want: "file:///private/var/folders/slidex%20deck/a%20b.html"},
+		{goos: "windows", path: `C:\Users\Me\slidex deck\a b.html`, want: "file:///C:/Users/Me/slidex%20deck/a%20b.html"},
+		{goos: "windows", path: `\\server\share\slidex deck\a b.html`, want: "file://server/share/slidex%20deck/a%20b.html"},
+	}
+	for _, tc := range cases {
+		if got := fileURLFromPathForOS(tc.goos, tc.path); got != tc.want {
+			t.Fatalf("%s file URL = %q, want %q", tc.goos, got, tc.want)
+		}
+	}
+}
+
+func TestRenderWrapperFilenameDoesNotUseRawSlideID(t *testing.T) {
+	name := renderWrapperFilename(0, `../bad\slide:id?*`)
+	if strings.ContainsAny(name, `/\:?*`) {
+		t.Fatalf("wrapper filename contains unsafe characters: %q", name)
+	}
+	if !strings.HasPrefix(name, "slide_01_") || !strings.HasSuffix(name, ".html") {
+		t.Fatalf("wrapper filename lost stable prefix/suffix: %q", name)
+	}
+}
+
+func TestLoopbackWebSocketListenParsing(t *testing.T) {
+	for _, listen := range []string{"ws://127.0.0.1:1234/app", "ws://[::1]:1234/app", "ws://localhost:1234/app"} {
+		if !isLoopbackWebSocketListen(listen) {
+			t.Fatalf("expected loopback websocket listen to pass: %s", listen)
+		}
+		if risk := transportRiskForListen(listen); risk != "" {
+			t.Fatalf("loopback listen should not record transport risk: %s => %q", listen, risk)
+		}
+	}
+	for _, listen := range []string{"ws://10.0.0.2:1234/app", "ws://[2001:db8::1]:1234/app", "http://127.0.0.1:1234/app"} {
+		if isLoopbackWebSocketListen(listen) {
+			t.Fatalf("expected non-loopback websocket listen to fail: %s", listen)
+		}
+	}
+}
+
+func TestSystemSymlinkAncestorPolicyAllowsOnlyDarwinSystemLinks(t *testing.T) {
+	if !systemSymlinkAncestorAllowed("darwin", "/var") || !systemSymlinkAncestorAllowed("darwin", "/tmp") {
+		t.Fatal("darwin standard system symlink ancestors should be allowed")
+	}
+	if systemSymlinkAncestorAllowed("darwin", "/tmp/deck/out") {
+		t.Fatal("darwin user-controlled descendants must not be broadly allowed")
+	}
+	if systemSymlinkAncestorAllowed("linux", "/var") || systemSymlinkAncestorAllowed("windows", `C:\Temp`) {
+		t.Fatal("system symlink exception should be darwin-specific")
 	}
 }
 

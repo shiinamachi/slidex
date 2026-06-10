@@ -9,13 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unsafe"
 )
 
 const (
 	windowsCreateNewProcessGroup = 0x00000200
 	windowsSynchronize           = 0x00100000
 	windowsWaitTimeout           = 258
+	windowsMoveFileReplace       = 0x00000001
+	windowsMoveFileWriteThrough  = 0x00000008
 )
+
+var moveFileExW = syscall.NewLazyDLL("kernel32.dll").NewProc("MoveFileExW")
 
 func configureWorkbenchCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateNewProcessGroup}
@@ -85,4 +90,27 @@ func managedAppServerDefaultListen() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("ws://127.0.0.1:%d/app", port), nil
+}
+
+func replaceFile(src, dst string) error {
+	srcPtr, err := syscall.UTF16PtrFromString(src)
+	if err != nil {
+		return err
+	}
+	dstPtr, err := syscall.UTF16PtrFromString(dst)
+	if err != nil {
+		return err
+	}
+	ok, _, callErr := moveFileExW.Call(
+		uintptr(unsafe.Pointer(srcPtr)),
+		uintptr(unsafe.Pointer(dstPtr)),
+		uintptr(windowsMoveFileReplace|windowsMoveFileWriteThrough),
+	)
+	if ok == 0 {
+		if callErr != syscall.Errno(0) {
+			return callErr
+		}
+		return fmt.Errorf("MoveFileExW failed")
+	}
+	return nil
 }

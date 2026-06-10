@@ -2043,7 +2043,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		}
 		manifest.OrderedSlideIDs = append(manifest.OrderedSlideIDs, slide.ID)
 		wrapper := buildSlideWrapper(head, slide.FullHTML, cfg.Width, cfg.Height, cfg.FontPreset)
-		wrapperPath := filepath.Join(tmpDir, fmt.Sprintf("%s.html", slide.ID))
+		wrapperPath := filepath.Join(tmpDir, renderWrapperFilename(i, slide.ID))
 		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o644); err != nil {
 			return manifest, err
 		}
@@ -2244,6 +2244,10 @@ document.addEventListener('DOMContentLoaded', () => { slidexReady(); });
 </html>`, head, width, height, fontFamily, width, height, width, height, width, height, width, height, width, height, slideHTML)
 }
 
+func renderWrapperFilename(index int, slideID string) string {
+	return fmt.Sprintf("slide_%02d_%s.html", index+1, sha256Bytes([]byte(slideID))[:12])
+}
+
 func fontFamilyForPreset(preset string) string {
 	switch preset {
 	case "pretendard":
@@ -2378,9 +2382,31 @@ func chromeVersion(chromePath string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func fileURLFromPath(path string) string {
+	return fileURLFromPathForOS(runtime.GOOS, path)
+}
+
+func fileURLFromPathForOS(goos, path string) string {
+	slashPath := filepath.ToSlash(path)
+	if goos == "windows" {
+		slashPath = strings.ReplaceAll(slashPath, `\`, "/")
+		if strings.HasPrefix(slashPath, "//") {
+			rest := strings.TrimPrefix(slashPath, "//")
+			host, tail, ok := strings.Cut(rest, "/")
+			if ok {
+				return (&url.URL{Scheme: "file", Host: host, Path: "/" + tail}).String()
+			}
+			return (&url.URL{Scheme: "file", Host: host}).String()
+		}
+		if len(slashPath) >= 2 && slashPath[1] == ':' && ((slashPath[0] >= 'A' && slashPath[0] <= 'Z') || (slashPath[0] >= 'a' && slashPath[0] <= 'z')) {
+			slashPath = "/" + slashPath
+		}
+	}
+	return (&url.URL{Scheme: "file", Path: slashPath}).String()
+}
+
 func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, chromeNoSandbox bool) error {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(htmlPath)}
-	return captureURLScreenshot(chromePath, u.String(), pngPath, width, height, chromeNoSandbox)
+	return captureURLScreenshot(chromePath, fileURLFromPath(htmlPath), pngPath, width, height, chromeNoSandbox)
 }
 
 func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
@@ -2409,14 +2435,13 @@ func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height i
 }
 
 func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) ([]string, error) {
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(htmlPath)}
 	args := []string{
 		"--headless=new",
 		"--disable-gpu",
 		"--hide-scrollbars",
 		"--virtual-time-budget=3000",
 		"--dump-dom",
-		u.String(),
+		fileURLFromPath(htmlPath),
 	}
 	if chromeNoSandbox {
 		args = append([]string{"--no-sandbox"}, args...)
