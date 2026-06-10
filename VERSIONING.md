@@ -51,6 +51,7 @@ go run ./cmd/slidex sync-version-metadata
 go test ./...
 go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
 go run ./cmd/slidex doctor --json
+go run ./cmd/slidex update status --json
 SLIDEX_RELEASE_VERSION="v$(cat VERSION)" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
 SLIDEX_RELEASE_VERSION="$(cat VERSION)-$(git rev-parse --short=7 HEAD)" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
 ```
@@ -59,3 +60,11 @@ SLIDEX_RELEASE_VERSION="$(cat VERSION)-$(git rev-parse --short=7 HEAD)" SLIDEX_T
 plugin manifest, plugin version lock, bundled Marketplace metadata, exact
 Go/Codex pins, and local protocol bundle. A version or identity drift in those
 files is a repository-health failure.
+
+`slidex update status --json` reports the immutable install channel from
+`.slidex/install.json` when running from a release package. Source checkouts and
+`go install` development binaries report `local-development` and disable
+automatic release updates. `slidex update apply` validates the candidate bundle,
+stages activation, preserves a backup or Windows pending handoff, and marks
+Codex plugin restart verification as required when bundled plugin content may
+have changed.

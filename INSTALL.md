@@ -195,14 +195,27 @@ Run the following commands from the install directory:
 
 ```bash
 slidex --help
+slidex update status --json
 slidex doctor --render
 ```
 
 Expected results:
 
 - `slidex --help` prints the CLI usage and exits with code `0`.
+- `slidex update status --json` reports `production` or `canary` for release
+  package installs. Source checkouts and `go install` development binaries
+  report `local-development` with automatic updates disabled.
 - `slidex doctor --render` checks the workspace structure and browser
   availability, and exits with code `0`.
+- If update status reports `restartRequired: true`, restart Codex, start a new
+  thread, and run:
+
+  ```bash
+  slidex codex app-server plugin-smoke --json
+  ```
+
+  Treat bundled skills as active only after the plugin smoke reports verified
+  plugin and skill state for this install.
 
 > If `slidex doctor --render` reports that Chrome is not detected, set one of
 > these environment variables to the browser binary path:
@@ -225,9 +238,50 @@ Each release package includes:
 | Codex plugin | `plugins/slidex/` |
 | Plugin marketplace | `.agents/plugins/marketplace.json` |
 | Codex protocol bundle | `internal/codex/protocol/codex-cli-0.138.0/` |
+| Install/update metadata | `.slidex/install.json` |
 
 Code signing is deferred. Always verify the SHA-256 checksum before trusting a
 downloaded package.
+
+---
+
+## Updating an existing release install
+
+Run:
+
+```bash
+slidex update status --json
+slidex update check --json
+```
+
+`production` installs follow stable GitHub Releases only. `canary` installs
+follow canary prereleases only. `local-development` disables automatic release
+updates.
+
+When a matching release archive and checksum file have been downloaded, apply
+the verified bundle as one unit:
+
+```bash
+slidex update apply \
+  --archive slidex_<ASSET_VERSION>_<OS>_<ARCH>.<EXT> \
+  --checksums slidex_<ASSET_VERSION>_checksums.txt \
+  --target-version <ASSET_VERSION> \
+  --target-tag <TAG> \
+  --yes \
+  --json
+```
+
+`update apply` validates the candidate bundle before activation. On Unix-like
+systems it stages the candidate, keeps a backup of the previous install root,
+and marks Codex plugin restart verification as required. On Windows it writes a
+pending update handoff because the running executable may be locked.
+
+After any update that may change bundled plugin content:
+
+1. Restart Codex.
+2. Start a new thread.
+3. Run `slidex codex app-server plugin-smoke --json`.
+4. Run `slidex update verify --json` and confirm `restartRequired` is false.
 
 ---
 
