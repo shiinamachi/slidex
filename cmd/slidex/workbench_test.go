@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"image/color"
 	"net"
 	"net/http"
@@ -653,6 +654,94 @@ func TestWorkbenchHTMLRendersPendingActivationBanner(t *testing.T) {
 	}
 }
 
+func TestWorkbenchHTMLStatusBannersDoNotOverlapDeckForm(t *testing.T) {
+	chromePath, err := resolveChrome("")
+	if err != nil {
+		if renderSmokeRequired() {
+			t.Fatalf("Chrome/Chromium is required for workbench layout smoke: %v", err)
+		}
+		t.Skipf("Chrome/Chromium is not available: %v", err)
+	}
+
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, installMetadata{
+		SchemaVersion: installMetadataSchemaVersion,
+		ToolName:      toolName,
+		Version:       toolVersion,
+		Channel:       updateChannelCanary,
+		InstallMode:   installModeReleasePackage,
+	})
+	if err := markPluginRestartRequired(installRoot, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0-abcdef0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	htmlText := server.workbenchHTML()
+	for _, want := range []string{
+		`data-banner-id="canary_channel"`,
+		`data-banner-id="codex_restart_required"`,
+		`data-banner-id="pending_update_activation"`,
+		`<form id="deck-form">`,
+	} {
+		if !strings.Contains(htmlText, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, htmlText)
+		}
+	}
+
+	for _, viewport := range []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "desktop", width: 1280, height: 900},
+		{name: "mobile", width: 390, height: 900},
+	} {
+		t.Run(viewport.name, func(t *testing.T) {
+			report, err := probeWorkbenchLayoutWithChrome(t, chromePath, htmlText, viewport.width, viewport.height)
+			if err != nil {
+				if isChromeSandboxEnvironmentFailure(err) {
+					if renderSmokeRequired() {
+						t.Fatalf("Chrome workbench layout smoke is required but Chrome could not render in this sandbox: %v", err)
+					}
+					t.Skipf("Chrome cannot render in this sandbox: %v", err)
+				}
+				t.Fatal(err)
+			}
+			if report.Form.Width <= 0 || report.Form.Height <= 0 {
+				t.Fatalf("deck form did not render with measurable dimensions: %#v", report.Form)
+			}
+			if len(report.Banners) < 3 {
+				t.Fatalf("expected at least three status banners, got %#v", report.Banners)
+			}
+			if len(report.Overlaps) > 0 {
+				t.Fatalf("status banners overlap deck form at %dx%d: %v", viewport.width, viewport.height, report.Overlaps)
+			}
+			var maxBannerBottom float64
+			for _, banner := range report.Banners {
+				if banner.Rect.Width <= 0 || banner.Rect.Height <= 0 {
+					t.Fatalf("status banner %q did not render with measurable dimensions: %#v", banner.ID, banner.Rect)
+				}
+				if banner.Rect.Bottom > maxBannerBottom {
+					maxBannerBottom = banner.Rect.Bottom
+				}
+			}
+			if report.Form.Top < maxBannerBottom {
+				t.Fatalf("deck form starts before status banners end at %dx%d: form top %.2f, banner bottom %.2f", viewport.width, viewport.height, report.Form.Top, maxBannerBottom)
+			}
+		})
+	}
+}
+
 func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
@@ -881,6 +970,95 @@ func hasStatusBannerForTest(banners []statusBanner, id string) bool {
 		}
 	}
 	return false
+}
+
+type workbenchLayoutReport struct {
+	Form     workbenchLayoutRect     `json:"form"`
+	Banners  []workbenchBannerLayout `json:"banners"`
+	Overlaps []string                `json:"overlaps"`
+}
+
+type workbenchBannerLayout struct {
+	ID   string              `json:"id"`
+	Rect workbenchLayoutRect `json:"rect"`
+}
+
+type workbenchLayoutRect struct {
+	Left   float64 `json:"left"`
+	Top    float64 `json:"top"`
+	Right  float64 `json:"right"`
+	Bottom float64 `json:"bottom"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+func probeWorkbenchLayoutWithChrome(t *testing.T, chromePath, htmlText string, width, height int) (workbenchLayoutReport, error) {
+	t.Helper()
+	const markerStart = `<script id="slidex-workbench-layout" type="application/json">`
+	const markerEnd = `</script>`
+	probeScript := `<script>
+(() => {
+  const rectFor = (element) => {
+    const rect = element.getBoundingClientRect();
+    return {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height};
+  };
+  const form = document.getElementById("deck-form");
+  const formRect = rectFor(form);
+  const banners = Array.from(document.querySelectorAll("[data-banner-id]")).map((element) => ({
+    id: element.getAttribute("data-banner-id"),
+    rect: rectFor(element)
+  }));
+  const overlaps = banners.filter((banner) => !(
+    banner.rect.right <= formRect.left ||
+    banner.rect.left >= formRect.right ||
+    banner.rect.bottom <= formRect.top ||
+    banner.rect.top >= formRect.bottom
+  )).map((banner) => banner.id);
+  document.body.insertAdjacentHTML("beforeend", '` + markerStart + `' + JSON.stringify({form: formRect, banners, overlaps}) + '<\/script>');
+})();
+</script>`
+	if strings.Contains(htmlText, markerStart) {
+		return workbenchLayoutReport{}, fmt.Errorf("workbench HTML already contains layout probe marker")
+	}
+	probedHTML := strings.Replace(htmlText, "</body>", probeScript+"</body>", 1)
+	if probedHTML == htmlText {
+		return workbenchLayoutReport{}, fmt.Errorf("workbench HTML missing closing body tag")
+	}
+	htmlPath := filepath.Join(t.TempDir(), "workbench.html")
+	if err := os.WriteFile(htmlPath, []byte(probedHTML), 0o600); err != nil {
+		return workbenchLayoutReport{}, err
+	}
+
+	args, cleanup, err := chromeHeadlessBaseArgs(false)
+	if err != nil {
+		return workbenchLayoutReport{}, err
+	}
+	defer cleanup()
+	args = append(args,
+		fmt.Sprintf("--window-size=%d,%d", width, height),
+		"--virtual-time-budget=3000",
+		"--dump-dom",
+		fileURLFromPath(htmlPath),
+	)
+	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
+	output := string(out)
+	start := strings.LastIndex(output, markerStart)
+	if err != nil && !(isChromeCommandTimeout(err) && start >= 0) {
+		return workbenchLayoutReport{}, fmt.Errorf("chrome workbench layout probe failed: %w\n%s", err, output)
+	}
+	if start < 0 {
+		return workbenchLayoutReport{}, fmt.Errorf("layout probe report missing from dumped DOM:\n%s", output)
+	}
+	start += len(markerStart)
+	end := strings.Index(output[start:], markerEnd)
+	if end < 0 {
+		return workbenchLayoutReport{}, fmt.Errorf("layout probe report is missing closing marker:\n%s", output)
+	}
+	var report workbenchLayoutReport
+	if err := json.Unmarshal([]byte(html.UnescapeString(output[start:start+end])), &report); err != nil {
+		return workbenchLayoutReport{}, err
+	}
+	return report, nil
 }
 
 func TestDoctorWorkbenchFindingsCoverSecurityContract(t *testing.T) {
