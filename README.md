@@ -169,6 +169,15 @@ fetch하고 session token으로 `/draft`와 `/save` API를 호출한 뒤, `brief
 slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id save-smoke
 ```
 
+실제 브라우저 렌더링까지 pre-GUI로 확인하려면 `--screenshot`을 추가합니다. 이 경우
+headless Chrome이 workbench URL을 캡처하고 nonblank PNG 여부를 검증해
+`out/workbench_save_smoke.png`와 해당 해시를 smoke evidence에 남깁니다. 이 역시 실제
+Codex App browser/work-surface 증거는 아닙니다.
+
+```bash
+slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id save-smoke --screenshot
+```
+
 Codex App browser/work-surface를 실제로 확인한 뒤에는 다음 명령으로 deck-local
 검증 증거를 남깁니다. 이 증거가 없으면 Codex App browser 표시가 검증됐다고 주장하지
 않습니다.

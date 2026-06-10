@@ -293,6 +293,17 @@ func TestWorkbenchSaveSmokeHelpers(t *testing.T) {
 	if status := workbenchSaveSmokeStatus(result); status != "pass" {
 		t.Fatalf("status = %q, want pass", status)
 	}
+	result.WorkbenchScreenshot = &artifact{Path: "workbench_save_smoke.png", SHA256: strings.Repeat("d", 64), Size: 1}
+	result.BrowserRendered = true
+	if status := workbenchSaveSmokeStatus(result); status != "pass" {
+		t.Fatalf("rendered screenshot status = %q, want pass", status)
+	}
+	result.BrowserRendered = false
+	if status := workbenchSaveSmokeStatus(result); status != "fail" {
+		t.Fatalf("blank screenshot status = %q, want fail", status)
+	}
+	result.WorkbenchScreenshot = nil
+	result.BrowserRendered = false
 	result.StartedNew = false
 	result.ReusedExisting = true
 	result.StopStatus = "reused_not_stopped"
@@ -388,7 +399,7 @@ func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 		DecisionGoal:       "Keep the user's workbench running",
 		SourceNotes:        "Existing server should be reused.",
 		OutputExpectations: "save-smoke must not stop reused workbench.",
-	})
+	}, workbenchSaveSmokeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

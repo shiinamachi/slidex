@@ -5,7 +5,7 @@ Primary workflow:
 ```bash
 mise exec -- go install ./cmd/slidex
 slidex workbench start --deck-id <deck_id>
-slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id <deck_id>
+slidex workbench save-smoke --workspace /tmp/slidex-workbench-save-smoke --deck-id <deck_id> --screenshot
 slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified
 slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
 slidex run --deck decks/<deck_id>
@@ -43,7 +43,9 @@ It verifies the installed `slidex:slidex-start` skill can start the loopback
 workbench and persist initial deck creation input through that same workbench
 session. `slidex workbench save-smoke` is a local HTTP pre-GUI check. It
 verifies workbench HTML bootstrap, draft/save persistence, token redaction, and
-deck-local artifact hashes, but neither smoke is Codex App GUI/browser evidence.
+deck-local artifact hashes. With `--screenshot`, it also captures a nonblank
+headless Chrome workbench render under `out/workbench_save_smoke.png`, but
+neither smoke is Codex App GUI/browser evidence.
 
 Goal mirror:
 

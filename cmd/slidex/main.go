@@ -2291,6 +2291,10 @@ func chromeVersion(chromePath string) string {
 
 func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, chromeNoSandbox bool) error {
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(htmlPath)}
+	return captureURLScreenshot(chromePath, u.String(), pngPath, width, height, chromeNoSandbox)
+}
+
+func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
 	args := []string{
 		"--headless=new",
 		"--disable-gpu",
@@ -2299,7 +2303,7 @@ func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, 
 		"--force-device-scale-factor=1",
 		"--virtual-time-budget=3000",
 		"--screenshot=" + pngPath,
-		u.String(),
+		targetURL,
 	}
 	if chromeNoSandbox {
 		args = append([]string{"--no-sandbox"}, args...)

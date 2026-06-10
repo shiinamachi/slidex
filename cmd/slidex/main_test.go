@@ -1210,8 +1210,11 @@ func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	if snapshot["skillSmokeIsBrowserEvidence"] != false {
 		t.Fatalf("skill smoke must not be reported as browser evidence: %#v", snapshot)
 	}
-	if snapshot["saveSmokeCommand"] != "slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>" {
+	if snapshot["saveSmokeCommand"] != "slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id> --screenshot" {
 		t.Fatalf("doctor snapshot should expose the pre-GUI save smoke command: %#v", snapshot)
+	}
+	if snapshot["saveSmokeScreenshotEvidence"] != "out/workbench_save_smoke.png" {
+		t.Fatalf("doctor snapshot should expose save-smoke screenshot evidence: %#v", snapshot)
 	}
 	if snapshot["saveSmokeIsBrowserEvidence"] != false {
 		t.Fatalf("save smoke must not be reported as browser evidence: %#v", snapshot)
