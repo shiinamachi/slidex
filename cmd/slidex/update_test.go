@@ -2163,9 +2163,6 @@ func writeZipFromDirForTest(t *testing.T, archivePath, root, topName string) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() {
-			return nil
-		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -2179,6 +2176,14 @@ func writeZipFromDirForTest(t *testing.T, archivePath, root, topName string) {
 			return err
 		}
 		header.Name = filepath.ToSlash(filepath.Join(topName, rel))
+		if d.IsDir() {
+			if rel == "." {
+				header.Name = filepath.ToSlash(topName)
+			}
+			header.Name = strings.TrimRight(header.Name, "/") + "/"
+			_, err := zw.CreateHeader(header)
+			return err
+		}
 		header.Method = zip.Deflate
 		writer, err := zw.CreateHeader(header)
 		if err != nil {
@@ -2200,6 +2205,36 @@ func writeZipFromDirForTest(t *testing.T, archivePath, root, topName string) {
 	for _, err := range []error{walkErr, closeErr, fileErr} {
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestWriteZipFromDirForTestPreservesEmptyDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "schemas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "decks", "_template"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "VERSION"), []byte("0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	writeZipFromDirForTest(t, archivePath, root, "slidex_0.1.0_windows_amd64")
+
+	extractRoot := t.TempDir()
+	if err := extractZipArchive(archivePath, extractRoot); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"schemas", filepath.Join("decks", "_template")} {
+		path := filepath.Join(extractRoot, "slidex_0.1.0_windows_amd64", rel)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("extracted empty directory %s missing: %v", filepath.ToSlash(rel), err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("extracted empty directory %s is not a directory", filepath.ToSlash(rel))
 		}
 	}
 }
