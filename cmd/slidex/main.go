@@ -2009,7 +2009,7 @@ func renderConfigFromFlags(htmlPath, outDir, pdfPath, manifestPath, pdfMode, sel
 }
 
 func renderHTML(cfg renderConfig) (renderManifest, error) {
-	raw, err := os.ReadFile(cfg.HTMLPath)
+	raw, err := readRegularFile(cfg.HTMLPath)
 	if err != nil {
 		return renderManifest{}, err
 	}
@@ -3392,7 +3392,7 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 
 	var htmlSlides []slideInfo
 	htmlString := ""
-	if raw, err := os.ReadFile(htmlPath); err == nil {
+	if raw, err := readRegularFile(htmlPath); err == nil {
 		htmlString = string(raw)
 		htmlLower := strings.ToLower(htmlString)
 		if !strings.Contains(htmlLower, "<!doctype html") {
@@ -3442,10 +3442,7 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 			manifest = decoded
 			manifestLoaded = true
 			expected = manifest.ExpectedDimensions
-			if currentHash, err := sha256File(htmlPath); err == nil && currentHash != manifest.SourceHTML.SHA256 {
-				result.Findings = append(result.Findings, fail("manifest.freshness", "current HTML hash does not match render manifest", htmlPath))
-				result.Findings = append(result.Findings, fail("ED-RENDER-001", "rendered PNG lineage is stale because current HTML hash does not match render manifest", htmlPath))
-			}
+			result.Findings = append(result.Findings, renderManifestHTMLFreshnessFindings(htmlPath, manifest.SourceHTML.SHA256)...)
 			result.RenderMethod = manifest.RenderMethod
 			if !hasExactVersionToken(manifest.ChromeVersion) {
 				result.Findings = append(result.Findings, fail("runtime.chrome_version", "render manifest must record an exact Chrome/Chromium version", manifestPath))
@@ -3674,12 +3671,12 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	notesPath := filepath.Join(outDir, "notes.md")
 	syncPath := filepath.Join(outDir, "html_edit_sync.md")
 
-	currentRaw, err := os.ReadFile(htmlPath)
+	currentRaw, err := readRegularFile(htmlPath)
 	if err != nil {
 		return nil, err
 	}
 	currentHash := sha256Bytes(currentRaw)
-	baseRaw, baseErr := os.ReadFile(baselinePath)
+	baseRaw, baseErr := readRegularFile(baselinePath)
 	baseHash := ""
 	if baseErr == nil {
 		baseHash = sha256Bytes(baseRaw)
@@ -4390,17 +4387,18 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		manifest, err := decodeRenderManifest(raw, manifestPath)
 		if err != nil {
 			findings = append(findings, fail("package.manifest_parse", err.Error(), manifestPath))
-		} else if hash, err := sha256File(htmlPath); err == nil && hash != manifest.SourceHTML.SHA256 {
-			findings = append(findings, fail("package.manifest_freshness", "manifest source HTML hash is stale", manifestPath))
 		} else {
+			findings = append(findings, packageManifestHTMLFreshnessFindings(htmlPath, manifestPath, manifest.SourceHTML.SHA256)...)
 			if !hasExactVersionToken(manifest.ChromeVersion) {
 				findings = append(findings, fail("package.runtime_chrome_version", "manifest must record an exact Chrome/Chromium version", manifestPath))
 			}
-			if currentHTML, err := os.ReadFile(htmlPath); err == nil {
+			if currentHTML, err := readRegularFile(htmlPath); err == nil {
 				currentStyles, currentAssets, currentFonts := collectDependencies(htmlPath, string(currentHTML), manifest.FontPreset)
 				findings = append(findings, verifyManifestDependencies("stylesheet", manifest.Stylesheets, currentStyles, manifestPath)...)
 				findings = append(findings, verifyManifestDependencies("asset", manifest.Assets, currentAssets, manifestPath)...)
 				findings = append(findings, verifyManifestDependencies("font", manifest.Fonts, currentFonts, manifestPath)...)
+			} else {
+				findings = append(findings, fail("package.html_read", err.Error(), htmlPath))
 			}
 			if len(manifest.PNGFiles) != len(pngs) {
 				findings = append(findings, fail("package.png_count", fmt.Sprintf("manifest PNG count %d does not match files %d", len(manifest.PNGFiles), len(pngs)), manifestPath))
@@ -4675,6 +4673,52 @@ func sha256File(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func readRegularFile(path string) ([]byte, error) {
+	f, _, err := openRegularFileForRead(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+func renderManifestHTMLFreshnessFindings(htmlPath, expectedSHA string) []qaFinding {
+	if strings.TrimSpace(expectedSHA) == "" {
+		return []qaFinding{
+			fail("manifest.freshness", "render manifest is missing source HTML hash", htmlPath),
+			fail("ED-RENDER-001", "rendered PNG lineage is stale because render manifest is missing source HTML hash", htmlPath),
+		}
+	}
+	currentHash, err := sha256File(htmlPath)
+	if err != nil {
+		return []qaFinding{
+			fail("manifest.freshness", "could not hash current HTML: "+err.Error(), htmlPath),
+			fail("ED-RENDER-001", "rendered PNG lineage freshness could not be verified: "+err.Error(), htmlPath),
+		}
+	}
+	if currentHash != expectedSHA {
+		return []qaFinding{
+			fail("manifest.freshness", "current HTML hash does not match render manifest", htmlPath),
+			fail("ED-RENDER-001", "rendered PNG lineage is stale because current HTML hash does not match render manifest", htmlPath),
+		}
+	}
+	return nil
+}
+
+func packageManifestHTMLFreshnessFindings(htmlPath, manifestPath, expectedSHA string) []qaFinding {
+	if strings.TrimSpace(expectedSHA) == "" {
+		return []qaFinding{fail("package.manifest_freshness", "manifest source HTML hash is missing", manifestPath)}
+	}
+	currentHash, err := sha256File(htmlPath)
+	if err != nil {
+		return []qaFinding{fail("package.manifest_freshness", "could not hash current HTML: "+err.Error(), htmlPath)}
+	}
+	if currentHash != expectedSHA {
+		return []qaFinding{fail("package.manifest_freshness", "manifest source HTML hash is stale", manifestPath)}
+	}
+	return nil
 }
 
 func sha256Bytes(b []byte) string {

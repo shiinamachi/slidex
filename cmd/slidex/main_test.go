@@ -71,6 +71,25 @@ func TestBuildSlideWrapperMarksOverflowReportWithNonce(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLRejectsSymlinkSourceHTML(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.html")
+	if err := os.WriteFile(outside, []byte(`<!doctype html><html><body><section class="slide">outside</section></body></html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "final_deck.html")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := renderHTML(renderConfig{HTMLPath: link})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlinked source HTML rejection, got %v", err)
+	}
+	if _, _, err := extractSlidesWithChrome("", link, ".slide", false); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected Chrome enumeration source HTML rejection, got %v", err)
+	}
+}
+
 func TestParseInitArgsAcceptsFromTemplateAroundDeckID(t *testing.T) {
 	for _, args := range [][]string{
 		{"demo", "--from-template", "custom_template"},
@@ -4060,12 +4079,38 @@ func TestReadHashesRejectSymlinkTargets(t *testing.T) {
 	if _, err := sha256File(link); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("expected sha256File symlink rejection, got %v", err)
 	}
+	if _, err := readRegularFile(link); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected readRegularFile symlink rejection, got %v", err)
+	}
 	artifact := artifactFromPath(link)
 	if artifact.SHA256 != "" || artifact.Size != 0 {
 		t.Fatalf("artifact should not hash symlink target: %#v", artifact)
 	}
 	if got := artifactsForExisting([]string{link}); len(got) != 0 {
 		t.Fatalf("artifactsForExisting should skip symlink target: %#v", got)
+	}
+}
+
+func TestHTMLFreshnessFindingsFailClosedOnHashErrors(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "outside.html")
+	if err := os.WriteFile(target, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "final_deck.html")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	renderFindings := renderManifestHTMLFreshnessFindings(link, strings.Repeat("0", 64))
+	if !hasFindingCheck(renderFindings, "manifest.freshness") || !hasFindingCheck(renderFindings, "ED-RENDER-001") {
+		t.Fatalf("render freshness should fail closed on hash errors, got %#v", renderFindings)
+	}
+	packageFindings := packageManifestHTMLFreshnessFindings(link, filepath.Join(t.TempDir(), "render_manifest.json"), strings.Repeat("0", 64))
+	if !hasFindingCheck(packageFindings, "package.manifest_freshness") {
+		t.Fatalf("package freshness should fail closed on hash errors, got %#v", packageFindings)
+	}
+	if missingHash := packageManifestHTMLFreshnessFindings(target, "manifest.json", ""); !hasFindingCheck(missingHash, "package.manifest_freshness") {
+		t.Fatalf("package freshness should require source hash, got %#v", missingHash)
 	}
 }
 

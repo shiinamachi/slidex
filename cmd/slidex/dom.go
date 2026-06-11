@@ -27,7 +27,7 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if selector != ".slide" {
 		return nil, "", fmt.Errorf("unsupported selector for Chrome enumeration: %s", selector)
 	}
-	raw, err := os.ReadFile(htmlPath)
+	raw, err := readRegularFile(htmlPath)
 	if err != nil {
 		return nil, "", err
 	}
