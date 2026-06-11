@@ -1305,6 +1305,48 @@ func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 	}
 }
 
+func TestPostRestartPluginVerificationAcceptsCodexCacheSkillPath(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
+		t.Fatal(err)
+	}
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+	cacheInstallRoot := t.TempDir()
+	writePostRestartPluginFilesForTest(t, cacheInstallRoot, toolVersion+"+codex.test", toolVersion)
+	cacheSkillPath := filepath.Join(cacheInstallRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+
+	result := appServerPluginSmokeResult{
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           true,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(cacheSkillPath),
+		Checks:                  map[string]any{},
+	}
+	applyPostRestartPluginVerification(&result)
+	if result.PluginVerificationStatus != "verified" {
+		t.Fatalf("cache skill verification status = %q, checks = %#v", result.PluginVerificationStatus, result.Checks)
+	}
+	if result.RestartRequiredAfter {
+		t.Fatalf("cache skill verification should clear restart state: %#v", result)
+	}
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.VerifiedStartSkillPath != filepath.ToSlash(cacheSkillPath) || status.PluginVerificationStatus != "verified" {
+		t.Fatalf("verified cache skill status = %#v", status)
+	}
+}
+
 func TestPostRestartPluginVerificationKeepsRestartStateForDrift(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)

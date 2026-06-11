@@ -1842,11 +1842,11 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 	if !filepath.IsAbs(skillPath) {
 		return fmt.Errorf("%s: verifiedStartSkillPath must be absolute, got %q", path, state.VerifiedStartSkillPath)
 	}
-	if !pathWithin(pluginRoot, skillPath) {
-		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
-	}
 	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
 		return fmt.Errorf("%s: verifiedStartSkillPath must end with skills/slidex-start/SKILL.md, got %s", path, filepath.ToSlash(skillPath))
+	}
+	if status := postRestartSkillPathStatus(pluginRoot, skillPath, state.VerifiedPluginVersion); status != "verified" {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s or a matching Codex plugin cache, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
 	}
 	return nil
 }
