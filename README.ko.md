@@ -208,7 +208,9 @@ navigation으로 폴백합니다. Plugin을 통한 새 deck 생성은 반드시 
 먼저 표시해야 하며, `slidex init`, 수동 디렉터리 생성, `out/final_deck.html` 직접
 작성으로 폴백하지 않습니다. CLI는 기본 `decks/_template`을 바이너리에 내장하므로
 사용자 workspace에 템플릿 폴더가 없어도 workbench를 bootstrap할 수 있습니다.
-Wizard에서 `Complete & generate`를 선택하면 `brief.md`,
+production 또는 canary release 설치본에서는 startup이 새 verified release를 자동
+확인/적용한 뒤 Wizard를 엽니다. 업데이트가 적용되면 Wizard 대신 재시작 또는
+pending activation 안내를 반환합니다. Wizard에서 `Complete & generate`를 선택하면 `brief.md`,
 `out/workbench_draft.json`, `out/workbench_manifest.json`이 저장되고
 `slidex run --deck decks/<deck_id> --non-interactive`가 백그라운드로 시작됩니다.
 생성 상태와 로그 경로는 `out/workbench_manifest.json`에 기록됩니다.

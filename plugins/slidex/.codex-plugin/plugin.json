@@ -1,6 +1,6 @@
 {
   "name": "slidex",
-  "version": "0.1.0+codex.20260611104740",
+  "version": "0.1.0+codex.20260611111827",
   "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
   "author": {
     "name": "shiinamachi"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "slidex",
     "shortDescription": "Create slidex decks through a required local React Wizard.",
-    "longDescription": "slidex starts a loopback React Wizard workbench from Codex for every new deck, opens it in the Codex App Browser, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages. The CLI embeds the default deck template so installed binaries can bootstrap new workbenches without a workspace-local template folder.",
+    "longDescription": "slidex starts a loopback React Wizard workbench from Codex for every new deck, opens it in the Codex App Browser, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages. Plugin startup checks and applies verified production/canary release updates before opening the wizard, and the CLI embeds the default deck template so installed binaries can bootstrap new workbenches without a workspace-local template folder.",
     "developerName": "shiinamachi",
     "category": "Productivity",
     "capabilities": [

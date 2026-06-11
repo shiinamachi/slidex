@@ -230,6 +230,27 @@ type workbenchSaveInput struct {
 	OutputExpectations string `json:"outputExpectations"`
 }
 
+type workbenchAutoUpdateResult struct {
+	Status                   string             `json:"status"`
+	UpdatesEnabled           bool               `json:"updatesEnabled"`
+	Channel                  string             `json:"channel,omitempty"`
+	InstallMode              string             `json:"installMode,omitempty"`
+	InstallRoot              string             `json:"installRoot,omitempty"`
+	CurrentVersion           string             `json:"currentVersion,omitempty"`
+	TargetVersion            string             `json:"targetVersion,omitempty"`
+	TargetTag                string             `json:"targetTag,omitempty"`
+	RestartRequired          bool               `json:"restartRequired"`
+	PendingActivation        bool               `json:"pendingActivation"`
+	PendingActivationCommand string             `json:"pendingActivationCommand,omitempty"`
+	PluginVerificationStatus string             `json:"pluginVerificationStatus,omitempty"`
+	NextVerificationCommand  string             `json:"nextVerificationCommand,omitempty"`
+	BlocksWorkbench          bool               `json:"blocksWorkbench"`
+	ContinueToWorkbench      bool               `json:"continueToWorkbench"`
+	Instruction              string             `json:"instruction,omitempty"`
+	Error                    string             `json:"error,omitempty"`
+	ApplyResult              *updateApplyResult `json:"applyResult,omitempty"`
+}
+
 func runWorkbench(args []string) error {
 	if len(args) == 0 {
 		return exitCodeError(2, "usage: slidex workbench start|serve|status|stop|save-smoke|evidence|verify-evidence")
@@ -272,6 +293,16 @@ func runWorkbenchStart(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
+	if autoUpdate.BlocksWorkbench {
+		return printJSON(map[string]any{
+			"toolName":         toolName,
+			"status":           autoUpdate.Status,
+			"autoUpdate":       autoUpdate,
+			"openInstruction":  autoUpdate.Instruction,
+			"workbenchStarted": false,
+		})
+	}
 	result, manifest, startedNew, err := startWorkbenchWithInput(*workspace, *deckID, *deck, *fromTemplate, workbenchSaveInput{
 		InitialRequest:     *initialRequest,
 		Title:              *title,
@@ -294,6 +325,7 @@ func runWorkbenchStart(args []string) error {
 		"browserOpen":             workbenchBrowserOpenIntent(manifest),
 		"openInstruction":         workbenchOpenInstruction(manifest),
 		"browserOpenStrategy":     manifest.BrowserOpenStrategy,
+		"autoUpdate":              autoUpdate,
 		"proprietaryCanvasAPI":    "not_used",
 		"tokenHandling":           "write token is redacted from CLI output and manifest",
 		"startedNew":              startedNew,
@@ -487,6 +519,16 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
+	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
+	if autoUpdate.BlocksWorkbench {
+		return map[string]any{
+			"toolName":         toolName,
+			"status":           autoUpdate.Status,
+			"autoUpdate":       autoUpdate,
+			"openInstruction":  autoUpdate.Instruction,
+			"workbenchStarted": false,
+		}, nil
+	}
 	result, manifest, startedNew, err := startWorkbenchWithInput(workspace, deckID, deck, defaultDeckTemplatePath, workbenchSaveInput{
 		InitialRequest:     stringArg(args, "initialRequest", "initial_request"),
 		Title:              stringArg(args, "title"),
@@ -508,8 +550,154 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 		"startedNew":           startedNew,
 		"reusedExisting":       !startedNew,
 		"openInstruction":      workbenchOpenInstruction(manifest),
+		"autoUpdate":           autoUpdate,
 		"proprietaryCanvasAPI": "not_used",
 	}, nil
+}
+
+func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateResult {
+	result := workbenchAutoUpdateResult{
+		Status:              "skipped",
+		ContinueToWorkbench: true,
+	}
+	if !automaticUpdatesAllowed() {
+		result.Status = "disabled_by_environment"
+		result.Instruction = "Automatic slidex release updates are disabled by " + updateAutoEnv + ". Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	status, err := currentUpdateStatus("", "")
+	if err != nil {
+		result.Status = "status_error"
+		result.Error = err.Error()
+		result.Instruction = "slidex could not read update status. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	result = workbenchAutoUpdateFromStatus(status, "disabled")
+	if !status.UpdatesEnabled {
+		result.Status = "disabled"
+		result.ContinueToWorkbench = true
+		result.Instruction = firstNonEmpty(status.Guidance, "Automatic release updates are disabled for this install. Continue to the React Wizard with the currently installed version.")
+		return result
+	}
+	if status.PendingActivation {
+		result.Status = "pending_activation"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+		result.Instruction = workbenchAutoUpdateInstruction(result)
+		return result
+	}
+	if status.RestartRequired {
+		result.Status = "restart_required"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+		result.Instruction = workbenchAutoUpdateInstruction(result)
+		return result
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	releases, err := fetchUpdateReleases(ctx, defaultUpdateAPIURL())
+	if err != nil {
+		result.Status = "check_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update check failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	release, err := selectUpdateReleaseForStatus(status, releases)
+	if err != nil {
+		result.Status = "check_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update check failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	result.TargetVersion = release.Version
+	result.TargetTag = release.TagName
+	if release.Version == status.CurrentVersion {
+		result.Status = "current"
+		result.Instruction = "slidex is current for the " + status.Channel + " channel. Continue to the React Wizard."
+		return result
+	}
+
+	candidateRoot, targetVersion, targetTag, err := downloadAndStageSelectedRelease(ctx, status, release)
+	if err != nil {
+		result.Status = "apply_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update download or staging failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	result.TargetVersion = targetVersion
+	result.TargetTag = targetTag
+	applyResult, err := applyCandidateBundle(status, candidateRoot, targetVersion, targetTag)
+	result.ApplyResult = &applyResult
+	if err != nil {
+		result.Status = "apply_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update apply failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	if hasFailures(applyResult.CandidateValidation) {
+		result.Status = "apply_failed"
+		result.Error = "candidate bundle validation failed"
+		result.Instruction = "Automatic update validation failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+
+	updatedStatus, statusErr := currentUpdateStatus("", "")
+	if statusErr == nil {
+		result = workbenchAutoUpdateFromStatus(updatedStatus, result.Status)
+		result.ApplyResult = &applyResult
+	} else {
+		result.RestartRequired = applyResult.RestartRequired
+		result.PluginVerificationStatus = applyResult.PluginVerificationStatus
+		result.NextVerificationCommand = applyResult.NextVerificationCommand
+	}
+	switch applyResult.Status {
+	case "applied":
+		result.Status = "applied_restart_required"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+	case "pending-restart":
+		result.Status = "pending_activation"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+		result.PendingActivation = true
+	default:
+		result.Status = "apply_failed"
+		result.Error = "unexpected update apply status: " + applyResult.Status
+		result.BlocksWorkbench = false
+		result.ContinueToWorkbench = true
+	}
+	result.Instruction = workbenchAutoUpdateInstruction(result)
+	return result
+}
+
+func workbenchAutoUpdateFromStatus(status updateStatus, resultStatus string) workbenchAutoUpdateResult {
+	return workbenchAutoUpdateResult{
+		Status:                   resultStatus,
+		UpdatesEnabled:           status.UpdatesEnabled,
+		Channel:                  status.Channel,
+		InstallMode:              status.InstallMode,
+		InstallRoot:              status.InstallRoot,
+		CurrentVersion:           status.CurrentVersion,
+		TargetVersion:            status.TargetVersion,
+		TargetTag:                status.TargetTag,
+		RestartRequired:          status.RestartRequired,
+		PendingActivation:        status.PendingActivation,
+		PendingActivationCommand: status.PendingActivationCommand,
+		PluginVerificationStatus: status.PluginVerificationStatus,
+		NextVerificationCommand:  status.NextVerificationCommand,
+		ContinueToWorkbench:      true,
+	}
+}
+
+func workbenchAutoUpdateInstruction(result workbenchAutoUpdateResult) string {
+	if result.PendingActivation {
+		return "A slidex update was staged automatically and must be activated before the React Wizard opens. Restart Codex so the old slidex MCP process exits, run the pending activation command if shown, then start a new Codex thread and invoke slidex again."
+	}
+	if result.RestartRequired || result.BlocksWorkbench {
+		return "A slidex update was applied automatically. Restart Codex and start a new thread before creating this deck so the updated slidex plugin skills are active."
+	}
+	return result.Instruction
 }
 
 func stringArg(args map[string]any, keys ...string) string {

@@ -496,6 +496,7 @@ func workbenchDoctorSnapshot() map[string]any {
 		"command":                             "slidex workbench start --deck-id <deck_id>",
 		"frontend":                            "local_react_wizard",
 		"defaultTemplate":                     "embedded_decks_template_with_filesystem_override",
+		"autoUpdateAtStartup":                 "workbench.start checks and applies release updates before opening the React Wizard",
 		"newDeckStartupRequiredSurface":       "react_wizard_workbench",
 		"deckBootstrapMCPBehavior":            "deprecated_alias_for_workbench_start",
 		"wizardCompletionAction":              "Complete & generate saves brief/draft/manifest and starts slidex run --deck decks/<deck_id> --non-interactive",

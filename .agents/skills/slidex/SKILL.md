@@ -13,6 +13,12 @@ in-app browser. The default `decks/_template` is embedded in the CLI binary, so
 missing workspace template files are not a reason to create deck folders
 manually.
 
+For release-package installs, `slidex workbench start` automatically checks the
+configured production/canary release channel and applies a newer verified
+release before opening the React Wizard. If the response reports
+`autoUpdate.blocksWorkbench: true`, stop the workflow and require the returned
+restart or pending-activation path before continuing in a new Codex thread.
+
 ## Workflow
 
 1. For new deck creation through the plugin, make sure the PATH binary is current with `mise exec -- go install ./cmd/slidex`, then run `slidex workbench start --deck-id <deck_id>` and immediately open the returned URL in the Codex App in-app browser. Prefer Browser plugin / `@Browser` navigation when available; otherwise surface the clickable loopback URL and tell the user to click it or navigate manually. Pass the user's invocation as seed fields when available, especially `--initial-request`.

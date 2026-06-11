@@ -212,9 +212,12 @@ or manual navigation as fallback. New deck creation through the plugin must
 display this React Wizard first; do not fall back to `slidex init`, manual
 directory creation, or direct `out/final_deck.html` authoring. The CLI embeds
 the default `decks/_template`, so installed binaries can bootstrap the
-workbench even when the active workspace has no template folder. Selecting
-`Complete & generate` writes `brief.md` and workbench artifacts to the deck's
-`out/` directory, then starts `slidex run --deck decks/<deck_id>
+workbench even when the active workspace has no template folder. For production
+or canary release installs, startup automatically checks and applies a newer
+verified release before opening the wizard; if an update is applied, it returns
+a restart or pending-activation instruction instead of opening the wizard.
+Selecting `Complete & generate` writes `brief.md` and workbench artifacts to
+the deck's `out/` directory, then starts `slidex run --deck decks/<deck_id>
 --non-interactive` in the background.
 
 ---

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -1237,6 +1238,88 @@ func TestPublicWorkbenchStatusIncludesPendingActivationBanner(t *testing.T) {
 	}
 	if !hasStatusBannerForTest(banners, "pending_update_activation") {
 		t.Fatalf("missing pending activation banner: %#v", banners)
+	}
+}
+
+func TestWorkbenchAutoUpdatePreflightLocalDevelopmentContinuesWithoutFetch(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := filepath.Join(installRoot, ".slidex", "missing-install.json")
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not fetch release metadata for local-development", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	t.Setenv(updateAPIURLEnv, server.URL)
+
+	result := runWorkbenchAutoUpdatePreflight(context.Background())
+	if result.Status != "disabled" || !result.ContinueToWorkbench || result.BlocksWorkbench {
+		t.Fatalf("local-development should continue to workbench without blocking: %#v", result)
+	}
+	if called {
+		t.Fatal("local-development update preflight should not fetch release metadata")
+	}
+}
+
+func TestMCPWorkbenchStartAutoAppliesReleaseUpdateBeforeWizard(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	server := updateReleaseServerForCandidateForTest(t, candidate, "0.2.0")
+	defer server.Close()
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, installMetadataPath(installRoot))
+	t.Setenv(updateAPIURLEnv, server.URL+"/releases")
+
+	workspace := filepath.Join(parent, "workspace")
+	result, err := callMCPWorkbenchStart(map[string]any{
+		"workspace": workspace,
+		"deckId":    "auto-update",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("workbench.start result = %#v, want object", result)
+	}
+	if payload["workbenchStarted"] != false {
+		t.Fatalf("workbench should not start after applying an update: %#v", payload)
+	}
+	autoUpdate, ok := payload["autoUpdate"].(workbenchAutoUpdateResult)
+	if !ok {
+		t.Fatalf("autoUpdate missing from workbench.start result: %#v", payload)
+	}
+	if !autoUpdate.BlocksWorkbench || autoUpdate.ContinueToWorkbench {
+		t.Fatalf("applied update should block the current workbench startup: %#v", autoUpdate)
+	}
+	if autoUpdate.TargetVersion != "0.2.0" {
+		t.Fatalf("auto update target = %#v, want 0.2.0", autoUpdate)
+	}
+	if runtime.GOOS == "windows" {
+		if autoUpdate.Status != "pending_activation" || !autoUpdate.PendingActivation {
+			t.Fatalf("windows auto update should require pending activation: %#v", autoUpdate)
+		}
+	} else {
+		if autoUpdate.Status != "applied_restart_required" || !autoUpdate.RestartRequired {
+			t.Fatalf("auto update should require restart after apply: %#v", autoUpdate)
+		}
+		if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+			t.Fatalf("install root VERSION after auto update = %q, want 0.2.0", got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "decks", "auto-update", "out", workbenchManifestName)); !os.IsNotExist(err) {
+		t.Fatalf("workbench manifest should not be created while update blocks startup, stat err=%v", err)
 	}
 }
 

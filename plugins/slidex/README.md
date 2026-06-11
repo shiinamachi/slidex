@@ -15,21 +15,26 @@ The Go CLI remains the implementation source of truth.
    such as `--initial-request`, `--title`, `--audience`, `--decision-goal`,
    `--source-notes`, `--key-messages`, `--required-claims`, `--constraints`,
    and `--output-expectations`.
-4. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
+4. For release-package installs, startup automatically checks the configured
+   production/canary channel and applies a newer verified release before the
+   wizard opens. If the response reports `autoUpdate.blocksWorkbench: true`,
+   stop this thread and follow the returned restart or pending-activation
+   instruction.
+5. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
    Codex App in-app browser. The startup intent is Browser-first: use the
    Browser plugin / `@Browser` to navigate there when available, then fall back
    to clicking the URL or navigating manually.
-5. Complete the local React Wizard. It asks for title, audience, decision goal,
+6. Complete the local React Wizard. It asks for title, audience, decision goal,
    source notes, key messages, output expectations, and optional
    claim/constraint details.
-6. Select `Complete & generate` in the wizard. This writes `brief.md`,
+7. Select `Complete & generate` in the wizard. This writes `brief.md`,
    `out/workbench_draft.json`, and `out/workbench_manifest.json`, records
    `wizardCompletedAt`, and starts `slidex run --deck decks/<deck_id>
    --non-interactive` in the background.
-7. Verify `decks/<deck_id>/out/workbench_manifest.json` reports
+8. Verify `decks/<deck_id>/out/workbench_manifest.json` reports
    `generationStatus` and inspect `decks/<deck_id>/out/workbench_generation.log`
    if generation fails.
-8. Optionally run local HTTP save smoke before GUI evidence:
+9. Optionally run local HTTP save smoke before GUI evidence:
 
 ```bash
 slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>
@@ -40,7 +45,7 @@ verifies `brief.md`, `out/workbench_draft.json`,
 `out/workbench_manifest.json`, token redaction, and writes
 `out/workbench_save_smoke.json`. It is not Codex App GUI/browser evidence.
 
-9. After actually inspecting the Codex App browser surface, record deck-local
+10. After actually inspecting the Codex App browser surface, record deck-local
    evidence:
 
 ```bash
@@ -86,6 +91,8 @@ The CLI embeds the default `decks/_template`, so installed binaries can start a
 new workbench even when the active user workspace does not contain a template
 folder. The MCP `deck.bootstrap` tool is kept only as a deprecated alias and
 returns the same React Wizard browser-open intent as `workbench.start`.
+Set `SLIDEX_AUTO_UPDATE=0` only when deliberately disabling release update
+preflight for diagnostics.
 
 Because the plugin MCP configuration runs `slidex` from `PATH`, local source
 checkout plugin invocation tests should install the current repository binary:
