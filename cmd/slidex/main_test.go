@@ -3976,10 +3976,11 @@ func TestInjectDocumentBaseUsesSourceDirectory(t *testing.T) {
 	}
 }
 
-func TestInjectHeadBaseKeepsExistingBase(t *testing.T) {
+func TestInjectHeadBaseKeepsSingleCanonicalBase(t *testing.T) {
 	head := `<base href="file:///deck/out/"><title>Deck</title>`
-	if got := injectHeadBase(head, "file:///deck/out/"); got != head {
-		t.Fatalf("existing base tag should be preserved, got %q", got)
+	got := injectHeadBase(head, "file:///deck/out/")
+	if strings.Count(got, `<base href="file:///deck/out/">`) != 1 || !strings.HasPrefix(got, `<base href="file:///deck/out/">`) {
+		t.Fatalf("head should contain one canonical leading base, got %q", got)
 	}
 }
 
@@ -4047,6 +4048,32 @@ func TestInjectHeadBaseReplacesRelativeBase(t *testing.T) {
 	}
 	if strings.Contains(got, `<base href="./">`) {
 		t.Fatalf("relative base should be removed, got %q", got)
+	}
+}
+
+func TestInjectHeadBaseMovesLateCanonicalBaseBeforeURLContent(t *testing.T) {
+	got := injectHeadBase(`<link rel="stylesheet" href="deck.css"><base href="file:///deck/out/"><title>Deck</title>`, "file:///deck/out/")
+	if !strings.HasPrefix(got, `<base href="file:///deck/out/">`) {
+		t.Fatalf("canonical base should be moved before URL-bearing content, got %q", got)
+	}
+	if strings.Count(got, `<base href="file:///deck/out/">`) != 1 {
+		t.Fatalf("head should contain exactly one canonical base, got %q", got)
+	}
+	if strings.Index(got, `<base href="file:///deck/out/">`) > strings.Index(got, `<link rel="stylesheet"`) {
+		t.Fatalf("base should precede stylesheet, got %q", got)
+	}
+}
+
+func TestInjectDocumentBaseMovesLateCanonicalBaseBeforeURLContent(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	baseTag := `<base href="` + baseHref + `">`
+	src := `<!doctype html><html><head><link rel="stylesheet" href="deck.css"><base href="file:///deck/out/"><title>Deck</title></head><body></body></html>`
+	got := injectDocumentBase(src, baseHref)
+	if strings.Count(got, baseTag) != 1 {
+		t.Fatalf("document should contain exactly one canonical base:\n%s", got)
+	}
+	if strings.Index(got, baseTag) > strings.Index(got, `<link rel="stylesheet"`) {
+		t.Fatalf("base should precede stylesheet:\n%s", got)
 	}
 }
 

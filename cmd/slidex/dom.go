@@ -108,10 +108,7 @@ func injectDocumentBase(src, baseHref string) string {
 	if baseHref == "" {
 		return src
 	}
-	inspection := inspectBaseElements(src, baseHref, true)
-	if inspection.isCanonical() {
-		return src
-	}
+	inspection := inspectBaseElements(src, true)
 	if len(inspection.ranges) > 0 {
 		src = removeStringRanges(src, inspection.ranges)
 	}
@@ -130,10 +127,7 @@ func injectHeadBase(head, baseHref string) string {
 	if baseHref == "" {
 		return head
 	}
-	inspection := inspectBaseElements(head, baseHref, false)
-	if inspection.isCanonical() {
-		return head
-	}
+	inspection := inspectBaseElements(head, false)
 	if len(inspection.ranges) > 0 {
 		head = removeStringRanges(head, inspection.ranges)
 	}
@@ -141,12 +135,7 @@ func injectHeadBase(head, baseHref string) string {
 }
 
 type baseInspection struct {
-	ranges        []stringRange
-	expectedCount int
-}
-
-func (inspection baseInspection) isCanonical() bool {
-	return len(inspection.ranges) == 1 && inspection.expectedCount == 1
+	ranges []stringRange
 }
 
 type stringRange struct {
@@ -154,7 +143,7 @@ type stringRange struct {
 	end   int
 }
 
-func inspectBaseElements(src, baseHref string, requireHead bool) baseInspection {
+func inspectBaseElements(src string, requireHead bool) baseInspection {
 	z := xhtml.NewTokenizer(strings.NewReader(src))
 	inHead := !requireHead
 	cursor := 0
@@ -177,16 +166,10 @@ func inspectBaseElements(src, baseHref string, requireHead bool) baseInspection 
 				continue
 			}
 			if inHead && name == "base" {
-				if baseHrefMatches(tokenAttr(z, "href"), baseHref) {
-					inspection.expectedCount++
-				}
 				inspection.ranges = append(inspection.ranges, tokenRange)
 			}
 		case xhtml.SelfClosingTagToken:
 			if inHead && name == "base" {
-				if baseHrefMatches(tokenAttr(z, "href"), baseHref) {
-					inspection.expectedCount++
-				}
 				inspection.ranges = append(inspection.ranges, tokenRange)
 			}
 		case xhtml.EndTagToken:
@@ -195,22 +178,6 @@ func inspectBaseElements(src, baseHref string, requireHead bool) baseInspection 
 			}
 		}
 	}
-}
-
-func tokenAttr(z *xhtml.Tokenizer, name string) string {
-	for {
-		key, val, more := z.TagAttr()
-		if strings.EqualFold(string(key), name) {
-			return strings.TrimSpace(string(val))
-		}
-		if !more {
-			return ""
-		}
-	}
-}
-
-func baseHrefMatches(href, baseHref string) bool {
-	return strings.TrimSpace(href) == strings.TrimSpace(baseHref)
 }
 
 func currentTokenRange(src string, cursor *int, raw string) stringRange {
