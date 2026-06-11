@@ -550,6 +550,82 @@ func TestStageDownloadedReleaseArchiveRequiresGitHubDigest(t *testing.T) {
 	}
 }
 
+func TestStageDownloadedReleaseArchiveRejectsSymlinkDownloadRoot(t *testing.T) {
+	payload := []byte("release archive")
+	sum := sha256.Sum256(payload)
+	actual := hex.EncodeToString(sum[:])
+	archive := updateAsset{Name: "slidex_0.1.0_linux_amd64.tar.gz", Digest: "sha256:" + actual}
+	checksum := updateAsset{Name: "slidex_0.1.0_checksums.txt"}
+	checksumPayload := []byte(actual + "  " + archive.Name + "\n")
+	installRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(installRoot, ".slidex")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, _, err := stageDownloadedReleaseArchive(installRoot, "0.1.0", archive, payload, checksum, checksumPayload)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlink download root rejection, got %v", err)
+	}
+}
+
+func TestWriteStreamFileReplacesHardlinkedTarget(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, target)
+
+	if err := writeStreamFile(target, strings.NewReader("target\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+	if got := readFileOrEmpty(target); got != "target\n" {
+		t.Fatalf("stream target = %q, want new contents", got)
+	}
+}
+
+func TestExtractZipArchiveRejectsSymlinkDestinationDirectory(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("candidate/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("payload\n")); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := zw.Close()
+	fileErr := f.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if fileErr != nil {
+		t.Fatal(fileErr)
+	}
+	extractRoot := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(extractRoot, "candidate")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	err = extractZipArchive(archivePath, extractRoot)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlink destination rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "file.txt")); !os.IsNotExist(err) {
+		t.Fatalf("archive extraction wrote through symlink, stat err=%v", err)
+	}
+}
+
 func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 	root := t.TempDir()
 	writeCandidateBundleForTest(t, root, "0.2.0")

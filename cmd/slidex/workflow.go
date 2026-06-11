@@ -6855,19 +6855,27 @@ func verifySecureOpenFile(path string, f *os.File) error {
 }
 
 func ensureSecureDir(path string) error {
+	return ensureSecureDirMode(path, 0o700)
+}
+
+func ensureSecureDirMode(path string, mode os.FileMode) error {
+	mode &= 0o777
+	if mode == 0 {
+		mode = 0o700
+	}
 	if err := rejectSymlinkAncestors(path); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(path, 0o700); err != nil {
+	if err := os.MkdirAll(path, mode); err != nil {
 		return err
 	}
 	if err := rejectSymlinkAncestors(path); err != nil {
 		return err
 	}
-	if err := os.Chmod(path, 0o700); err != nil {
+	if err := os.Chmod(path, mode); err != nil {
 		return err
 	}
-	return applyPlatformDirMode(path, 0o700)
+	return applyPlatformDirMode(path, mode)
 }
 
 func rejectSecureWriteTarget(path string) error {
@@ -7057,7 +7065,11 @@ func copyDir(src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			mode := info.Mode().Perm()
+			if mode == 0 {
+				mode = 0o755
+			}
+			return ensureSecureDirMode(target, mode)
 		}
 		return copyFile(path, target)
 	})

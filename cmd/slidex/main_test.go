@@ -3916,6 +3916,28 @@ func TestCopyDirRejectsSymlinkSources(t *testing.T) {
 	}
 }
 
+func TestCopyDirRejectsSymlinkDestinationDirectories(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(filepath.Join(src, "nested", "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dst, "nested")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	err := copyDir(src, dst)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected copyDir symlink destination rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "empty")); !os.IsNotExist(err) {
+		t.Fatalf("copyDir created directory through symlink, stat err=%v", err)
+	}
+}
+
 func TestCopyFileRejectsSymlinkEndpoints(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.txt")

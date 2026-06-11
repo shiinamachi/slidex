@@ -1028,15 +1028,15 @@ func stageDownloadedReleaseArchive(installRoot, targetVersion string, archive up
 		return "", "", err
 	}
 	stageParent = filepath.Join(installRoot, ".slidex", "downloads", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
-	if err := os.MkdirAll(stageParent, 0o755); err != nil {
+	if err := ensureSecureDir(stageParent); err != nil {
 		return "", "", err
 	}
 	archivePath = filepath.Join(stageParent, archive.Name)
 	checksumPath := filepath.Join(stageParent, checksum.Name)
-	if err := os.WriteFile(archivePath, archivePayload, 0o644); err != nil {
+	if err := secureWriteFile(archivePath, archivePayload, 0o644); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(checksumPath, checksumPayload, 0o644); err != nil {
+	if err := secureWriteFile(checksumPath, checksumPayload, 0o644); err != nil {
 		return "", "", err
 	}
 	return stageParent, archivePath, nil
@@ -1044,7 +1044,7 @@ func stageDownloadedReleaseArchive(installRoot, targetVersion string, archive up
 
 func extractDownloadedReleaseArchive(stageParent, archivePath string) (candidateRoot string, err error) {
 	extractRoot := filepath.Join(stageParent, "extract")
-	if err := os.MkdirAll(extractRoot, 0o755); err != nil {
+	if err := ensureSecureDir(extractRoot); err != nil {
 		return "", err
 	}
 	return extractReleaseArchive(archivePath, extractRoot)
@@ -1092,11 +1092,11 @@ func extractTarGzArchive(archivePath, dest string) error {
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(header.Mode)&0o777); err != nil {
+			if err := ensureSecureDirMode(target, archiveDirMode(os.FileMode(header.Mode))); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := ensureSecureDirMode(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
 			if err := writeStreamFile(target, tr, os.FileMode(header.Mode)&0o777); err != nil {
@@ -1125,7 +1125,7 @@ func extractZipArchive(archivePath, dest string) error {
 			return fmt.Errorf("unsupported symlink in archive: %s", file.Name)
 		}
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, mode&0o777); err != nil {
+			if err := ensureSecureDirMode(target, archiveDirMode(mode)); err != nil {
 				return err
 			}
 			continue
@@ -1134,7 +1134,7 @@ func extractZipArchive(archivePath, dest string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := ensureSecureDirMode(filepath.Dir(target), 0o755); err != nil {
 			_ = rc.Close()
 			return err
 		}
@@ -1154,16 +1154,61 @@ func writeStreamFile(path string, r io.Reader, mode os.FileMode) error {
 	if mode == 0 {
 		mode = 0o644
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	dir := filepath.Dir(path)
+	if err := ensureSecureDirMode(dir, 0o755); err != nil {
+		return err
+	}
+	if err := rejectSecureWriteTarget(path); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-	if copyErr != nil {
-		return copyErr
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
 	}
-	return closeErr
+	if err := applyPlatformFileMode(tmpPath, mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := io.Copy(tmp, r); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := rejectSymlinkAncestors(dir); err != nil {
+		return err
+	}
+	if err := rejectSecureWriteTarget(path); err != nil {
+		return err
+	}
+	if err := replaceFile(tmpPath, path); err != nil {
+		return err
+	}
+	if err := applyPlatformFileMode(path, mode); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func archiveDirMode(mode os.FileMode) os.FileMode {
+	mode &= 0o777
+	if mode == 0 {
+		return 0o755
+	}
+	return mode
 }
 
 func shellQuoteCommand(args []string) string {
