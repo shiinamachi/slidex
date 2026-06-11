@@ -1,2 +1,6 @@
 [tools]
 go = "1.26.3"
+
+[tasks."version:bump"]
+description = "Bump VERSION, sync version metadata, and create release notes"
+run = "scripts/bump-version.sh"

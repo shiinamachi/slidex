@@ -20,7 +20,7 @@ case "$package_version" in
   dev-*|ci-*)
     ;;
   *)
-    canary_pattern="^${tool_version//./\\.}-[0-9a-f]{7,40}$"
+    canary_pattern="^${tool_version//./\\.}-canary\\.[0-9]{14}$"
     if [[ "$package_version" != "$tool_version" && ! "$package_version" =~ $canary_pattern ]]; then
       printf 'release version %s does not match slidex CLI version %s\n' "$release_version" "$tool_version" >&2
       exit 2
@@ -38,11 +38,13 @@ fi
 
 build_channel="${SLIDEX_BUILD_CHANNEL:-}"
 if [[ -z "$build_channel" ]]; then
-  case "$package_version" in
-    dev-*|ci-*) build_channel="local-development" ;;
-    *-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) build_channel="canary" ;;
-    *) build_channel="production" ;;
-  esac
+  if [[ "$package_version" == dev-* || "$package_version" == ci-* ]]; then
+    build_channel="local-development"
+  elif [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{14}$ ]]; then
+    build_channel="canary"
+  else
+    build_channel="production"
+  fi
 fi
 case "$build_channel" in
   production|canary|local-development) ;;

@@ -702,13 +702,13 @@ func TestWorkbenchHTMLStatusBannersDoNotOverlapDeckForm(t *testing.T) {
 
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion+"-abcdef0"))
-	if err := markPluginRestartRequired(installRoot, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610010000"))
+	if err := markPluginRestartRequired(installRoot, "0.2.0-canary.20260610020000", "v0.2.0-canary.20260610020000"); err != nil {
 		t.Fatal(err)
 	}
 	candidate := filepath.Join(t.TempDir(), "candidate")
-	writeCandidateBundleForTest(t, candidate, "0.2.0-abcdef0")
-	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
+	writeCandidateBundleForTest(t, candidate, "0.2.0-canary.20260610020000")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0-canary.20260610020000", "v0.2.0-canary.20260610020000"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(updateInstallRootEnv, installRoot)
@@ -925,8 +925,8 @@ func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
 func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion+"-abcdef0"))
-	if err := markPluginRestartRequired(installRoot, "0.2.0-abcdef0", "v0.2.0-abcdef0"); err != nil {
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610010000"))
+	if err := markPluginRestartRequired(installRoot, "0.2.0-canary.20260610020000", "v0.2.0-canary.20260610020000"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(updateInstallRootEnv, installRoot)

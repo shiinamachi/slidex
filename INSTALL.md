@@ -62,7 +62,7 @@ $ASSET_VERSION = $TAG.TrimStart("v")
 
 Default installs use the latest stable release. If the user explicitly asks for
 a canary install, choose the newest prerelease tag that matches
-`v<VERSION>-<short-commit-sha>` and use its matching canary assets instead. Do
+`v<VERSION>-canary.<YYYYMMDDHHMMSS>` and use its matching canary assets instead. Do
 not switch an existing install between production and canary in place; the
 package's `.slidex/install.json` records the immutable channel for that install.
 
@@ -70,7 +70,7 @@ With GitHub CLI, resolve a canary tag deterministically:
 
 ```bash
 gh release list --repo shiinamachi/slidex --json tagName,isPrerelease,isDraft,publishedAt --limit 100 \
-  -q '.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{7,40}$"))) | .tagName' \
+  -q '.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-canary\\.[0-9]{14}$"))) | .tagName' \
   | head -n 1
 ```
 
