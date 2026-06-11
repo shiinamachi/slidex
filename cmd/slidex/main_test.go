@@ -3660,6 +3660,62 @@ func TestSyncHTMLEditsRollsBackMetadataOnRenderConfigFailure(t *testing.T) {
 	}
 }
 
+func TestSyncHTMLEditsUpdatesBaselineBeforeQA(t *testing.T) {
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baselineHTML := `<!doctype html><html><body><section class="slide" id="slide_01"><h1>Old headline</h1><p>Old body</p></section></body></html>`
+	currentHTML := `<!doctype html><html><body><section class="slide" id="slide_01"><h1>New headline</h1><p>New body</p></section></body></html>`
+	specRaw := `{"slides":[{"id":"intro","htmlId":"slide_01","headline":"Old headline","bodyContent":["Old body"]}]}`
+	for path, raw := range map[string]string{
+		filepath.Join(outDir, "final_deck.html"):                    currentHTML,
+		filepath.Join(outDir, "final_deck.generated_baseline.html"): baselineHTML,
+		filepath.Join(outDir, "deck_spec.json"):                     specRaw,
+		filepath.Join(outDir, "notes.md"):                           "original notes\n",
+		filepath.Join(outDir, "qa_report.md"):                       "original qa report\n",
+	} {
+		if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	oldRenderHTML := syncRenderHTML
+	oldQADeck := syncQADeck
+	t.Cleanup(func() {
+		syncRenderHTML = oldRenderHTML
+		syncQADeck = oldQADeck
+	})
+	syncRenderHTML = func(renderConfig) (renderManifest, error) {
+		return renderManifest{}, nil
+	}
+	syncQADeck = func(deckAbs string, writeReport bool) (qaResult, error) {
+		if got, want := mustSHA256(filepath.Join(deckAbs, "out", "final_deck.generated_baseline.html")), mustSHA256(filepath.Join(deckAbs, "out", "final_deck.html")); got != want {
+			t.Fatalf("QA saw stale baseline hash %s, want current HTML hash %s", got, want)
+		}
+		if err := os.WriteFile(filepath.Join(deckAbs, "out", "qa_report.md"), []byte("qa pass\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return qaResult{Status: "pass"}, nil
+	}
+
+	report, err := syncHTMLEdits(deck, 1920, 1080, "pretendard", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report["qaStatus"] != "pass" {
+		t.Fatalf("qaStatus = %v, want pass", report["qaStatus"])
+	}
+	if got, want := readFileOrEmpty(filepath.Join(outDir, "final_deck.generated_baseline.html")), currentHTML; got != want {
+		t.Fatalf("baseline was not updated to current HTML:\n got %q\nwant %q", got, want)
+	}
+	accepted, _ := report["acceptedChanges"].([]string)
+	if len(accepted) == 0 {
+		t.Fatalf("expected accepted changes in report: %#v", report)
+	}
+}
+
 func TestUpdateSpecFromHTMLPreservesLogicalID(t *testing.T) {
 	specPath := filepath.Join(t.TempDir(), "deck_spec.json")
 	spec := map[string]any{

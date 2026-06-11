@@ -3642,6 +3642,11 @@ func runSyncHTMLEdits(args []string) error {
 	return printJSON(result)
 }
 
+var (
+	syncRenderHTML = renderHTML
+	syncQADeck     = qaDeck
+)
+
 func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string, chromeNoSandbox bool) (map[string]any, error) {
 	deckAbs := mustAbs(deck)
 	outDir := filepath.Join(deckAbs, "out")
@@ -3744,33 +3749,33 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		if err != nil {
 			renderStatus = "failed"
 			renderErr = err.Error()
-		} else if _, err := renderHTML(cfg); err != nil {
+		} else if _, err := syncRenderHTML(cfg); err != nil {
 			renderStatus = "failed"
 			renderErr = err.Error()
 		} else {
 			renderStatus = "completed"
 			derivativeUpdated = append(derivativeUpdated, "rendered_slides/*.png", "final_deck.pdf", "render_manifest.json", "qa_montage.png")
-			if qa, err := qaDeck(deckAbs, true); err != nil && qa.Status == "fail" {
-				qaStatus = qa.Status
-				qaErr = err.Error()
-			} else if err != nil {
-				qaStatus = "failed"
-				qaErr = err.Error()
+			if err := copyFile(htmlPath, baselinePath); err != nil {
+				qaErr = strings.TrimSpace(qaErr + "; failed to update generated baseline: " + err.Error())
+				correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because the baseline update failed.")
 			} else {
-				qaStatus = qa.Status
-			}
-			if qaStatus == "pass" || qaStatus == "pass_with_risks" {
-				if err := copyFile(htmlPath, baselinePath); err != nil {
-					qaErr = strings.TrimSpace(qaErr + "; failed to update generated baseline: " + err.Error())
-					correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because the baseline update failed.")
+				baseRaw, _ = os.ReadFile(baselinePath)
+				newBaselineHash = sha256Bytes(baseRaw)
+				if qa, err := syncQADeck(deckAbs, true); err != nil && qa.Status == "fail" {
+					qaStatus = qa.Status
+					qaErr = err.Error()
+				} else if err != nil {
+					qaStatus = "failed"
+					qaErr = err.Error()
 				} else {
+					qaStatus = qa.Status
+				}
+				if qaStatus == "pass" || qaStatus == "pass_with_risks" {
 					acceptedChanges = changes
 					derivativeUpdated = append(derivativeUpdated, "deck_spec.json", "notes.md", "qa_report.md", "final_deck.generated_baseline.html")
-					baseRaw, _ = os.ReadFile(baselinePath)
-					newBaselineHash = sha256Bytes(baseRaw)
+				} else {
+					correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because render or QA did not pass.")
 				}
-			} else {
-				correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because render or QA did not pass.")
 			}
 		}
 	}
