@@ -3506,6 +3506,34 @@ func TestTextArtifactsRejectSymlinkTargets(t *testing.T) {
 	}
 }
 
+func TestFileSnapshotTransactionRollbackRestoresFiles(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "existing.md")
+	missing := filepath.Join(dir, "created.md")
+	if err := os.WriteFile(existing, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := beginFileSnapshotTransaction(existing, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secureWriteFile(existing, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureWriteFile(missing, []byte("created\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileOrEmpty(existing); got != "before\n" {
+		t.Fatalf("existing file was not restored: %q", got)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("created file should have been removed, got %v", err)
+	}
+}
+
 func TestCopyDirPreservesExecutableMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not use Unix executable mode bits")

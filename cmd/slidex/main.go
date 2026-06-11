@@ -3659,33 +3659,48 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	backupPath := ""
 	specBackupPath := ""
 	notesBackupPath := ""
+	var tx *fileSnapshotTransaction
+	rollbackSync := func(cause error) (map[string]any, error) {
+		if tx == nil {
+			return nil, cause
+		}
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return nil, fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
+		}
+		tx = nil
+		return nil, cause
+	}
 	var acceptedChanges []string
 	var correctedOrRejected []string
 	var derivativeUpdated []string
 	var derivativeStale []string
 	changeDetected := currentHash != baseHash || baseErr != nil
 	if currentHash != baseHash {
+		tx, err = beginFileSnapshotTransaction(specPath, notesPath, baselinePath, filepath.Join(outDir, "qa_report.md"), syncPath)
+		if err != nil {
+			return nil, err
+		}
 		backupPath = filepath.Join(outDir, "final_deck.pre_sync_"+time.Now().Format("20060102_150405")+".html")
 		if err := copyFile(htmlPath, backupPath); err != nil {
-			return nil, err
+			return rollbackSync(err)
 		}
 		specBackupPath = filepath.Join(outDir, "deck_spec.pre_sync_"+time.Now().Format("20060102_150405")+".json")
 		if _, err := os.Stat(specPath); err == nil {
 			if err := copyFile(specPath, specBackupPath); err != nil {
-				return nil, err
+				return rollbackSync(err)
 			}
 		}
 		notesBackupPath = filepath.Join(outDir, "notes.pre_sync_"+time.Now().Format("20060102_150405")+".md")
 		if _, err := os.Stat(notesPath); err == nil {
 			if err := copyFile(notesPath, notesBackupPath); err != nil {
-				return nil, err
+				return rollbackSync(err)
 			}
 		}
 		if err := updateSpecFromHTML(specPath, currentSlides); err != nil {
-			return nil, err
+			return rollbackSync(err)
 		}
 		if err := appendNotes(notesPath, "HTML edit sync", changes); err != nil {
-			return nil, err
+			return rollbackSync(err)
 		}
 		derivativeUpdated = append(derivativeUpdated, "deck_spec.json", "notes.md")
 	}
@@ -3718,17 +3733,17 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 				acceptedChanges = changes
 				derivativeUpdated = append(derivativeUpdated, "qa_report.md", "final_deck.generated_baseline.html")
 				if err := copyFile(htmlPath, baselinePath); err != nil {
-					return nil, err
+					return rollbackSync(err)
 				}
 				baseRaw, _ = os.ReadFile(baselinePath)
 				newBaselineHash = sha256Bytes(baseRaw)
 			} else {
 				correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because render or QA did not pass.")
-				if specBackupPath != "" {
-					_ = copyFile(specBackupPath, specPath)
-				}
-				if notesBackupPath != "" {
-					_ = copyFile(notesBackupPath, notesPath)
+				if tx != nil {
+					if err := tx.Rollback(); err != nil {
+						return nil, err
+					}
+					tx = nil
 				}
 			}
 		}
@@ -3770,9 +3785,116 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		"qaError":              qaErr,
 	}
 	if err := writeSyncReport(syncPath, report); err != nil {
-		return nil, err
+		return rollbackSync(err)
+	}
+	if tx != nil {
+		tx.Commit()
 	}
 	return report, nil
+}
+
+type fileSnapshot struct {
+	Path   string
+	Raw    []byte
+	Mode   os.FileMode
+	Exists bool
+}
+
+type fileSnapshotTransaction struct {
+	snapshots []fileSnapshot
+	committed bool
+}
+
+func beginFileSnapshotTransaction(paths ...string) (*fileSnapshotTransaction, error) {
+	seen := map[string]bool{}
+	tx := &fileSnapshotTransaction{}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		snapshot, err := snapshotFile(path)
+		if err != nil {
+			return nil, err
+		}
+		tx.snapshots = append(tx.snapshots, snapshot)
+	}
+	return tx, nil
+}
+
+func (tx *fileSnapshotTransaction) Commit() {
+	if tx != nil {
+		tx.committed = true
+	}
+}
+
+func (tx *fileSnapshotTransaction) Rollback() error {
+	if tx == nil || tx.committed {
+		return nil
+	}
+	var errs []string
+	for i := len(tx.snapshots) - 1; i >= 0; i-- {
+		if err := restoreFileSnapshot(tx.snapshots[i]); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("restore sync file snapshots: %s", strings.Join(errs, "; "))
+	}
+	tx.committed = true
+	return nil
+}
+
+func snapshotFile(path string) (fileSnapshot, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return fileSnapshot{Path: path}, nil
+	}
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return fileSnapshot{}, fmt.Errorf("sync snapshot target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if info.IsDir() {
+		return fileSnapshot{}, fmt.Errorf("sync snapshot target must be a file: %s", filepath.ToSlash(path))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{Path: path, Raw: raw, Mode: info.Mode().Perm(), Exists: true}, nil
+}
+
+func restoreFileSnapshot(snapshot fileSnapshot) error {
+	if !snapshot.Exists {
+		return removeFileIfExists(snapshot.Path)
+	}
+	return secureWriteFile(snapshot.Path, snapshot.Raw, snapshot.Mode)
+}
+
+func removeFileIfExists(path string) error {
+	if err := rejectSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("rollback target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if info.IsDir() {
+		return fmt.Errorf("rollback target must be a file: %s", filepath.ToSlash(path))
+	}
+	return os.Remove(path)
 }
 
 func compareSlides(oldSlides, newSlides []slideInfo) []string {
