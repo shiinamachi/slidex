@@ -7139,8 +7139,8 @@ func runVisualReview(deckAbs string, manifest renderManifest, mode string) (stri
 		payload["status"] = "pass_with_risks"
 		payload["findings"] = []qaFinding{{Severity: "info", Check: "visual_review.disabled", Message: "Visual review explicitly disabled for deterministic run.", Path: reviewPath}}
 	case "manual":
-		if !visualReviewArtifactFresh(reviewPath, manifest) {
-			return "missing", []qaFinding{fail("visual_review.manual", "manual visual review is required and latest_review.json is missing or stale", reviewPath)}
+		if findings := verifyManualVisualReviewArtifact(reviewPath, deckAbs, manifest); len(findings) > 0 {
+			return "missing", findings
 		}
 		return "pass", nil
 	case "codex":
@@ -7319,6 +7319,37 @@ func visualReviewArtifactFresh(path string, manifest renderManifest) bool {
 	return true
 }
 
+func verifyManualVisualReviewArtifact(path, deckAbs string, manifest renderManifest) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("visual_review.manual", "manual visual review is required and latest_review.json is missing or stale: "+err.Error(), path)}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return []qaFinding{fail("visual_review.manual_schema", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if err := validatePayloadAgainstSchema(payload, filepath.Join("schemas", "review_findings.schema.json")); err != nil {
+		findings = append(findings, fail("visual_review.manual_schema", err.Error(), path))
+	}
+	if stage, _ := payload["stage"].(string); stage != "visual_qa" {
+		findings = append(findings, fail("visual_review.manual_stage", fmt.Sprintf("manual visual review stage=%q, want visual_qa", stage), path))
+	}
+	if mode, _ := payload["mode"].(string); mode != "manual" {
+		findings = append(findings, fail("visual_review.manual_mode", "manual visual review mode must be manual", path))
+	}
+	if status, _ := payload["status"].(string); status != "pass" {
+		findings = append(findings, fail("visual_review.manual_status", "manual visual review did not pass", path))
+	}
+	for _, f := range reviewFindingsFromPayload(payload) {
+		if f.Severity == "fail" {
+			findings = append(findings, fail("visual_review.manual_finding", "manual visual review contains fail finding: "+f.Message, path))
+		}
+	}
+	findings = append(findings, visualReviewEvidenceFindings("visual_review.manual_evidence", path, deckAbs, manifest)...)
+	return findings
+}
+
 func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFinding {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -7350,45 +7381,49 @@ func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFindin
 }
 
 func verifyVisualReviewEvidence(path, deckAbs string, manifest renderManifest) []qaFinding {
+	return visualReviewEvidenceFindings("package.visual_review_evidence", path, deckAbs, manifest)
+}
+
+func visualReviewEvidenceFindings(check, path, deckAbs string, manifest renderManifest) []qaFinding {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return []qaFinding{fail("package.visual_review_evidence", "visual review missing: "+err.Error(), path)}
+		return []qaFinding{fail(check, "visual review missing: "+err.Error(), path)}
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return []qaFinding{fail("package.visual_review_evidence", err.Error(), path)}
+		return []qaFinding{fail(check, err.Error(), path)}
 	}
 	rawEvidence, _ := payload["imageEvidence"].([]any)
 	if len(rawEvidence) != len(manifest.PNGFiles) {
-		return []qaFinding{fail("package.visual_review_evidence", fmt.Sprintf("visual review imageEvidence count %d does not match rendered image count %d", len(rawEvidence), len(manifest.PNGFiles)), path)}
+		return []qaFinding{fail(check, fmt.Sprintf("visual review imageEvidence count %d does not match rendered image count %d", len(rawEvidence), len(manifest.PNGFiles)), path)}
 	}
 	var findings []qaFinding
 	for i, rawItem := range rawEvidence {
 		item, _ := rawItem.(map[string]any)
 		img := manifest.PNGFiles[i]
 		if slideID, _ := item["slideId"].(string); slideID != img.SlideID {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review slideId does not match manifest", path))
+			findings = append(findings, fail(check, "visual review slideId does not match manifest", path))
 		}
 		if repoPath, _ := item["repoRelativePath"].(string); repoPath != evidenceRepoRelativePath(deckAbs, img.Path) {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review repoRelativePath does not match manifest", path))
+			findings = append(findings, fail(check, "visual review repoRelativePath does not match manifest", path))
 		}
 		if absPath, _ := item["absolutePath"].(string); absPath != img.Path {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review absolutePath does not match manifest", path))
+			findings = append(findings, fail(check, "visual review absolutePath does not match manifest", path))
 		}
 		if sha, _ := item["sha256"].(string); sha != img.SHA256 {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review image hash does not match manifest", path))
+			findings = append(findings, fail(check, "visual review image hash does not match manifest", path))
 		}
 		if fidelity, _ := item["fidelity"].(string); fidelity != "original" {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review fidelity must be original", path))
+			findings = append(findings, fail(check, "visual review fidelity must be original", path))
 		}
 		if blank, _ := item["blank"].(bool); blank != img.Blank {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review blank flag does not match manifest", path))
+			findings = append(findings, fail(check, "visual review blank flag does not match manifest", path))
 		}
 		dims, _ := item["dimensions"].(map[string]any)
 		width, _ := numberAsInt(dims["width"])
 		height, _ := numberAsInt(dims["height"])
 		if width != img.Dimensions.Width || height != img.Dimensions.Height {
-			findings = append(findings, fail("package.visual_review_evidence", "visual review dimensions do not match manifest", path))
+			findings = append(findings, fail(check, "visual review dimensions do not match manifest", path))
 		}
 	}
 	return findings

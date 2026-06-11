@@ -679,6 +679,47 @@ func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {
 	}
 }
 
+func TestRunVisualReviewManualRejectsForgedHashOnlyReview(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	pngPath := filepath.Join(outDir, "rendered_slides", "slide_01.png")
+	if err := os.MkdirAll(filepath.Dir(pngPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSolidPNGForTest(t, pngPath, color.RGBA{R: 12, G: 34, B: 56, A: 255})
+	manifest := renderManifest{
+		PNGFiles: []renderedImage{{
+			SlideID:    "slide_01",
+			Path:       pngPath,
+			SHA256:     mustSHA256(pngPath),
+			Dimensions: dimension{Width: 2, Height: 2},
+			Blank:      false,
+		}},
+	}
+	reviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
+	if err := secureWriteJSON(reviewPath, map[string]any{
+		"status": "pass",
+		"notes":  "hash-only forged review " + manifest.PNGFiles[0].SHA256,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, findings := runVisualReview(deck, manifest, "manual")
+	if status != "missing" || !hasFindingCheck(findings, "visual_review.manual_schema") {
+		t.Fatalf("manual visual review should reject forged hash-only JSON, status=%s findings=%#v", status, findings)
+	}
+}
+
 func TestRunVisualReviewRecordRejectsNonCanonicalManifestImages(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()
