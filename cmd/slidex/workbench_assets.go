@@ -2,5 +2,5 @@ package main
 
 import "embed"
 
-//go:embed workbench_assets/*
+//go:embed all:workbench_assets
 var embeddedWorkbenchAssets embed.FS

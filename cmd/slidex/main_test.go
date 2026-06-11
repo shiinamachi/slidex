@@ -2142,15 +2142,35 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "release.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "RELEASE_TIMESTAMP", "scripts/write-release-notes-body.sh", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "RELEASE_TIMESTAMP", "scripts/write-release-notes-body.sh", "jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925", "mise exec -- pnpm install --frozen-lockfile", "mise exec -- pnpm check", "mise exec -- pnpm build", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "node_modules", "update status --json", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, ".mise.toml"),
-			want: []string{"go = \"1.26.3\"", "[tasks.\"version:bump\"]", "scripts/bump-version.sh", "[tasks.\"release-notes:canary\"]", "scripts/create-canary-release-note.sh"},
+			want: []string{"go = \"1.26.3\"", "node = \"24.16.0\"", "\"npm:pnpm\" = \"11.5.3\"", "[tasks.\"version:bump\"]", "scripts/bump-version.sh", "[tasks.\"release-notes:canary\"]", "scripts/create-canary-release-note.sh"},
+		},
+		{
+			path: filepath.Join(root, "package.json"),
+			want: []string{"\"packageManager\": \"pnpm@11.5.3\"", "\"node\": \"24.16.0\"", "\"pnpm\": \"11.5.3\"", "\"build\": \"pnpm --filter @shiinamachi/slidex-workbench build\"", "\"check\": \"pnpm --filter @shiinamachi/slidex-workbench check\""},
+		},
+		{
+			path: filepath.Join(root, "pnpm-workspace.yaml"),
+			want: []string{"packages:", "- \"workbench\"", "allowBuilds:", "\"@parcel/watcher\": true", "\"esbuild\": true"},
+		},
+		{
+			path: filepath.Join(root, "workbench", "package.json"),
+			want: []string{"\"@solidjs/start\": \"1.3.2\"", "\"solid-js\": \"1.9.13\"", "\"vinxi\": \"0.5.11\"", "\"typescript\": \"6.0.3\"", "\"build\": \"vinxi build && node scripts/copy-assets.mjs\""},
+		},
+		{
+			path: filepath.Join(root, "workbench", "app.config.ts"),
+			want: []string{"@solidjs/start/config", "ssr: false"},
+		},
+		{
+			path: filepath.Join(root, "cmd", "slidex", "workbench_assets", "slidex-workbench-build.json"),
+			want: []string{"\"schemaVersion\": \"slidex.workbench.assets.v1\"", "\"sourcePackage\": \"@shiinamachi/slidex-workbench\"", "\"framework\": \"solidstart\"", "\"csr\": true", "\"modulePreloads\"", "\"inlineScripts\"", "window.manifest", "\"sourceSha256\""},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "SLIDEX_BUILD_CHANNEL", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", ".slidex/install.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "SLIDEX_BUILD_CHANNEL", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".slidex/install.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "bump-version.sh"),
@@ -2218,6 +2238,37 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("release workflow must use SHA-256 checks only: found %q", forbidden)
 		}
+	}
+}
+
+func TestJavascriptWorkspacePinsAndWorkbenchAssetsSatisfyDoctor(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	nodeVersion := readMiseToolVersion(".mise.toml", "node")
+	pnpmVersion := readMiseToolVersion(".mise.toml", "npm:pnpm")
+	if nodeVersion != "24.16.0" || pnpmVersion != "11.5.3" {
+		t.Fatalf("unexpected JS runtime pins: node=%q pnpm=%q", nodeVersion, pnpmVersion)
+	}
+	if findings := doctorRuntimePinFindings(nodeVersion, pnpmVersion); hasFailures(findings) {
+		t.Fatalf("JS runtime/package pins should satisfy doctor: %#v", findings)
+	}
+	if findings := doctorWorkbenchAssetFindings(); hasFailures(findings) {
+		t.Fatalf("Workbench assets should satisfy doctor: %#v", findings)
+	}
+	manifest, err := readWorkbenchAssetManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Framework != "solidstart" || !manifest.CSR || manifest.SourcePackage != "@shiinamachi/slidex-workbench" || len(manifest.Scripts) == 0 {
+		t.Fatalf("unexpected Workbench asset manifest: %#v", manifest)
 	}
 }
 

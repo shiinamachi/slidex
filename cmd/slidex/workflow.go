@@ -272,6 +272,8 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	findings := []qaFinding{}
 	goModVersion := readGoModVersion("go.mod")
 	miseGoVersion := readMiseGoVersion(".mise.toml")
+	miseNodeVersion := readMiseToolVersion(".mise.toml", "node")
+	misePnpmVersion := readMiseToolVersion(".mise.toml", "npm:pnpm")
 	findings = append(findings, dangerousAppServerPolicyFindings()...)
 	if goModVersion == "" {
 		findings = append(findings, fail("doctor.go_mod", "go.mod go directive missing", "go.mod"))
@@ -285,6 +287,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	if goModVersion != "" && !isExactVersion(goModVersion) {
 		findings = append(findings, fail("doctor.go_pin", "Go version must be exact", "go.mod"))
 	}
+	findings = append(findings, doctorRuntimePinFindings(miseNodeVersion, misePnpmVersion)...)
 	if _, err := os.Stat(".agents/skills/slidex/SKILL.md"); err != nil {
 		findings = append(findings, fail("doctor.skill_path", "missing companion skill at .agents/skills/slidex/SKILL.md", ".agents/skills/slidex/SKILL.md"))
 	}
@@ -343,6 +346,8 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"generatedAt":                 time.Now().UTC().Format(time.RFC3339),
 		"goModVersion":                goModVersion,
 		"miseGoVersion":               miseGoVersion,
+		"miseNodeVersion":             miseNodeVersion,
+		"misePnpmVersion":             misePnpmVersion,
 		"codexVersion":                codexVersion,
 		"requiredCodex":               requiredCodexVersion,
 		"minimumRequiredCodex":        requiredCodexVersion,
@@ -449,6 +454,109 @@ func validateVersionSourceFile(path string) []qaFinding {
 	return nil
 }
 
+func doctorRuntimePinFindings(miseNodeVersion, misePnpmVersion string) []qaFinding {
+	var findings []qaFinding
+	if miseNodeVersion == "" {
+		findings = append(findings, fail("doctor.node_pin", ".mise.toml node pin missing", ".mise.toml"))
+	} else if !isExactVersion(miseNodeVersion) {
+		findings = append(findings, fail("doctor.node_pin", "Node version must be exact", ".mise.toml"))
+	}
+	if misePnpmVersion == "" {
+		findings = append(findings, fail("doctor.pnpm_pin", ".mise.toml npm:pnpm pin missing", ".mise.toml"))
+	} else if !isExactVersion(misePnpmVersion) {
+		findings = append(findings, fail("doctor.pnpm_pin", "pnpm version must be exact", ".mise.toml"))
+	}
+	if _, err := os.Stat("package.json"); err == nil {
+		if _, err := os.Stat("pnpm-lock.yaml"); err != nil {
+			findings = append(findings, fail("doctor.pnpm_lock", "pnpm-lock.yaml is required for the Workbench monorepo", "pnpm-lock.yaml"))
+		}
+		findings = append(findings, validatePackageJSONPins("package.json", miseNodeVersion, misePnpmVersion, true)...)
+		workspace := readFileOrEmpty("pnpm-workspace.yaml")
+		if !strings.Contains(workspace, "allowBuilds:") || strings.Contains(workspace, "onlyBuiltDependencies") {
+			findings = append(findings, fail("doctor.pnpm_workspace", "pnpm v11 build-script approvals must use allowBuilds in pnpm-workspace.yaml", "pnpm-workspace.yaml"))
+		}
+	}
+	if _, err := os.Stat(filepath.Join("workbench", "package.json")); err == nil {
+		findings = append(findings, validatePackageJSONPins(filepath.Join("workbench", "package.json"), "", "", false)...)
+	}
+	return findings
+}
+
+func validatePackageJSONPins(path, miseNodeVersion, misePnpmVersion string, root bool) []qaFinding {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return []qaFinding{fail("doctor.package_json", err.Error(), path)}
+	}
+	var pkg map[string]any
+	if err := json.Unmarshal(raw, &pkg); err != nil {
+		return []qaFinding{fail("doctor.package_json", err.Error(), path)}
+	}
+	var findings []qaFinding
+	if root {
+		packageManager, _ := pkg["packageManager"].(string)
+		expected := "pnpm@" + misePnpmVersion
+		if misePnpmVersion != "" && packageManager != expected {
+			findings = append(findings, fail("doctor.package_manager", "packageManager must be "+expected+", got "+firstNonEmpty(packageManager, "missing"), path))
+		}
+		if engines, ok := pkg["engines"].(map[string]any); ok {
+			if got, _ := engines["node"].(string); miseNodeVersion != "" && got != miseNodeVersion {
+				findings = append(findings, fail("doctor.node_pin", "package.json engines.node must match .mise.toml node "+miseNodeVersion+", got "+firstNonEmpty(got, "missing"), path))
+			}
+			if got, _ := engines["pnpm"].(string); misePnpmVersion != "" && got != misePnpmVersion {
+				findings = append(findings, fail("doctor.pnpm_pin", "package.json engines.pnpm must match .mise.toml npm:pnpm "+misePnpmVersion+", got "+firstNonEmpty(got, "missing"), path))
+			}
+		} else {
+			findings = append(findings, fail("doctor.package_engines", "package.json must pin exact node and pnpm engines", path))
+		}
+	}
+	for _, field := range []string{"dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "overrides", "pnpm.overrides"} {
+		findings = append(findings, validatePackageVersionMap(pkg, field, path)...)
+	}
+	return findings
+}
+
+func validatePackageVersionMap(pkg map[string]any, field, path string) []qaFinding {
+	value, ok := nestedPackageValue(pkg, strings.Split(field, "."))
+	if !ok || value == nil {
+		return nil
+	}
+	deps, ok := value.(map[string]any)
+	if !ok {
+		return []qaFinding{fail("doctor.package_json", field+" must be an object", path)}
+	}
+	var findings []qaFinding
+	for name, rawVersion := range deps {
+		version, ok := rawVersion.(string)
+		if !ok || !isExactPackageVersion(version) {
+			findings = append(findings, fail("doctor.package_pin", fmt.Sprintf("%s.%s must use an exact version, got %v", field, name, rawVersion), path))
+		}
+	}
+	return findings
+}
+
+func nestedPackageValue(pkg map[string]any, keys []string) (any, bool) {
+	var current any = pkg
+	for _, key := range keys {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func isExactPackageVersion(version string) bool {
+	v := strings.TrimSpace(version)
+	if !isExactVersion(v) {
+		return false
+	}
+	return regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`).MatchString(v)
+}
+
 func pluginDoctorSnapshot(pluginList string) map[string]any {
 	mcpConfigured := len(validatePluginMCPConfig(filepath.Join("plugins", "slidex", ".mcp.json"))) == 0
 	defaultPromptPresent := false
@@ -494,10 +602,10 @@ func workbenchDoctorSnapshot() map[string]any {
 		"mode":                                "loopback",
 		"status":                              "available",
 		"command":                             "slidex workbench start --deck-id <deck_id>",
-		"frontend":                            "local_react_wizard",
+		"frontend":                            "local_solid_workbench",
 		"defaultTemplate":                     "embedded_decks_template_with_filesystem_override",
-		"autoUpdateAtStartup":                 "workbench.start checks and applies release updates before opening the React Wizard",
-		"newDeckStartupRequiredSurface":       "react_wizard_workbench",
+		"autoUpdateAtStartup":                 "workbench.start checks and applies release updates before opening the local Workbench",
+		"newDeckStartupRequiredSurface":       "solid_workbench",
 		"deckBootstrapMCPBehavior":            "deprecated_alias_for_workbench_start",
 		"wizardCompletionAction":              "Complete & generate saves brief/draft/manifest and starts slidex run --deck decks/<deck_id> --non-interactive",
 		"browserOpenMechanism":                "agent_explicit_browser_plugin_instruction_by_default",
@@ -631,6 +739,7 @@ func doctorWorkbenchFindings() []qaFinding {
 	deckAbs := filepath.Join(workspaceRoot("."), "decks", "doctor-workbench-contract")
 	manifest := newWorkbenchManifest(deckAbs, workspaceRoot("."), "doctor-session", "doctor-token", 49152, os.Getpid(), "running")
 	var findings []qaFinding
+	findings = append(findings, doctorWorkbenchAssetFindings()...)
 	if manifest.Host != "127.0.0.1" || manifest.ServerBind != "127.0.0.1" {
 		findings = append(findings, fail("doctor.workbench_loopback", "workbench must bind and advertise 127.0.0.1 only", "cmd/slidex/workbench.go"))
 	}
@@ -742,6 +851,60 @@ func doctorWorkbenchFindings() []qaFinding {
 		findings = append(findings, fail("doctor.app_server_skill_smoke_schema", err.Error(), skillSmokeSchemaPath))
 	}
 	return findings
+}
+
+func doctorWorkbenchAssetFindings() []qaFinding {
+	manifest, err := readWorkbenchAssetManifest()
+	if err != nil {
+		return []qaFinding{fail("doctor.workbench_assets", err.Error(), filepath.ToSlash(workbenchAssetManifestName))}
+	}
+	var findings []qaFinding
+	for _, asset := range append(append(append([]string{}, manifest.ModulePreload...), manifest.Scripts...), manifest.Styles...) {
+		if _, err := embeddedWorkbenchAssets.ReadFile("workbench_assets/" + asset); err != nil {
+			findings = append(findings, fail("doctor.workbench_assets", "generated Workbench asset missing: "+asset, "cmd/slidex/workbench_assets"))
+		}
+	}
+	for _, oldAsset := range []string{"react-18.3.1.production.min.js", "react-dom-18.3.1.production.min.js", "workbench-app.js"} {
+		if _, err := embeddedWorkbenchAssets.ReadFile("workbench_assets/" + oldAsset); err == nil {
+			findings = append(findings, fail("doctor.workbench_assets", "React UMD Workbench asset must not be embedded: "+oldAsset, "cmd/slidex/workbench_assets/"+oldAsset))
+		}
+	}
+	if _, err := os.Stat(filepath.Join("workbench", "package.json")); err == nil {
+		sourceHash, err := workbenchSourceSHA256()
+		if err != nil {
+			findings = append(findings, fail("doctor.workbench_asset_freshness", err.Error(), "workbench"))
+		} else if sourceHash != manifest.SourceSHA256 {
+			findings = append(findings, fail("doctor.workbench_asset_freshness", "generated Workbench assets are stale; run mise exec -- pnpm build", "cmd/slidex/workbench_assets/slidex-workbench-build.json"))
+		}
+	}
+	return findings
+}
+
+func workbenchSourceSHA256() (string, error) {
+	files := []string{
+		"app.config.ts",
+		"package.json",
+		filepath.Join("scripts", "copy-assets.mjs"),
+		"tsconfig.json",
+		filepath.Join("src", "app.tsx"),
+		filepath.Join("src", "entry-client.tsx"),
+		filepath.Join("src", "entry-server.tsx"),
+		filepath.Join("src", "routes", "index.tsx"),
+		filepath.Join("src", "styles.css"),
+		filepath.Join("src", "workbench.tsx"),
+	}
+	hash := sha256.New()
+	for _, file := range files {
+		raw, err := os.ReadFile(filepath.Join("workbench", file))
+		if err != nil {
+			return "", err
+		}
+		hash.Write([]byte(filepath.ToSlash(file)))
+		hash.Write([]byte{0})
+		hash.Write(raw)
+		hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func doctorAppServerSkillSmokeEvidence(deckAbs string, manifest workbenchManifest) appServerSkillSmokeResult {
@@ -3900,9 +4063,9 @@ func handleMCPRequest(req map[string]any) (any, error) {
 		return map[string]any{"protocolVersion": "2024-11-05", "serverInfo": map[string]any{"name": "slidex", "version": toolVersion}, "capabilities": map[string]any{"tools": map[string]any{}}}, nil
 	case "tools/list":
 		return map[string]any{"tools": []map[string]any{
-			mcpTool("deck.bootstrap", "Deprecated alias for new deck startup; starts the React wizard workbench and returns a workbench URL"),
+			mcpTool("deck.bootstrap", "Deprecated alias for new deck startup; starts the local slidex Workbench and returns a workbench URL"),
 			mcpTool("deck.inspect", "Inspect a deck workspace and expected files"),
-			mcpTool("workbench.start", "Start or reuse the loopback slidex React wizard workbench"),
+			mcpTool("workbench.start", "Start or reuse the loopback slidex Solid Workbench"),
 			mcpTool("workbench.status", "Report the loopback slidex workbench status"),
 			mcpTool("workbench.stop", "Stop the loopback slidex workbench started by slidex"),
 			mcpTool("inspect", "Inventory deck inputs and outputs"),
@@ -5345,8 +5508,13 @@ func readGoModVersion(path string) string {
 }
 
 func readMiseGoVersion(path string) string {
+	return readMiseToolVersion(path, "go")
+}
+
+func readMiseToolVersion(path, tool string) string {
 	raw := readFileOrEmpty(path)
-	re := regexp.MustCompile(`(?m)^\s*go\s*=\s*"([^"]+)"`)
+	key := regexp.QuoteMeta(tool)
+	re := regexp.MustCompile(`(?m)^\s*(?:"` + key + `"|` + key + `)\s*=\s*"([^"]+)"`)
 	m := re.FindStringSubmatch(raw)
 	if len(m) > 1 {
 		return m[1]

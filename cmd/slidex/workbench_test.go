@@ -739,28 +739,47 @@ func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 	}
 }
 
-func TestWorkbenchHTMLBootsLocalReactWizardAssets(t *testing.T) {
+func TestWorkbenchHTMLBootsLocalSolidWorkbenchAssets(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
 	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
 	html := server.workbenchHTML()
+	assets, err := readWorkbenchAssetManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
-		"slidex React Wizard",
+		"slidex Solid Workbench",
 		"const boot = ",
-		"/workbench/session-1/assets/react-18.3.1.production.min.js",
-		"/workbench/session-1/assets/react-dom-18.3.1.production.min.js",
-		"/workbench/session-1/assets/workbench-app.js",
+		`"workbenchBase":"/workbench/session-1"`,
+		`<div id="app">`,
+		`type="module"`,
+		`"output":"/workbench/session-1/assets/_build/`,
+		`"href":"/workbench/session-1/assets/_build/`,
+		"/workbench/session-1/assets/" + assets.Scripts[0],
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
 		}
 	}
+	for _, forbidden := range []string{"react-18.3.1.production.min.js", "react-dom-18.3.1.production.min.js", "workbench-app.js", "ReactDOM.createRoot", `"/_build/`} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("workbench HTML should not reference React UMD asset %q:\n%s", forbidden, html)
+		}
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/workbench/session-1/assets/workbench-app.js", nil)
+	req := httptest.NewRequest(http.MethodGet, "/workbench/session-1/assets/"+assets.Scripts[0], nil)
 	rec := httptest.NewRecorder()
 	server.handleAsset(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ReactDOM.createRoot") {
-		t.Fatalf("workbench app asset did not serve React app: status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 || !strings.Contains(rec.Header().Get("Content-Type"), "application/javascript") {
+		t.Fatalf("workbench app asset did not serve SolidStart module: status=%d content-type=%s body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/workbench/session-1/assets/../"+assets.Scripts[0], nil)
+	rec = httptest.NewRecorder()
+	server.handleAsset(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("workbench asset traversal should be rejected, status=%d", rec.Code)
 	}
 }
 
@@ -2045,7 +2064,7 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 		t.Fatalf("tools/call result missing structuredContent: %#v", payload)
 	}
 	if _, ok := structured["browserOpen"].(map[string]any); !ok {
-		t.Fatalf("deck.bootstrap should return React wizard browserOpen intent: %#v", structured)
+		t.Fatalf("deck.bootstrap should return Workbench browserOpen intent: %#v", structured)
 	}
 	content, ok := payload["content"].([]map[string]any)
 	if !ok || len(content) != 1 || content[0]["type"] != "text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "Open in Codex App Browser now:") {

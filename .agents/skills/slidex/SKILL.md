@@ -8,7 +8,7 @@ description: Use slidex for Codex Plugin workbench startup and deterministic HTM
 Use the repository CLI as the canonical implementation surface. For a new deck,
 the Codex Plugin front door is always `slidex workbench start --deck-id
 <deck_id>`, which creates or selects `decks/<deck_id>/`, starts a `127.0.0.1`
-React wizard workbench server, and returns a local URL for the React Wizard.
+Solid Workbench server, and returns a local Workbench URL.
 Packaged Codex MCP startup sets `SLIDEX_BROWSER_OPEN=agent`, so the startup
 response tells the agent to use `@Browser` for the Codex App in-app browser
 without emitting the legacy structured `browserOpen` intent that may be handled
@@ -18,21 +18,21 @@ folders manually.
 
 For release-package installs, `slidex workbench start` automatically checks the
 configured production/canary release channel and applies a newer verified
-release before opening the React Wizard. If the response reports
+release before opening the local Workbench. If the response reports
 `autoUpdate.blocksWorkbench: true`, stop the workflow and require the returned
 restart or pending-activation path before continuing in a new Codex thread.
 
 ## Workflow
 
 1. For new deck creation through the plugin, make sure the PATH binary is current with `mise exec -- go install ./cmd/slidex`, then run `slidex workbench start --deck-id <deck_id>` and follow the returned `agentBrowserInstruction`: explicitly use `@Browser` to open the workbench URL in the Codex App in-app browser. Do not use Chrome or an external browser for this startup. Pass the user's invocation as seed fields when available, especially `--initial-request`.
-2. Verify `brief.md`, `out/workbench_draft.json`, and `out/workbench_manifest.json` after the user completes the React Wizard. The wizard's `Complete & generate` action records `wizardCompletedAt`, starts `slidex run --deck decks/<deck_id> --non-interactive`, and writes generation status plus `out/workbench_generation.log` into the manifest.
+2. Verify `brief.md`, `out/workbench_draft.json`, and `out/workbench_manifest.json` after the user completes the Workbench. The Workbench's `Complete & generate` action records `wizardCompletedAt`, starts `slidex run --deck decks/<deck_id> --non-interactive`, and writes generation status plus `out/workbench_generation.log` into the manifest.
 3. Use `slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>` as a headless pre-GUI check that starts an App Server turn with installed `slidex:slidex-start` skill input, verifies the loopback workbench starts, saves initial deck creation input through that workbench session, and writes smoke evidence JSON.
 4. Use `slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id> --screenshot` as a local pre-GUI check that fetches the workbench HTML, posts draft/save input through the session API, verifies deck-local persistence, and writes `out/workbench_save_smoke.json`; `--screenshot` also captures a headless Chrome nonblank workbench render to `out/workbench_save_smoke.png`.
 5. After actual Codex App browser/work-surface inspection, run `slidex workbench evidence --deck-id <deck_id> --inspector "<name-or-role>" --surface codex_app_in_app_browser --invocation "@slidex create a deck called <deck_id>" --thread-id "<codex-app-thread-id-if-visible>" --url "<workbench.url>" --screenshot "<path-to-codex-browser-screenshot.png>" --workbench-visible --saved-input-verified` to record `out/workbench_browser_evidence.json` and, when provided, a decoded nonblank PNG/JPEG `out/workbench_browser_screenshot.<ext>`.
 6. Run `slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot` to prove recorded browser evidence still matches the current deck-local artifacts and includes the inspected Codex App surface capture; this writes `out/workbench_browser_evidence_verification.json`.
 7. Resolve an existing deck with `slidex inspect --deck decks/<deck_id> --write`.
 8. Run `slidex intake --deck decks/<deck_id>` and stop on exit code 3 when Korean intake questions are produced.
-9. If the React Wizard already started generation, monitor `out/workbench_manifest.json` and `out/workbench_generation.log` instead of starting a duplicate run. Otherwise use `slidex run --deck decks/<deck_id>` for the standard local workflow through delivery summary and package.
+9. If the Workbench already started generation, monitor `out/workbench_manifest.json` and `out/workbench_generation.log` instead of starting a duplicate run. Otherwise use `slidex run --deck decks/<deck_id>` for the standard local workflow through delivery summary and package.
 10. For direct HTML edits, run `slidex sync-html-edits --deck decks/<deck_id>` before claiming downstream artifacts are current.
 11. Final success requires current rendered PNGs, `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`, `qa_report.md`, `delivery_summary.md`, and package freshness.
 
@@ -44,10 +44,10 @@ restart or pending-activation path before continuing in a new Codex thread.
 - Windows, Linux, and macOS are supported targets. Let the CLI choose platform-native defaults, including App Server loopback fallback when Unix socket paths are too long; use `CHROME_BIN` or `--chrome` only when local browser discovery fails.
 - Material claims must be sourced, user-confirmed, or labeled as assumptions.
 - Keep deck materials scoped under the active `decks/<deck_id>/` workspace.
-- Do not use `slidex-run`, `slidex init`, manual directory creation, or direct `out/final_deck.html` authoring for new deck creation; route new deck startup through the React Wizard every time.
+- Do not use `slidex-run`, `slidex init`, manual directory creation, or direct `out/final_deck.html` authoring for new deck creation; route new deck startup through the local Workbench every time.
 - Prefer `slidex codex doctor` and `slidex codex schema refresh` for Codex CLI/App Server compatibility checks.
 - Treat packaged MCP `SLIDEX_BROWSER_OPEN=agent` as the startup default: follow `agentBrowserInstruction` and explicitly use `@Browser`; use `browserOpenMode=manual` only when the user does not want any browser opened.
-- Do not claim a proprietary plugin-owned Canvas mount API exists; the supported Canvas-style path is a loopback React workbench URL opened in the Codex App browser/work surface.
+- Do not claim a proprietary plugin-owned Canvas mount API exists; the supported Canvas-style path is a loopback Solid Workbench URL opened in the Codex App browser/work surface.
 - Do not treat `slidex codex app-server skill-smoke` smoke evidence JSON as Codex App GUI/browser evidence.
 - Do not treat `slidex workbench save-smoke` evidence JSON as Codex App GUI/browser evidence.
 - Do not claim Codex App browser/work-surface verification passed unless `out/workbench_browser_evidence.json` was recorded after actual inspection.

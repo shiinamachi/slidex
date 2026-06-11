@@ -8,7 +8,7 @@ The Go CLI remains the implementation source of truth.
 1. Install or enable the local `slidex` plugin.
 2. Invoke `@slidex` or `slidex-start` in a Codex App local/worktree thread.
 3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
-   New deck creation must go through this React Wizard path; do not fall back to
+   New deck creation must go through this local Workbench path; do not fall back to
    `slidex init`, manual directory creation, or direct `out/final_deck.html`
    authoring.
    When the user invocation contains usable details, pass them as seed fields
@@ -17,7 +17,7 @@ The Go CLI remains the implementation source of truth.
    and `--output-expectations`.
 4. For release-package installs, startup automatically checks the configured
    production/canary channel and applies a newer verified release before the
-   wizard opens. If the response reports `autoUpdate.blocksWorkbench: true`,
+   Workbench opens. If the response reports `autoUpdate.blocksWorkbench: true`,
    stop this thread and follow the returned restart or pending-activation
    instruction.
 5. Follow the returned `agentBrowserInstruction`. Packaged Codex MCP startup
@@ -26,7 +26,7 @@ The Go CLI remains the implementation source of truth.
    the Codex App in-app browser without emitting the legacy structured
    `browserOpen` intent. Pass `browserOpenMode=manual` only when no browser
    should be opened.
-6. Complete the local React Wizard. It asks for title, audience, decision goal,
+6. Complete the local Solid Workbench. It asks for title, audience, decision goal,
    source notes, key messages, output expectations, and optional
    claim/constraint details.
 7. Select `Complete & generate` in the wizard. This writes `brief.md`,
@@ -92,7 +92,7 @@ manifests.
 The CLI embeds the default `decks/_template`, so installed binaries can start a
 new workbench even when the active user workspace does not contain a template
 folder. The MCP `deck.bootstrap` tool is kept only as a deprecated alias and
-returns the same React Wizard startup response as `workbench.start`.
+returns the same Workbench startup response as `workbench.start`.
 Set `SLIDEX_AUTO_UPDATE=0` only when deliberately disabling release update
 preflight for diagnostics.
 

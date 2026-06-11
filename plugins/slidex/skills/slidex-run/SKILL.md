@@ -8,7 +8,7 @@ user-invocable: true
 
 Use this only for existing deck workspaces after startup input is complete. If
 the user is creating a new deck, stop this skill path and use `slidex-start`
-instead so the React Wizard is displayed first. If the React Wizard has already
+instead so the local Workbench is displayed first. If the Workbench has already
 started generation and `out/workbench_manifest.json` reports
 `generationStatus: running`, monitor that run instead of starting a duplicate
 one.

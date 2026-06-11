@@ -17,11 +17,13 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -38,11 +40,26 @@ const (
 	workbenchSaveSmokeScreenshot = "workbench_save_smoke.png"
 	workbenchBrowserScreenshot   = "workbench_browser_screenshot"
 	workbenchGenerationLogName   = "workbench_generation.log"
+	workbenchAssetManifestName   = "workbench_assets/slidex-workbench-build.json"
 	workbenchControlName         = ".workbench_control.json"
 	workbenchLockName            = "workbench.lock"
 	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
 	workbenchBrowserOpenEnv      = "SLIDEX_BROWSER_OPEN"
 )
+
+type workbenchAssetManifest struct {
+	SchemaVersion string   `json:"schemaVersion"`
+	SourcePackage string   `json:"sourcePackage"`
+	SourceVersion string   `json:"sourceVersion"`
+	Framework     string   `json:"framework"`
+	CSR           bool     `json:"csr"`
+	EntryHTML     string   `json:"entryHtml"`
+	ModulePreload []string `json:"modulePreloads"`
+	InlineScripts []string `json:"inlineScripts"`
+	Scripts       []string `json:"scripts"`
+	Styles        []string `json:"styles"`
+	SourceSHA256  string   `json:"sourceSha256"`
+}
 
 var deckIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
@@ -290,15 +307,15 @@ func runWorkbenchStart(args []string) error {
 	deckID := fs.String("deck-id", "", "deck id to create or open")
 	deck := fs.String("deck", "", "existing deck workspace directory")
 	fromTemplate := fs.String("from-template", defaultDeckTemplatePath, "template deck directory")
-	initialRequest := fs.String("initial-request", "", "original user request to seed into the React wizard draft")
-	title := fs.String("title", "", "deck title to seed into the React wizard draft")
-	audience := fs.String("audience", "", "audience to seed into the React wizard draft")
-	decisionGoal := fs.String("decision-goal", "", "decision goal to seed into the React wizard draft")
-	sourceNotes := fs.String("source-notes", "", "source-material notes to seed into the React wizard draft")
-	keyMessages := fs.String("key-messages", "", "key messages to seed into the React wizard draft")
-	requiredClaims := fs.String("required-claims", "", "claims that need evidence review to seed into the React wizard draft")
-	constraints := fs.String("constraints", "", "constraints and exclusions to seed into the React wizard draft")
-	outputExpectations := fs.String("output-expectations", "", "output expectations to seed into the React wizard draft")
+	initialRequest := fs.String("initial-request", "", "original user request to seed into the Workbench draft")
+	title := fs.String("title", "", "deck title to seed into the Workbench draft")
+	audience := fs.String("audience", "", "audience to seed into the Workbench draft")
+	decisionGoal := fs.String("decision-goal", "", "decision goal to seed into the Workbench draft")
+	sourceNotes := fs.String("source-notes", "", "source-material notes to seed into the Workbench draft")
+	keyMessages := fs.String("key-messages", "", "key messages to seed into the Workbench draft")
+	requiredClaims := fs.String("required-claims", "", "claims that need evidence review to seed into the Workbench draft")
+	constraints := fs.String("constraints", "", "constraints and exclusions to seed into the Workbench draft")
+	outputExpectations := fs.String("output-expectations", "", "output expectations to seed into the Workbench draft")
 	defaultBrowserMode := workbenchBrowserOpenModeByEnv()
 	browserOpen := fs.Bool("browser-open", defaultBrowserMode == workbenchBrowserOpenStructured, "emit legacy browserOpen navigation intent; set false to suppress automatic browser opening")
 	browserOpenMode := fs.String("browser-open-mode", string(defaultBrowserMode), "browser opening mode: structured, agent, or manual")
@@ -593,21 +610,21 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 	}
 	if !automaticUpdatesAllowed() {
 		result.Status = "disabled_by_environment"
-		result.Instruction = "Automatic slidex release updates are disabled by " + updateAutoEnv + ". Continue to the React Wizard with the currently installed version."
+		result.Instruction = "Automatic slidex release updates are disabled by " + updateAutoEnv + ". Continue to the local Workbench with the currently installed version."
 		return result
 	}
 	status, err := currentUpdateStatus("", "")
 	if err != nil {
 		result.Status = "status_error"
 		result.Error = err.Error()
-		result.Instruction = "slidex could not read update status. Continue to the React Wizard with the currently installed version."
+		result.Instruction = "slidex could not read update status. Continue to the local Workbench with the currently installed version."
 		return result
 	}
 	result = workbenchAutoUpdateFromStatus(status, "disabled")
 	if !status.UpdatesEnabled {
 		result.Status = "disabled"
 		result.ContinueToWorkbench = true
-		result.Instruction = firstNonEmpty(status.Guidance, "Automatic release updates are disabled for this install. Continue to the React Wizard with the currently installed version.")
+		result.Instruction = firstNonEmpty(status.Guidance, "Automatic release updates are disabled for this install. Continue to the local Workbench with the currently installed version.")
 		return result
 	}
 	if status.PendingActivation {
@@ -631,21 +648,21 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 	if err != nil {
 		result.Status = "check_failed"
 		result.Error = err.Error()
-		result.Instruction = "Automatic update check failed. Continue to the React Wizard with the currently installed version."
+		result.Instruction = "Automatic update check failed. Continue to the local Workbench with the currently installed version."
 		return result
 	}
 	release, err := selectUpdateReleaseForStatus(status, releases)
 	if err != nil {
 		result.Status = "check_failed"
 		result.Error = err.Error()
-		result.Instruction = "Automatic update check failed. Continue to the React Wizard with the currently installed version."
+		result.Instruction = "Automatic update check failed. Continue to the local Workbench with the currently installed version."
 		return result
 	}
 	result.TargetVersion = release.Version
 	result.TargetTag = release.TagName
 	if release.Version == status.CurrentVersion {
 		result.Status = "current"
-		result.Instruction = "slidex is current for the " + status.Channel + " channel. Continue to the React Wizard."
+		result.Instruction = "slidex is current for the " + status.Channel + " channel. Continue to the local Workbench."
 		return result
 	}
 
@@ -653,7 +670,7 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 	if err != nil {
 		result.Status = "apply_failed"
 		result.Error = err.Error()
-		result.Instruction = "Automatic update download or staging failed. Continue to the React Wizard with the currently installed version."
+		result.Instruction = "Automatic update download or staging failed. Continue to the local Workbench with the currently installed version."
 		return result
 	}
 	result.TargetVersion = targetVersion
@@ -663,13 +680,13 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 	if err != nil {
 		result.Status = "apply_failed"
 		result.Error = err.Error()
-		result.Instruction = "Automatic update apply failed. Continue to the React Wizard with the currently installed version."
+		result.Instruction = "Automatic update apply failed. Continue to the local Workbench with the currently installed version."
 		return result
 	}
 	if hasFailures(applyResult.CandidateValidation) {
 		result.Status = "apply_failed"
 		result.Error = "candidate bundle validation failed"
-		result.Instruction = "Automatic update validation failed. Continue to the React Wizard with the currently installed version."
+		result.Instruction = "Automatic update validation failed. Continue to the local Workbench with the currently installed version."
 		return result
 	}
 
@@ -723,7 +740,7 @@ func workbenchAutoUpdateFromStatus(status updateStatus, resultStatus string) wor
 
 func workbenchAutoUpdateInstruction(result workbenchAutoUpdateResult) string {
 	if result.PendingActivation {
-		return "A slidex update was staged automatically and must be activated before the React Wizard opens. Restart Codex so the old slidex MCP process exits, run the pending activation command if shown, then start a new Codex thread and invoke slidex again."
+		return "A slidex update was staged automatically and must be activated before the local Workbench opens. Restart Codex so the old slidex MCP process exits, run the pending activation command if shown, then start a new Codex thread and invoke slidex again."
 	}
 	if result.RestartRequired || result.BlocksWorkbench {
 		return "A slidex update was applied automatically. Restart Codex and start a new thread before creating this deck so the updated slidex plugin skills are active."
@@ -1001,6 +1018,29 @@ func captureWorkbenchSaveSmokeScreenshot(result *workbenchSaveSmokeResult, scree
 	if err := captureURLScreenshot(chromePath, result.WorkbenchURL, screenshotPath, 1440, 900, opts.ChromeNoSandbox); err != nil {
 		return err
 	}
+	dom, err := captureURLDOM(chromePath, result.WorkbenchURL, opts.ChromeNoSandbox)
+	if err != nil {
+		return err
+	}
+	domText := string(dom)
+	domProbe := map[string]any{
+		"bytes":                    len(dom),
+		"solidWorkbenchVisible":    strings.Contains(domText, "slidex Solid Workbench"),
+		"solidClientControls":      strings.Contains(domText, "Back") && strings.Contains(domText, "Next"),
+		"saveBriefVisible":         strings.Contains(domText, "Save brief"),
+		"clientExceptionDisplayed": strings.Contains(domText, "Error | Uncaught Client Exception"),
+		"fallbackNoticeDisplayed":  strings.Contains(domText, "fallback form still exposes"),
+	}
+	result.Checks["workbenchDOMProbe"] = domProbe
+	if domProbe["clientExceptionDisplayed"] == true {
+		return errors.New("workbench DOM rendered a SolidStart client exception")
+	}
+	if domProbe["fallbackNoticeDisplayed"] == true {
+		return errors.New("workbench DOM still shows the no-JavaScript fallback form after client load")
+	}
+	if domProbe["solidWorkbenchVisible"] != true || domProbe["solidClientControls"] != true || domProbe["saveBriefVisible"] != true {
+		return errors.New("workbench DOM did not render the expected Workbench UI")
+	}
 	dim, blank, err := validatePNG(screenshotPath, 1440, 900)
 	if err != nil {
 		return err
@@ -1016,6 +1056,24 @@ func captureWorkbenchSaveSmokeScreenshot(result *workbenchSaveSmokeResult, scree
 		"blank":      blank,
 	}
 	return nil
+}
+
+func captureURLDOM(chromePath, targetURL string, chromeNoSandbox bool) ([]byte, error) {
+	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	args = append(args,
+		"--virtual-time-budget=5000",
+		"--dump-dom",
+		targetURL,
+	)
+	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
+	if err != nil {
+		return nil, fmt.Errorf("chrome DOM dump failed: %w\n%s", err, string(out))
+	}
+	return out, nil
 }
 
 func fetchWorkbenchHTML(rawURL string) ([]byte, error) {
@@ -1441,9 +1499,7 @@ func (s *workbenchHTTPServer) handleAsset(w http.ResponseWriter, r *http.Request
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, prefix)
-	switch name {
-	case "react-18.3.1.production.min.js", "react-dom-18.3.1.production.min.js", "workbench-app.js":
-	default:
+	if !safeWorkbenchAssetPath(name) {
 		http.NotFound(w, r)
 		return
 	}
@@ -1452,9 +1508,164 @@ func (s *workbenchHTTPServer) handleAsset(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Content-Type", workbenchAssetContentType(name))
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(raw)
+}
+
+func safeWorkbenchAssetPath(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	clean := path.Clean(name)
+	if clean == "." || clean != name || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return false
+	}
+	for _, part := range strings.Split(clean, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func workbenchAssetContentType(name string) string {
+	if strings.HasSuffix(name, ".js") {
+		return "application/javascript; charset=utf-8"
+	}
+	if strings.HasSuffix(name, ".css") {
+		return "text/css; charset=utf-8"
+	}
+	if strings.HasSuffix(name, ".json") {
+		return "application/json; charset=utf-8"
+	}
+	if strings.HasSuffix(name, ".html") {
+		return "text/html; charset=utf-8"
+	}
+	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+		return contentType
+	}
+	return "application/octet-stream"
+}
+
+func readWorkbenchAssetManifest() (workbenchAssetManifest, error) {
+	raw, err := embeddedWorkbenchAssets.ReadFile(workbenchAssetManifestName)
+	if err != nil {
+		return workbenchAssetManifest{}, err
+	}
+	var manifest workbenchAssetManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return workbenchAssetManifest{}, err
+	}
+	if manifest.SchemaVersion != "slidex.workbench.assets.v1" {
+		return workbenchAssetManifest{}, fmt.Errorf("unsupported workbench asset manifest schema %q", manifest.SchemaVersion)
+	}
+	if manifest.SourcePackage != "@shiinamachi/slidex-workbench" || manifest.Framework != "solidstart" || !manifest.CSR {
+		return workbenchAssetManifest{}, fmt.Errorf("workbench assets must come from the SolidStart CSR package")
+	}
+	if len(manifest.Scripts) == 0 {
+		return workbenchAssetManifest{}, fmt.Errorf("workbench asset manifest has no module scripts")
+	}
+	for _, asset := range append(append(append([]string{}, manifest.ModulePreload...), manifest.Scripts...), manifest.Styles...) {
+		if !safeWorkbenchAssetPath(asset) {
+			return workbenchAssetManifest{}, fmt.Errorf("unsafe workbench asset path %q", asset)
+		}
+	}
+	for _, script := range manifest.InlineScripts {
+		if !strings.Contains(script, "window.manifest") || strings.Contains(strings.ToLower(script), "</script") {
+			return workbenchAssetManifest{}, fmt.Errorf("unsafe Workbench inline manifest script")
+		}
+	}
+	return manifest, nil
+}
+
+func workbenchAssetTags(assetBase string) string {
+	manifest, err := readWorkbenchAssetManifest()
+	if err != nil {
+		return "<!-- workbench asset manifest unavailable: " + html.EscapeString(err.Error()) + " -->"
+	}
+	var b strings.Builder
+	for _, preload := range manifest.ModulePreload {
+		b.WriteString(`<link rel="modulepreload" href="`)
+		b.WriteString(assetBase)
+		b.WriteString(html.EscapeString(preload))
+		b.WriteString(`">`)
+		b.WriteByte('\n')
+	}
+	for _, style := range manifest.Styles {
+		b.WriteString(`<link rel="stylesheet" href="`)
+		b.WriteString(assetBase)
+		b.WriteString(html.EscapeString(style))
+		b.WriteString(`">`)
+		b.WriteByte('\n')
+	}
+	for _, inlineScript := range manifest.InlineScripts {
+		inlineScript, err = workbenchSessionManifestScript(inlineScript, assetBase)
+		if err != nil {
+			b.WriteString(`<!-- workbench inline manifest unavailable: `)
+			b.WriteString(html.EscapeString(err.Error()))
+			b.WriteString(` -->`)
+			b.WriteByte('\n')
+			continue
+		}
+		b.WriteString(`<script>`)
+		b.WriteString(inlineScript)
+		b.WriteString(`</script>`)
+		b.WriteByte('\n')
+	}
+	for _, script := range manifest.Scripts {
+		b.WriteString(`<script type="module" src="`)
+		b.WriteString(assetBase)
+		b.WriteString(html.EscapeString(script))
+		b.WriteString(`"></script>`)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func workbenchSessionManifestScript(inlineScript, assetBase string) (string, error) {
+	trimmed := strings.TrimSpace(inlineScript)
+	const prefix = "window.manifest = "
+	if !strings.HasPrefix(trimmed, prefix) {
+		return inlineScript, nil
+	}
+	raw := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	raw = strings.TrimSuffix(raw, ";")
+	var manifest any
+	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+		return "", fmt.Errorf("parse SolidStart manifest: %w", err)
+	}
+	rewriteSolidStartAssetURLs(manifest, assetBase)
+	rewritten, err := json.Marshal(manifest)
+	if err != nil {
+		return "", fmt.Errorf("encode SolidStart manifest: %w", err)
+	}
+	return "window.manifest = " + string(rewritten), nil
+}
+
+func rewriteSolidStartAssetURLs(value any, assetBase string) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if pathValue, ok := child.(string); ok {
+				typed[key] = rewriteSolidStartAssetURL(pathValue, assetBase)
+				continue
+			}
+			rewriteSolidStartAssetURLs(child, assetBase)
+		}
+	case []any:
+		for _, child := range typed {
+			rewriteSolidStartAssetURLs(child, assetBase)
+		}
+	}
+}
+
+func rewriteSolidStartAssetURL(value, assetBase string) string {
+	const buildPrefix = "/_build/"
+	if !strings.HasPrefix(value, buildPrefix) {
+		return value
+	}
+	return assetBase + strings.TrimPrefix(value, "/")
 }
 
 func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1791,13 +2002,14 @@ func workbenchSessionPathMatches(path, sessionID, suffix string) bool {
 func (s *workbenchHTTPServer) workbenchHTML() string {
 	filePathHTML := workbenchFilePathHTML(s.manifest)
 	bootstrap := map[string]any{
-		"deckId":       s.manifest.DeckID,
-		"deckDir":      s.manifest.DeckDir,
-		"sessionId":    s.sessionID,
-		"apiBase":      "/workbench/" + s.sessionID + "/api",
-		"assetBase":    "/workbench/" + s.sessionID + "/assets/",
-		"token":        s.token,
-		"filePathHTML": filePathHTML,
+		"deckId":        s.manifest.DeckID,
+		"deckDir":       s.manifest.DeckDir,
+		"sessionId":     s.sessionID,
+		"apiBase":       "/workbench/" + s.sessionID + "/api",
+		"assetBase":     "/workbench/" + s.sessionID + "/assets/",
+		"workbenchBase": "/workbench/" + s.sessionID,
+		"token":         s.token,
+		"filePathHTML":  filePathHTML,
 	}
 	raw, _ := json.Marshal(bootstrap)
 	title := html.EscapeString(s.manifest.DeckID)
@@ -1814,7 +2026,7 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
     body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--ink); background:var(--soft); }
     main { max-width: 1120px; margin: 0 auto; padding: 28px; }
     .wizard-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:18px; }
-    .eyebrow { margin:0 0 5px; color:var(--accent); font-size:12px; font-weight:750; text-transform:uppercase; letter-spacing:.08em; }
+    .eyebrow { margin:0 0 5px; color:var(--accent); font-size:12px; font-weight:750; text-transform:uppercase; letter-spacing:0; }
     h1 { margin:0; font-size:24px; line-height:1.2; letter-spacing:0; }
     h2 { margin:0; font-size:17px; line-height:1.3; letter-spacing:0; }
     .meta { color:var(--muted); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
@@ -1862,11 +2074,11 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
 <body>
   <main>
     ` + workbenchStatusBannersHTML() + `
-    <div id="slidex-react-root">
-      <header class="wizard-header">
-        <div>
-          <p class="eyebrow">slidex React Wizard</p>
-          <h1>Deck intake workbench</h1>
+	    <div id="app">
+	      <header class="wizard-header">
+	        <div>
+	          <p class="eyebrow">slidex Solid Workbench</p>
+	          <h1>Deck intake workbench</h1>
           <div class="meta">Deck: <strong>` + title + `</strong></div>
         </div>
         <div class="meta deck-dir">` + html.EscapeString(s.manifest.DeckDir) + `</div>
@@ -1899,18 +2111,16 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
         <h2>Deck files</h2>
         <dl>` + filePathHTML + `</dl>
       </section>
-      <div class="notice">React assets are served locally from this workbench session. If scripts are unavailable, this fallback form still exposes the deck intake fields.</div>
-    </div>
-  </main>
-  <script>
-    const boot = ` + string(raw) + `;
-    window.__SLIDEX_WORKBENCH__ = boot;
-  </script>
-  <script src="` + assetBase + `react-18.3.1.production.min.js"></script>
-  <script src="` + assetBase + `react-dom-18.3.1.production.min.js"></script>
-  <script src="` + assetBase + `workbench-app.js"></script>
-</body>
-</html>`
+	      <div class="notice">SolidStart assets are served locally from this workbench session. If scripts are unavailable, this fallback form still exposes the deck intake fields.</div>
+	    </div>
+	  </main>
+	  <script>
+	    const boot = ` + string(raw) + `;
+	    window.__SLIDEX_WORKBENCH__ = boot;
+	  </script>
+	  ` + workbenchAssetTags(assetBase) + `
+	</body>
+	</html>`
 }
 
 func workbenchFilePathHTML(manifest workbenchManifest) string {
@@ -3031,7 +3241,7 @@ func workbenchOpenInstruction(manifest workbenchManifest, mode workbenchBrowserO
 		return workbenchAgentBrowserInstruction(manifest)
 	}
 	if mode == workbenchBrowserOpenManual {
-		return "Workbench is running at " + manifest.URL + ". Browser navigation intent is suppressed; open the URL manually only when you need the React Wizard."
+		return "Workbench is running at " + manifest.URL + ". Browser navigation intent is suppressed; open the URL manually only when you need the local Workbench."
 	}
 	return "Immediately open " + manifest.URL + " in the Codex App in-app browser using the Browser plugin or @Browser when available; if Browser use is unavailable, click the URL or navigate manually."
 }
@@ -3222,7 +3432,7 @@ func writeWorkbenchBrief(deckAbs string, input workbenchSaveInput) error {
 		b.WriteString("## Output Expectations\n\n" + input.OutputExpectations + "\n\n")
 	}
 	b.WriteString("## Wizard Completion\n\n")
-	b.WriteString("- The React wizard marked this intake as ready for generation after required title, audience, decision goal, source notes, key messages, and output expectations were provided.\n")
+	b.WriteString("- The Workbench marked this intake as ready for generation after required title, audience, decision goal, source notes, key messages, and output expectations were provided.\n")
 	b.WriteString("- If any user-provided claim lacks evidence, label it as an assumption or remove it during generation.\n\n")
 	b.WriteString("## Evidence Policy\n\n")
 	b.WriteString("- Material claims must be sourced, user-confirmed, or labeled as assumptions.\n")

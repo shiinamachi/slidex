@@ -1,5 +1,7 @@
 [tools]
 go = "1.26.3"
+node = "24.16.0"
+"npm:pnpm" = "11.5.3"
 
 [tasks."version:bump"]
 description = "Bump VERSION, sync version metadata, and create release notes"

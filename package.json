@@ -1,0 +1,13 @@
+{
+  "name": "slidex-monorepo",
+  "private": true,
+  "packageManager": "pnpm@11.5.3",
+  "engines": {
+    "node": "24.16.0",
+    "pnpm": "11.5.3"
+  },
+  "scripts": {
+    "build": "pnpm --filter @shiinamachi/slidex-workbench build",
+    "check": "pnpm --filter @shiinamachi/slidex-workbench check"
+  }
+}

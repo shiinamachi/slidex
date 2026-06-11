@@ -1,11 +1,15 @@
 # Workbench Frontend Assets
 
-These files are vendored so the slidex workbench serves a local React frontend
-without runtime CDN access.
+These files are generated from the repo-managed SolidStart CSR package in
+`workbench/` and embedded into the slidex Go binary. Installed release packages
+serve these local assets from the loopback Workbench without requiring Node or
+pnpm at runtime.
 
-- `react-18.3.1.production.min.js`
-  - Source: `https://unpkg.com/react@18.3.1/umd/react.production.min.js`
-  - SHA-256: `d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd`
-- `react-dom-18.3.1.production.min.js`
-  - Source: `https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js`
-  - SHA-256: `35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d`
+Regenerate them with:
+
+```bash
+mise exec -- pnpm build
+```
+
+The build writes `slidex-workbench-build.json`, which records the generated
+entry scripts and the Workbench source hash used for freshness checks.

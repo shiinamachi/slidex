@@ -1,0 +1,5 @@
+packages:
+  - "workbench"
+allowBuilds:
+  "@parcel/watcher": true
+  "esbuild": true

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "slidex.workbench.assets.v1",
+  "sourcePackage": "@shiinamachi/slidex-workbench",
+  "sourceVersion": "0.1.0",
+  "framework": "solidstart",
+  "csr": true,
+  "entryHtml": "index.html",
+  "modulePreloads": [],
+  "inlineScripts": [
+    "window.manifest = {\"src/routes/index.tsx?pick=default&pick=$css\":{\"output\":\"/_build/assets/index-Bb1PRuYM.js\",\"assets\":[{\"tag\":\"link\",\"attrs\":{\"href\":\"/_build/assets/web-BN9zmDGc.js\",\"key\":\"/_build/assets/web-BN9zmDGc.js\",\"rel\":\"modulepreload\"}},{\"tag\":\"link\",\"attrs\":{\"href\":\"/_build/assets/index-Bb1PRuYM.js\",\"key\":\"/_build/assets/index-Bb1PRuYM.js\",\"rel\":\"modulepreload\"}}]},\"virtual:$vinxi/handler/client\":{\"output\":\"/_build/assets/client-DFpwC18D.js\",\"assets\":[{\"tag\":\"link\",\"attrs\":{\"href\":\"/_build/assets/web-BN9zmDGc.js\",\"key\":\"/_build/assets/web-BN9zmDGc.js\",\"rel\":\"modulepreload\"}},{\"tag\":\"link\",\"attrs\":{\"href\":\"/_build/assets/client-DFpwC18D.js\",\"key\":\"/_build/assets/client-DFpwC18D.js\",\"rel\":\"modulepreload\"}}]}}"
+  ],
+  "scripts": [
+    "_build/assets/client-DFpwC18D.js"
+  ],
+  "styles": [],
+  "sourceSha256": "64feb63b42cedbfebc1998c6d70f01f81f84f9a1b134a841ea32aacd18d48605"
+}
