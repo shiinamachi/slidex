@@ -34,6 +34,7 @@ const (
 	requiredCodexVersion = "0.138.0"
 	stateSchemaVersion   = "slidex.state.v1"
 	threadsSchemaVersion = "slidex.codexThreads.v1"
+	maxDeckTextReadBytes = 2 * 1024 * 1024
 )
 
 var (
@@ -1341,7 +1342,10 @@ func runIntake(args []string) error {
 	if err := writeSourceInventory(inv); err != nil {
 		return err
 	}
-	questions := intakeQuestionsForDeck(deckAbs)
+	questions, err := intakeQuestionsForDeck(deckAbs)
+	if err != nil {
+		return err
+	}
 	if *answers != "" {
 		if err := applyIntakeAnswers(deckAbs, *answers, questions); err != nil {
 			return err
@@ -1752,7 +1756,10 @@ func runPipeline(args []string) error {
 		if shouldStopGoalContinuation(state.Goal) {
 			return goalStopError(state.Goal)
 		}
-		questions := intakeQuestionsForDeck(deckAbs)
+		questions, err := intakeQuestionsForDeck(deckAbs)
+		if err != nil {
+			return err
+		}
 		if err := writeIntakeQuestions(deckAbs, questions, statusForQuestions(questions)); err != nil {
 			return err
 		}
@@ -4545,7 +4552,10 @@ func ensureStrategy(deck string, force bool) (string, error) {
 			return path, nil
 		}
 	}
-	brief := readFileOrEmpty(filepath.Join(deckAbs, "brief.md"))
+	brief, err := readDeckTextFile(deckAbs, "brief.md")
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", err
 	}
@@ -4592,7 +4602,11 @@ func ensureSpec(deck string, force bool) (string, error) {
 		return "", err
 	}
 	deckID := filepath.Base(deckAbs)
-	title := firstMarkdownHeading(filepath.Join(deckAbs, "brief.md"))
+	brief, err := readDeckTextFile(deckAbs, "brief.md")
+	if err != nil {
+		return "", err
+	}
+	title := firstMarkdownHeadingFromText(brief)
 	if title == "" {
 		title = deckID + " business document"
 	}
@@ -5492,8 +5506,10 @@ func countStructuredIntakeAnswers(value any) int {
 func appendIntakeAnswers(deckAbs string, raw []byte) error {
 	briefPath := filepath.Join(deckAbs, "brief.md")
 	var b strings.Builder
-	if existing, err := os.ReadFile(briefPath); err == nil {
-		b.Write(existing)
+	if existing, err := readDeckTextFile(deckAbs, "brief.md"); err != nil {
+		return err
+	} else if existing != "" {
+		b.WriteString(existing)
 		if !strings.HasSuffix(b.String(), "\n") {
 			b.WriteString("\n")
 		}
@@ -5506,14 +5522,18 @@ func appendIntakeAnswers(deckAbs string, raw []byte) error {
 	return secureWriteFile(briefPath, []byte(b.String()), 0o644)
 }
 
-func intakeQuestionsForDeck(deckAbs string) []string {
-	brief := strings.TrimSpace(readFileOrEmpty(filepath.Join(deckAbs, "brief.md")))
+func intakeQuestionsForDeck(deckAbs string) ([]string, error) {
+	rawBrief, err := readDeckTextFile(deckAbs, "brief.md")
+	if err != nil {
+		return nil, err
+	}
+	brief := strings.TrimSpace(rawBrief)
 	if len([]rune(brief)) < 80 || strings.Contains(strings.ToLower(brief), "todo") {
 		return []string{
 			"문서 유형은 무엇인가요? 예: 회사소개서, IR, 제안서, 정부지원 사업계획서, 임원 보고서",
 			"핵심 청중과 이 문서로 얻어야 하는 결정 또는 행동은 무엇인가요?",
 			"반드시 포함해야 하는 검증된 주장, 제외해야 하는 주장, 사용 가능한 근거 자료는 무엇인가요?",
-		}
+		}, nil
 	}
 	lower := strings.ToLower(brief)
 	missing := []string{}
@@ -5523,7 +5543,7 @@ func intakeQuestionsForDeck(deckAbs string) []string {
 	if !strings.Contains(lower, "목적") && !strings.Contains(lower, "objective") && !strings.Contains(lower, "goal") {
 		missing = append(missing, "문서 목적과 원하는 결과를 확인해주세요.")
 	}
-	return missing
+	return missing, nil
 }
 
 func writeIntakeQuestions(deckAbs string, questions []string, status string) error {
@@ -6163,7 +6183,10 @@ func stageSupportsCodexAuthoring(stage string) bool {
 }
 
 func runAppServerAuthoring(appRun *appServerWorkflowRun, deckAbs string, state slidexState, stage string) (string, error) {
-	prompt := authoringPrompt(deckAbs, state, stage, "app-server")
+	prompt, err := authoringPrompt(deckAbs, state, stage, "app-server")
+	if err != nil {
+		return "", err
+	}
 	result, err := appRun.runStructuredTurn("authoring_"+stage, prompt, filepath.Join("schemas", "app_authoring_result.strict.schema.json"), 3*time.Minute)
 	if err != nil {
 		return "", err
@@ -6186,7 +6209,11 @@ func runAppServerAuthoring(appRun *appServerWorkflowRun, deckAbs string, state s
 }
 
 func runCodexExecAuthoring(deckAbs string, state slidexState, stage string) (string, error) {
-	path, payload, err := runCodexExecStructured(deckAbs, "authoring_"+stage, authoringPrompt(deckAbs, state, stage, "exec"), filepath.Join("schemas", "app_authoring_result.strict.schema.json"), false, "", nil)
+	prompt, err := authoringPrompt(deckAbs, state, stage, "exec")
+	if err != nil {
+		return "", err
+	}
+	path, payload, err := runCodexExecStructured(deckAbs, "authoring_"+stage, prompt, filepath.Join("schemas", "app_authoring_result.strict.schema.json"), false, "", nil)
 	if err != nil {
 		return path, err
 	}
@@ -6200,11 +6227,27 @@ func runCodexExecAuthoring(deckAbs string, state slidexState, stage string) (str
 	return path, nil
 }
 
-func authoringPrompt(deckAbs string, state slidexState, stage, runtime string) string {
-	brief := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "brief.md")), 1800)
-	design := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "DESIGN.md")), 900)
-	strategy := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "out", "strategy.md")), 1200)
-	spec := firstNRunes(readFileOrEmpty(filepath.Join(deckAbs, "out", "deck_spec.json")), 1600)
+func authoringPrompt(deckAbs string, state slidexState, stage, runtime string) (string, error) {
+	briefRaw, err := readDeckTextFile(deckAbs, "brief.md")
+	if err != nil {
+		return "", err
+	}
+	designRaw, err := readDeckTextFile(deckAbs, "DESIGN.md")
+	if err != nil {
+		return "", err
+	}
+	strategyRaw, err := readDeckTextFile(deckAbs, filepath.Join("out", "strategy.md"))
+	if err != nil {
+		return "", err
+	}
+	specRaw, err := readDeckTextFile(deckAbs, filepath.Join("out", "deck_spec.json"))
+	if err != nil {
+		return "", err
+	}
+	brief := firstNRunes(briefRaw, 1800)
+	design := firstNRunes(designRaw, 900)
+	strategy := firstNRunes(strategyRaw, 1200)
+	spec := firstNRunes(specRaw, 1600)
 	inputsRaw, _ := json.MarshalIndent(stageInputs(deckAbs, stage), "", "  ")
 	goalRaw, _ := json.MarshalIndent(state.Goal, "", "  ")
 	return strings.TrimSpace(fmt.Sprintf(`You are the slidex %s authoring runtime for stage %q.
@@ -6237,7 +6280,7 @@ Stage-specific contract:
 - build_html: set stage "build_html", status "pass" when enough context exists, provide htmlNotes, and fill layoutContract. The Go HTML writer will consume layoutContract.panelLabel, panelText, primaryColor, accentColor, and layoutMode directly in final_deck.html.
 - For fields not used by the current stage, return an empty string or empty array, except layoutContract.
 - layoutContract is always required; for non-build stages use the default safe non-empty values.
-- risks must use owner, reason, expiration, and artifactLink only for concrete non-blocking risks.`, runtime, stage, deckAbs, string(goalRaw), string(inputsRaw), brief, design, strategy, spec))
+- risks must use owner, reason, expiration, and artifactLink only for concrete non-blocking risks.`, runtime, stage, deckAbs, string(goalRaw), string(inputsRaw), brief, design, strategy, spec)), nil
 }
 
 func runAppServerStageAudit(appRun *appServerWorkflowRun, deckAbs string, state slidexState, stage string) (string, error) {
@@ -7550,7 +7593,11 @@ func syncGoalToAppServer(deckAbs, outDir, threadID string, goal goalMirror) (map
 	}
 	objective := strings.TrimSpace(goal.Objective)
 	if objective == "" && goal.ObjectiveFile != "" {
-		objective = strings.TrimSpace(readFileOrEmpty(filepath.Join(deckAbs, filepath.FromSlash(goal.ObjectiveFile))))
+		rawObjective, err := readDeckTextFile(deckAbs, filepath.FromSlash(goal.ObjectiveFile))
+		if err != nil {
+			return nil, err
+		}
+		objective = strings.TrimSpace(rawObjective)
 	}
 	params := map[string]any{"objective": objective, "status": status}
 	if goal.TokenBudget > 0 {
@@ -7579,7 +7626,11 @@ func syncGoalWithAppRun(deckAbs, outDir string, appRun *appServerWorkflowRun, go
 	}
 	objective := strings.TrimSpace(goal.Objective)
 	if objective == "" && goal.ObjectiveFile != "" {
-		objective = strings.TrimSpace(readFileOrEmpty(filepath.Join(deckAbs, filepath.FromSlash(goal.ObjectiveFile))))
+		rawObjective, err := readDeckTextFile(deckAbs, filepath.FromSlash(goal.ObjectiveFile))
+		if err != nil {
+			return nil, err
+		}
+		objective = strings.TrimSpace(rawObjective)
 	}
 	params := map[string]any{"threadId": appRun.threadID, "objective": objective, "status": status}
 	if goal.TokenBudget > 0 {
@@ -7781,6 +7832,48 @@ func readFileOrEmpty(path string) string {
 	return string(raw)
 }
 
+func readDeckTextFile(deckAbs, rel string) (string, error) {
+	path, err := deckScopedTextPath(deckAbs, rel)
+	if err != nil {
+		return "", err
+	}
+	f, info, err := openRegularFileForRead(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer f.Close()
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("deck text input must be a regular file: %s", filepath.ToSlash(path))
+	}
+	if info.Size() > maxDeckTextReadBytes {
+		return "", fmt.Errorf("deck text input exceeds %d bytes: %s", maxDeckTextReadBytes, filepath.ToSlash(path))
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxDeckTextReadBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) > maxDeckTextReadBytes {
+		return "", fmt.Errorf("deck text input exceeds %d bytes: %s", maxDeckTextReadBytes, filepath.ToSlash(path))
+	}
+	return string(raw), nil
+}
+
+func deckScopedTextPath(deckAbs, rel string) (string, error) {
+	deckAbs = mustAbs(deckAbs)
+	cleanRel := filepath.Clean(filepath.FromSlash(rel))
+	if filepath.IsAbs(cleanRel) {
+		return "", fmt.Errorf("deck text input path must be relative: %s", filepath.ToSlash(cleanRel))
+	}
+	path := filepath.Clean(filepath.Join(deckAbs, cleanRel))
+	if !pathWithin(deckAbs, path) {
+		return "", fmt.Errorf("deck text input path escapes deck: %s", filepath.ToSlash(cleanRel))
+	}
+	return path, nil
+}
+
 func firstNRunes(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
@@ -7790,7 +7883,11 @@ func firstNRunes(s string, n int) string {
 }
 
 func firstMarkdownHeading(path string) string {
-	for _, line := range strings.Split(readFileOrEmpty(path), "\n") {
+	return firstMarkdownHeadingFromText(readFileOrEmpty(path))
+}
+
+func firstMarkdownHeadingFromText(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "#") {
 			return strings.TrimSpace(strings.TrimLeft(line, "#"))

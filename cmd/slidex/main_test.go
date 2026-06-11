@@ -3587,6 +3587,31 @@ func TestTextArtifactsRejectSymlinkTargets(t *testing.T) {
 	}
 }
 
+func TestAuthoringPromptRejectsSymlinkedDeckText(t *testing.T) {
+	t.Chdir(repoRootForTest(t))
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "private.txt")
+	if err := os.WriteFile(outside, []byte("PRIVATE_SENTINEL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(deck, "brief.md")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	prompt, err := authoringPrompt(deck, slidexState{}, "strategy", "exec")
+	if err == nil {
+		t.Fatalf("expected symlinked brief to be rejected; prompt contained sentinel=%v", strings.Contains(prompt, "PRIVATE_SENTINEL"))
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlink rejection, got %v", err)
+	}
+	if strings.Contains(prompt, "PRIVATE_SENTINEL") {
+		t.Fatalf("symlinked outside content was read into prompt:\n%s", prompt)
+	}
+}
+
 func TestFileSnapshotTransactionRollbackRestoresFiles(t *testing.T) {
 	dir := t.TempDir()
 	existing := filepath.Join(dir, "existing.md")
