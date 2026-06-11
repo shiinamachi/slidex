@@ -1898,14 +1898,17 @@ func TestAppServerSkillSmokeSchemaRequiresSavedInputProof(t *testing.T) {
 
 func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	snapshot := workbenchDoctorSnapshot()
-	if snapshot["browserOpenMechanism"] != "codex_app_browser_plugin_navigation_preferred_with_url_click_or_manual_fallback" {
+	if snapshot["browserOpenMechanism"] != "manual_url_by_default_with_optional_codex_app_browser_plugin_navigation" {
 		t.Fatalf("unexpected browser open mechanism: %#v", snapshot)
 	}
-	if snapshot["browserOpenPreferredAction"] != "use @Browser or the Browser plugin to navigate to workbench.url immediately when available" {
+	if snapshot["browserOpenPreferredAction"] != "packaged MCP suppresses automatic browser navigation with SLIDEX_BROWSER_OPEN=0; open workbench.url manually when needed" {
 		t.Fatalf("unexpected browser preferred action: %#v", snapshot)
 	}
-	if snapshot["browserOpenFallback"] != "click the loopback URL or navigate manually in the Codex App in-app browser" {
+	if snapshot["browserOpenFallback"] != "pass browserOpen=true or run slidex workbench start --browser-open=true to emit the Browser plugin navigation intent" {
 		t.Fatalf("unexpected browser fallback: %#v", snapshot)
+	}
+	if snapshot["browserOpenSuppressionEnv"] != workbenchBrowserOpenEnv {
+		t.Fatalf("unexpected browser suppression env: %#v", snapshot)
 	}
 	if snapshot["directBrowserOpenRequestAPI"] != "not_found_in_codex_app_server_0.138.0" {
 		t.Fatalf("doctor snapshot should not claim a direct browser-open request API: %#v", snapshot)
@@ -2350,6 +2353,24 @@ func TestDoctorPluginPackageFindingsValidateLocalManifests(t *testing.T) {
 
 	if findings := doctorPluginPackageFindings("slidex"); hasFailures(findings) {
 		t.Fatalf("local plugin package should satisfy doctor gate: %#v", findings)
+	}
+}
+
+func TestPluginMCPConfigSuppressesBrowserOpenByDefault(t *testing.T) {
+	root := repoRootForTest(t)
+	raw, err := os.ReadFile(filepath.Join(root, "plugins", "slidex", ".mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ := config["mcpServers"].(map[string]any)
+	server, _ := servers["slidex"].(map[string]any)
+	env, _ := server["env"].(map[string]any)
+	if env[workbenchBrowserOpenEnv] != "0" {
+		t.Fatalf("plugin MCP config should suppress browser open by default, got %#v", env)
 	}
 }
 

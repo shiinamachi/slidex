@@ -1181,6 +1181,44 @@ func TestPublicWorkbenchStatusIncludesBrowserOpenIntent(t *testing.T) {
 	}
 }
 
+func TestPublicWorkbenchStatusCanSuppressBrowserOpenIntent(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatusWithBrowserOpen(manifest, false)
+	if _, ok := status["browserOpen"].(map[string]any); ok {
+		t.Fatalf("suppressed status should not include browserOpen intent: %#v", status)
+	}
+	if status["browserOpenSuppressed"] != true {
+		t.Fatalf("suppressed status should mark browserOpenSuppressed: %#v", status)
+	}
+	if status["manualOpenURL"] != manifest.URL {
+		t.Fatalf("suppressed status should keep manual URL, got %#v", status["manualOpenURL"])
+	}
+	instruction := workbenchOpenInstruction(manifest, false)
+	if strings.Contains(instruction, "@Browser") || !strings.Contains(instruction, "Browser navigation intent is suppressed") {
+		t.Fatalf("suppressed instruction should avoid automatic browser guidance: %s", instruction)
+	}
+}
+
+func TestWorkbenchBrowserOpenEnabledByEnv(t *testing.T) {
+	t.Setenv(workbenchBrowserOpenEnv, "")
+	if !workbenchBrowserOpenEnabledByEnv() {
+		t.Fatal("browser open should default to enabled")
+	}
+	t.Setenv(workbenchBrowserOpenEnv, "0")
+	if workbenchBrowserOpenEnabledByEnv() {
+		t.Fatal("SLIDEX_BROWSER_OPEN=0 should disable browser open intent")
+	}
+	t.Setenv(workbenchBrowserOpenEnv, "false")
+	if workbenchBrowserOpenEnabledByEnv() {
+		t.Fatal("SLIDEX_BROWSER_OPEN=false should disable browser open intent")
+	}
+	t.Setenv(workbenchBrowserOpenEnv, "unexpected")
+	if !workbenchBrowserOpenEnabledByEnv() {
+		t.Fatal("invalid SLIDEX_BROWSER_OPEN should preserve enabled default")
+	}
+}
+
 func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
@@ -1996,6 +2034,49 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	content, ok := payload["content"].([]map[string]any)
 	if !ok || len(content) != 1 || content[0]["type"] != "text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "Open in Codex App Browser now:") {
 		t.Fatalf("tools/call content is not a text envelope: %#v", payload["content"])
+	}
+
+	result, err = handleMCPRequest(map[string]any{
+		"method": "tools/call",
+		"params": map[string]any{
+			"name": "deck.bootstrap",
+			"arguments": map[string]any{
+				"workspace":   workspace,
+				"deckId":      "mcp-envelope",
+				"browserOpen": false,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok = result.(map[string]any)
+	if !ok {
+		t.Fatalf("suppressed tools/call result = %#v, want object", result)
+	}
+	structured, ok = payload["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("suppressed tools/call result missing structuredContent: %#v", payload)
+	}
+	if _, ok := structured["browserOpen"].(map[string]any); ok {
+		t.Fatalf("suppressed deck.bootstrap should not return top-level browserOpen intent: %#v", structured)
+	}
+	if structured["browserOpenSuppressed"] != true || structured["workbenchURL"] != manifest.URL {
+		t.Fatalf("suppressed deck.bootstrap should preserve manual URL and suppression marker: %#v", structured)
+	}
+	workbench, ok := structured["workbench"].(map[string]any)
+	if !ok {
+		t.Fatalf("suppressed deck.bootstrap missing workbench status: %#v", structured)
+	}
+	if _, ok := workbench["browserOpen"].(map[string]any); ok {
+		t.Fatalf("suppressed workbench status should not include browserOpen intent: %#v", workbench)
+	}
+	content, ok = payload["content"].([]map[string]any)
+	if !ok || len(content) != 1 || content[0]["type"] != "text" {
+		t.Fatalf("suppressed tools/call content is not a text envelope: %#v", payload["content"])
+	}
+	if strings.Contains(fmt.Sprint(content[0]["text"]), "Open in Codex App Browser now:") {
+		t.Fatalf("suppressed tools/call content should not include automatic open instruction: %#v", content[0]["text"])
 	}
 }
 

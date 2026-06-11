@@ -20,10 +20,12 @@ The Go CLI remains the implementation source of truth.
    wizard opens. If the response reports `autoUpdate.blocksWorkbench: true`,
    stop this thread and follow the returned restart or pending-activation
    instruction.
-5. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
-   Codex App in-app browser. The startup intent is Browser-first: use the
-   Browser plugin / `@Browser` to navigate there when available, then fall back
-   to clicking the URL or navigating manually.
+5. Use the returned `http://127.0.0.1:<port>/workbench/<session>` URL only when
+   the user is ready to open the React Wizard. Packaged Codex MCP startup sets
+   `SLIDEX_BROWSER_OPEN=0` so the response does not emit an automatic Browser
+   plugin navigation intent. Pass `browserOpen=true` or run
+   `slidex workbench start --browser-open=true` only when automatic navigation
+   is explicitly desired.
 6. Complete the local React Wizard. It asks for title, audience, decision goal,
    source notes, key messages, output expectations, and optional
    claim/constraint details.
@@ -90,7 +92,7 @@ manifests.
 The CLI embeds the default `decks/_template`, so installed binaries can start a
 new workbench even when the active user workspace does not contain a template
 folder. The MCP `deck.bootstrap` tool is kept only as a deprecated alias and
-returns the same React Wizard browser-open intent as `workbench.start`.
+returns the same React Wizard startup response as `workbench.start`.
 Set `SLIDEX_AUTO_UPDATE=0` only when deliberately disabling release update
 preflight for diagnostics.
 
@@ -146,10 +148,11 @@ from a plugin. The schema's `openPage` / `open_page` entries are Web Search
 actions, not a plugin workbench browser-open request contract.
 
 Therefore slidex uses a Canvas-style local workbench: the plugin starts a
-loopback frontend server, returns a local URL, and emits a structured
-`browserOpen` intent that tells Codex to prefer Browser plugin navigation with
-URL click/manual navigation as fallback. It does not claim or depend on a
-proprietary Canvas mount lifecycle.
+loopback frontend server and returns a local URL. Packaged Codex MCP config
+sets `SLIDEX_BROWSER_OPEN=0` to suppress automatic Browser plugin navigation by
+default; callers can pass `browserOpen=true` when they want the structured
+`browserOpen` intent. It does not claim or depend on a proprietary Canvas mount
+lifecycle.
 
 Official references:
 

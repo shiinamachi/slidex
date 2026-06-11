@@ -41,6 +41,7 @@ const (
 	workbenchControlName         = ".workbench_control.json"
 	workbenchLockName            = "workbench.lock"
 	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
+	workbenchBrowserOpenEnv      = "SLIDEX_BROWSER_OPEN"
 )
 
 var deckIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -290,6 +291,7 @@ func runWorkbenchStart(args []string) error {
 	requiredClaims := fs.String("required-claims", "", "claims that need evidence review to seed into the React wizard draft")
 	constraints := fs.String("constraints", "", "constraints and exclusions to seed into the React wizard draft")
 	outputExpectations := fs.String("output-expectations", "", "output expectations to seed into the React wizard draft")
+	browserOpen := fs.Bool("browser-open", workbenchBrowserOpenEnabledByEnv(), "emit Codex App Browser navigation intent; set false to suppress automatic browser opening")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -317,13 +319,12 @@ func runWorkbenchStart(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printJSON(map[string]any{
+	response := map[string]any{
 		"toolName":                toolName,
 		"status":                  manifest.Status,
 		"deck":                    result,
-		"workbench":               publicWorkbenchStatus(manifest),
-		"browserOpen":             workbenchBrowserOpenIntent(manifest),
-		"openInstruction":         workbenchOpenInstruction(manifest),
+		"workbench":               publicWorkbenchStatusWithBrowserOpen(manifest, *browserOpen),
+		"openInstruction":         workbenchOpenInstruction(manifest, *browserOpen),
 		"browserOpenStrategy":     manifest.BrowserOpenStrategy,
 		"autoUpdate":              autoUpdate,
 		"proprietaryCanvasAPI":    "not_used",
@@ -333,7 +334,14 @@ func runWorkbenchStart(args []string) error {
 		"workbenchManifestPath":   filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
 		"supportedURLMechanism":   "Codex in-app browser can open local URLs by Browser plugin navigation, URL click, or manual navigation.",
 		"unsupportedURLMechanism": "No Codex 0.138.0 App Server client request method was found for plugin-owned automatic browser opening.",
-	})
+	}
+	if *browserOpen {
+		response["browserOpen"] = workbenchBrowserOpenIntent(manifest)
+	} else {
+		response["browserOpenSuppressed"] = true
+		response["workbenchURL"] = manifest.URL
+	}
+	return printJSON(response)
 }
 
 func runWorkbenchServe(args []string) error {
@@ -519,6 +527,7 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
+	browserOpen := boolArg(args, workbenchBrowserOpenEnabledByEnv(), "browserOpen", "browser_open")
 	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
 	if autoUpdate.BlocksWorkbench {
 		return map[string]any{
@@ -543,16 +552,22 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	response := map[string]any{
 		"deck":                 result,
-		"workbench":            publicWorkbenchStatus(manifest),
-		"browserOpen":          workbenchBrowserOpenIntent(manifest),
+		"workbench":            publicWorkbenchStatusWithBrowserOpen(manifest, browserOpen),
 		"startedNew":           startedNew,
 		"reusedExisting":       !startedNew,
-		"openInstruction":      workbenchOpenInstruction(manifest),
+		"openInstruction":      workbenchOpenInstruction(manifest, browserOpen),
 		"autoUpdate":           autoUpdate,
 		"proprietaryCanvasAPI": "not_used",
-	}, nil
+	}
+	if browserOpen {
+		response["browserOpen"] = workbenchBrowserOpenIntent(manifest)
+	} else {
+		response["browserOpenSuppressed"] = true
+		response["workbenchURL"] = manifest.URL
+	}
+	return response, nil
 }
 
 func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateResult {
@@ -707,6 +722,46 @@ func stringArg(args map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func boolArg(args map[string]any, fallback bool, keys ...string) bool {
+	for _, key := range keys {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed
+		case string:
+			if parsed, ok := parseWorkbenchBool(typed); ok {
+				return parsed
+			}
+		}
+	}
+	return fallback
+}
+
+func workbenchBrowserOpenEnabledByEnv() bool {
+	raw := strings.TrimSpace(os.Getenv(workbenchBrowserOpenEnv))
+	if raw == "" {
+		return true
+	}
+	if parsed, ok := parseWorkbenchBool(raw); ok {
+		return parsed
+	}
+	return true
+}
+
+func parseWorkbenchBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true, true
+	case "0", "false", "f", "no", "n", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func callMCPWorkbenchStatus(args map[string]any) (any, error) {
@@ -2311,7 +2366,7 @@ func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid
 		ReadinessPath:       "/readyz",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-		BrowserOpenStrategy: "Codex App Browser-first navigation: use the Browser plugin or @Browser to open workbench.url when available; fall back to URL click or manual navigation. No proprietary Canvas mount API is used.",
+		BrowserOpenStrategy: "Manual URL by default for packaged Codex MCP; optional Browser plugin or @Browser navigation is available when browserOpen=true. No proprietary Canvas mount API is used.",
 		Notes: []string{
 			"Server binds to 127.0.0.1 only.",
 			"Mutating routes require X-Slidex-Workbench-Token and same-origin validation.",
@@ -2858,6 +2913,10 @@ func validateWorkbenchBrowserEvidenceInput(input workbenchBrowserEvidenceInput, 
 }
 
 func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
+	return publicWorkbenchStatusWithBrowserOpen(manifest, true)
+}
+
+func publicWorkbenchStatusWithBrowserOpen(manifest workbenchManifest, browserOpen bool) map[string]any {
 	update := updateStatusSnapshot()
 	status := map[string]any{
 		"status":              manifest.Status,
@@ -2872,7 +2931,6 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"port":                manifest.Port,
 		"serverBind":          manifest.ServerBind,
 		"browserOpenStrategy": manifest.BrowserOpenStrategy,
-		"browserOpen":         workbenchBrowserOpenIntent(manifest),
 		"manifest":            filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
 		"wizardCompletedAt":   manifest.WizardCompletedAt,
 		"generationStatus":    manifest.GenerationStatus,
@@ -2885,6 +2943,12 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"update":              update,
 		"statusBanners":       update["banners"],
 	}
+	if browserOpen {
+		status["browserOpen"] = workbenchBrowserOpenIntent(manifest)
+	} else {
+		status["browserOpenSuppressed"] = true
+		status["manualOpenURL"] = manifest.URL
+	}
 	evidencePath := filepath.Join(manifest.OutDir, workbenchBrowserEvidenceName)
 	if _, err := os.Stat(evidencePath); err == nil {
 		status["browserEvidence"] = filepath.ToSlash(evidencePath)
@@ -2896,9 +2960,12 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 	return status
 }
 
-func workbenchOpenInstruction(manifest workbenchManifest) string {
+func workbenchOpenInstruction(manifest workbenchManifest, browserOpen bool) string {
 	if manifest.URL == "" {
 		return "Open the slidex workbench in the Codex App in-app browser after workbench.url is available."
+	}
+	if !browserOpen {
+		return "Workbench is running at " + manifest.URL + ". Browser navigation intent is suppressed; open the URL manually only when you need the React Wizard."
 	}
 	return "Immediately open " + manifest.URL + " in the Codex App in-app browser using the Browser plugin or @Browser when available; if Browser use is unavailable, click the URL or navigate manually."
 }

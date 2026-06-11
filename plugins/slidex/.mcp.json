@@ -5,7 +5,10 @@
       "args": [
         "mcp-server",
         "--stdio"
-      ]
+      ],
+      "env": {
+        "SLIDEX_BROWSER_OPEN": "0"
+      }
     }
   }
 }
