@@ -2766,6 +2766,8 @@ var (
 	styleAttributeRe = regexp.MustCompile(`(?is)\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 )
 
+const maxDependencyScanBytes = 2 * 1024 * 1024
+
 func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []dependency, []dependency) {
 	base := filepath.Dir(htmlPath)
 	var styles []dependency
@@ -2793,7 +2795,7 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 		fillDependency(&dep, base, href)
 		styles = append(styles, dep)
 		if dep.Path != "" {
-			if raw, err := os.ReadFile(dep.Path); err == nil {
+			if raw, err := readRegularFileForDependencyScan(dep.Path); err == nil {
 				assets = collectCSSURLDependencies(assets, assetSeen, filepath.Dir(dep.Path), string(raw), fmt.Sprintf("linked_css_url_%02d", i+1))
 			}
 		}
@@ -2837,6 +2839,25 @@ func collectCSSURLDependencies(deps []dependency, seen map[string]bool, base, cs
 		deps = appendDependencyIfNew(deps, seen, dep)
 	}
 	return deps
+}
+
+func readRegularFileForDependencyScan(path string) ([]byte, error) {
+	f, info, err := openRegularFileForRead(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info.Size() > maxDependencyScanBytes {
+		return nil, fmt.Errorf("dependency file too large to scan nested CSS URLs: %s", filepath.ToSlash(path))
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxDependencyScanBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxDependencyScanBytes {
+		return nil, fmt.Errorf("dependency file too large to scan nested CSS URLs: %s", filepath.ToSlash(path))
+	}
+	return raw, nil
 }
 
 func shouldSkipCSSURLDependency(ref string) bool {

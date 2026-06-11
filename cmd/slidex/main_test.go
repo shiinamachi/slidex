@@ -3916,6 +3916,37 @@ func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
 	}
 }
 
+func TestCollectDependenciesDoesNotScanSymlinkedStylesheet(t *testing.T) {
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "final_deck.html")
+	stylesDir := filepath.Join(dir, "styles")
+	if err := os.MkdirAll(stylesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := t.TempDir()
+	targetCSS := filepath.Join(targetDir, "target.css")
+	if err := os.WriteFile(targetCSS, []byte(`body{background:url("../secret.png")}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stylesheet := filepath.Join(stylesDir, "style.css")
+	if err := os.Symlink(targetCSS, stylesheet); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	src := `<!doctype html><link rel="stylesheet" href="styles/style.css">`
+	styles, assets, _ := collectDependencies(htmlPath, src, "pretendard")
+	dep, ok := findDependencyByPath(styles, stylesheet)
+	if !ok {
+		t.Fatalf("stylesheet dependency was not recorded: %#v", styles)
+	}
+	if dep.SHA256 != "" || !strings.Contains(dep.Risk, "symlink") {
+		t.Fatalf("symlinked stylesheet should be risky and unhashed: %#v", dep)
+	}
+	if len(assets) != 0 {
+		t.Fatalf("nested URL from symlinked stylesheet should not be collected: %#v", assets)
+	}
+}
+
 func TestCollectDependenciesFlagsExternalLocalFiles(t *testing.T) {
 	dir := t.TempDir()
 	deck := filepath.Join(dir, "deck")
