@@ -494,7 +494,9 @@ func workbenchDoctorSnapshot() map[string]any {
 		"mode":                                "loopback",
 		"status":                              "available",
 		"command":                             "slidex workbench start --deck-id <deck_id>",
-		"browserOpenMechanism":                "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin",
+		"browserOpenMechanism":                "codex_app_browser_plugin_navigation_preferred_with_url_click_or_manual_fallback",
+		"browserOpenPreferredAction":          "use @Browser or the Browser plugin to navigate to workbench.url immediately when available",
+		"browserOpenFallback":                 "click the loopback URL or navigate manually in the Codex App in-app browser",
 		"directBrowserOpenRequestAPI":         "not_found_in_codex_app_server_0.138.0",
 		"directBrowserOpenRequestMethods":     capability["directBrowserOpenRequestMethods"],
 		"clientRequestSchemaPath":             capability["clientRequestSchemaPath"],
@@ -3921,13 +3923,33 @@ func mcpToolCallResult(result any) map[string]any {
 	if err != nil {
 		raw = []byte(fmt.Sprint(result))
 	}
+	text := string(raw)
+	if instruction := mcpBrowserOpenInstruction(result); instruction != "" {
+		text = instruction + "\n\n" + text
+	}
 	return map[string]any{
 		"content": []map[string]any{{
 			"type": "text",
-			"text": string(raw),
+			"text": text,
 		}},
 		"structuredContent": result,
 	}
+}
+
+func mcpBrowserOpenInstruction(result any) string {
+	obj, ok := result.(map[string]any)
+	if !ok {
+		return ""
+	}
+	browserOpen, _ := obj["browserOpen"].(map[string]any)
+	if browserOpen == nil {
+		return ""
+	}
+	urlValue, _ := browserOpen["url"].(string)
+	if strings.TrimSpace(urlValue) == "" {
+		return ""
+	}
+	return "Open in Codex App Browser now: " + urlValue + "\nPreferred action: use @Browser or the Browser plugin to navigate to this local workbench URL. If Browser use is unavailable, click the URL or navigate manually."
 }
 
 func mcpTool(name, description string) map[string]any {

@@ -259,14 +259,15 @@ func runWorkbenchStart(args []string) error {
 		"status":                  manifest.Status,
 		"deck":                    result,
 		"workbench":               publicWorkbenchStatus(manifest),
-		"openInstruction":         "Open the returned workbench.url in the Codex App in-app browser or ask @Browser to navigate there.",
+		"browserOpen":             workbenchBrowserOpenIntent(manifest),
+		"openInstruction":         workbenchOpenInstruction(manifest),
 		"browserOpenStrategy":     manifest.BrowserOpenStrategy,
 		"proprietaryCanvasAPI":    "not_used",
 		"tokenHandling":           "write token is redacted from CLI output and manifest",
 		"startedNew":              startedNew,
 		"reusedExisting":          !startedNew,
 		"workbenchManifestPath":   filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
-		"supportedURLMechanism":   "Codex in-app browser can open local URLs by URL click, manual navigation, or Browser plugin use.",
+		"supportedURLMechanism":   "Codex in-app browser can open local URLs by Browser plugin navigation, URL click, or manual navigation.",
 		"unsupportedURLMechanism": "No Codex 0.138.0 App Server client request method was found for plugin-owned automatic browser opening.",
 	})
 }
@@ -463,9 +464,10 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	return map[string]any{
 		"deck":                 result,
 		"workbench":            publicWorkbenchStatus(manifest),
+		"browserOpen":          workbenchBrowserOpenIntent(manifest),
 		"startedNew":           startedNew,
 		"reusedExisting":       !startedNew,
-		"openInstruction":      "Open workbench.url in the Codex App in-app browser, or ask @Browser to navigate to it.",
+		"openInstruction":      workbenchOpenInstruction(manifest),
 		"proprietaryCanvasAPI": "not_used",
 	}, nil
 }
@@ -1857,7 +1859,7 @@ func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid
 		ReadinessPath:       "/readyz",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-		BrowserOpenStrategy: "Codex App in-app browser URL click/manual navigation or Browser plugin navigation; no proprietary Canvas mount API is used.",
+		BrowserOpenStrategy: "Codex App Browser-first navigation: use the Browser plugin or @Browser to open workbench.url when available; fall back to URL click or manual navigation. No proprietary Canvas mount API is used.",
 		Notes: []string{
 			"Server binds to 127.0.0.1 only.",
 			"Mutating routes require X-Slidex-Workbench-Token and same-origin validation.",
@@ -2418,6 +2420,7 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"port":                manifest.Port,
 		"serverBind":          manifest.ServerBind,
 		"browserOpenStrategy": manifest.BrowserOpenStrategy,
+		"browserOpen":         workbenchBrowserOpenIntent(manifest),
 		"manifest":            filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
 		"update":              update,
 		"statusBanners":       update["banners"],
@@ -2431,6 +2434,28 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		status["browserEvidenceVerification"] = filepath.ToSlash(verificationPath)
 	}
 	return status
+}
+
+func workbenchOpenInstruction(manifest workbenchManifest) string {
+	if manifest.URL == "" {
+		return "Open the slidex workbench in the Codex App in-app browser after workbench.url is available."
+	}
+	return "Immediately open " + manifest.URL + " in the Codex App in-app browser using the Browser plugin or @Browser when available; if Browser use is unavailable, click the URL or navigate manually."
+}
+
+func workbenchBrowserOpenIntent(manifest workbenchManifest) map[string]any {
+	return map[string]any{
+		"target":                    "codex_app_in_app_browser",
+		"preferredAction":           "browser_plugin_navigation",
+		"toolHint":                  "@Browser",
+		"url":                       manifest.URL,
+		"fallbackAction":            "url_click_or_manual_navigation",
+		"requiresLoopback":          true,
+		"serverBind":                manifest.ServerBind,
+		"proprietaryCanvasAPI":      "not_used",
+		"directClientRequestAPI":    "not_available_in_codex_app_server_0.138.0",
+		"actualBrowserEvidenceGate": "slidex workbench evidence followed by slidex workbench verify-evidence",
+	}
 }
 
 func chooseLoopbackPort() (int, error) {

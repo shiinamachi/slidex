@@ -922,6 +922,31 @@ func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
 	}
 }
 
+func TestPublicWorkbenchStatusIncludesBrowserOpenIntent(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatus(manifest)
+	browserOpen, ok := status["browserOpen"].(map[string]any)
+	if !ok {
+		t.Fatalf("public status missing browserOpen intent: %#v", status)
+	}
+	if browserOpen["target"] != "codex_app_in_app_browser" {
+		t.Fatalf("unexpected browserOpen target: %#v", browserOpen)
+	}
+	if browserOpen["preferredAction"] != "browser_plugin_navigation" || browserOpen["toolHint"] != "@Browser" {
+		t.Fatalf("browserOpen should prefer Browser plugin navigation: %#v", browserOpen)
+	}
+	if browserOpen["url"] != manifest.URL || browserOpen["serverBind"] != "127.0.0.1" {
+		t.Fatalf("browserOpen should carry loopback workbench URL: %#v", browserOpen)
+	}
+	if browserOpen["directClientRequestAPI"] != "not_available_in_codex_app_server_0.138.0" {
+		t.Fatalf("browserOpen should not claim direct App Server browser-open support: %#v", browserOpen)
+	}
+	if !strings.Contains(fmt.Sprint(status["browserOpenStrategy"]), "Browser plugin") {
+		t.Fatalf("browserOpenStrategy should mention Browser plugin: %#v", status["browserOpenStrategy"])
+	}
+}
+
 func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)

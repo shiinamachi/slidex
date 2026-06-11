@@ -14,7 +14,7 @@ Use this as the default slidex plugin entry point.
 2. Pick or ask for a `deck_id`; it must be a simple deck id, not a path.
 3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
 4. Confirm the JSON response reports a loopback `workbench.url`, `serverBind: 127.0.0.1`, and `tokenRedacted: true`.
-5. Open the returned URL in the Codex App in-app browser by clicking it or asking `@Browser` to navigate to it. Public Codex 0.138.0 docs do not expose a plugin-owned arbitrary Canvas mount API.
+5. Immediately open the returned URL in the Codex App in-app browser. Prefer using the Browser plugin / `@Browser` to navigate to `workbench.url`; if Browser use is not available in the current thread, present the URL as a clickable link and tell the user to click it or navigate manually. Public Codex 0.138.0 docs do not expose a plugin-owned arbitrary Canvas mount API or direct browser-open App Server request.
 6. Have the user enter deck title, audience, decision goal, source notes, and output expectations in the workbench.
 7. Verify `decks/<deck_id>/brief.md`, `decks/<deck_id>/out/workbench_draft.json`, and `decks/<deck_id>/out/workbench_manifest.json` are written.
 8. Use `slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>` only as a local HTTP pre-GUI save check when needed; it verifies workbench HTML bootstrap, draft/save persistence, token redaction, and `out/workbench_save_smoke.json`, but it is not Codex App GUI/browser evidence.
@@ -27,6 +27,7 @@ Do not run the full render, QA, or package workflow during startup unless the us
 
 - Keep writes under `decks/<deck_id>/`.
 - Do not expose full workbench write tokens in chat-visible output.
+- Treat `workbench.browserOpen.preferredAction=browser_plugin_navigation` as the startup intent: try Browser plugin navigation first, then fall back to URL click/manual navigation.
 - If local plugin invocation does not expose `workbench.start`, install the current repository binary with `mise exec -- go install ./cmd/slidex` because the plugin MCP config resolves `slidex` through PATH.
 - Use `slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>` only as a headless pre-GUI App Server check that sends installed `slidex:slidex-start` skill input, verifies the loopback workbench starts, and writes smoke evidence JSON; it does not replace actual Codex App GUI/browser inspection.
 - Use `slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>` only as a local HTTP pre-GUI save check; it does not replace actual Codex App GUI/browser inspection.

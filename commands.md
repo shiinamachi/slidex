@@ -40,9 +40,10 @@ Windows에서는 `127.0.0.1` loopback WebSocket을 기본 transport로 선택합
 mise exec -- slidex workbench start --deck-id customer-retention
 ```
 
-반환된 loopback URL은 Codex App in-app browser에서 URL 클릭, 수동 navigation, 또는
-`@Browser` navigation으로 엽니다. Public Codex 0.138.0 계약에는 plugin-owned arbitrary
-Canvas mount 또는 직접 browser-open request API가 확인되지 않았습니다.
+반환된 loopback URL은 Codex App in-app browser에서 Browser plugin / `@Browser`
+navigation을 우선 시도하고, 불가능하면 URL 클릭 또는 수동 navigation으로 엽니다.
+Public Codex 0.138.0 계약에는 plugin-owned arbitrary Canvas mount 또는 직접
+browser-open request API가 확인되지 않았습니다.
 Workbench 입력은 `brief.md`, `out/workbench_draft.json`,
 `out/workbench_manifest.json`에 저장됩니다. Codex Plugin MCP는 PATH의 `slidex`를
 실행하므로 local plugin 검증 전 `mise exec -- go install ./cmd/slidex`로 설치 binary를

@@ -9,7 +9,7 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 
 ## Workflow
 
-1. For new deck creation through the plugin, make sure the PATH binary is current with `mise exec -- go install ./cmd/slidex`, then run `slidex workbench start --deck-id <deck_id>` and open the returned URL in the Codex App in-app browser or with `@Browser`.
+1. For new deck creation through the plugin, make sure the PATH binary is current with `mise exec -- go install ./cmd/slidex`, then run `slidex workbench start --deck-id <deck_id>` and immediately open the returned URL in the Codex App in-app browser. Prefer Browser plugin / `@Browser` navigation when available; otherwise surface the clickable loopback URL and tell the user to click it or navigate manually.
 2. Verify `brief.md`, `out/workbench_draft.json`, and `out/workbench_manifest.json` after the user saves the workbench form.
 3. Use `slidex codex app-server skill-smoke --workspace <tmp-workspace> --deck-id <deck_id>` as a headless pre-GUI check that starts an App Server turn with installed `slidex:slidex-start` skill input, verifies the loopback workbench starts, saves initial deck creation input through that workbench session, and writes smoke evidence JSON.
 4. Use `slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id> --screenshot` as a local pre-GUI check that fetches the workbench HTML, posts draft/save input through the session API, verifies deck-local persistence, and writes `out/workbench_save_smoke.json`; `--screenshot` also captures a headless Chrome nonblank workbench render to `out/workbench_save_smoke.png`.
@@ -30,6 +30,7 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 - Material claims must be sourced, user-confirmed, or labeled as assumptions.
 - Keep deck materials scoped under the active `decks/<deck_id>/` workspace.
 - Prefer `slidex codex doctor` and `slidex codex schema refresh` for Codex CLI/App Server compatibility checks.
+- Treat `workbench.browserOpen.preferredAction=browser_plugin_navigation` as the startup intent: try Browser plugin navigation first, then fall back to URL click/manual navigation.
 - Do not claim a proprietary plugin-owned Canvas mount API exists; the supported Canvas-style path is a loopback workbench URL opened in the Codex App browser/work surface.
 - Do not treat `slidex codex app-server skill-smoke` smoke evidence JSON as Codex App GUI/browser evidence.
 - Do not treat `slidex workbench save-smoke` evidence JSON as Codex App GUI/browser evidence.

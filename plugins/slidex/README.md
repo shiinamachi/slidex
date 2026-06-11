@@ -9,8 +9,9 @@ The Go CLI remains the implementation source of truth.
 2. Invoke `@slidex` or `slidex-start` in a Codex App local/worktree thread.
 3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
 4. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
-   Codex App in-app browser, either by clicking the URL, navigating manually, or
-   asking `@Browser` to navigate there.
+   Codex App in-app browser. The startup intent is Browser-first: use the
+   Browser plugin / `@Browser` to navigate there when available, then fall back
+   to clicking the URL or navigating manually.
 5. Save initial deck creation input from the workbench.
 6. Verify `decks/<deck_id>/brief.md` and
    `decks/<deck_id>/out/workbench_draft.json` plus
@@ -111,17 +112,19 @@ still requires `slidex workbench evidence` followed by
 
 ## Surface Decision
 
-Official Codex docs confirm plugins, bundled skills, bundled MCP servers, and
-the Codex App in-app browser for local development URLs. The generated Codex
-App Server `0.138.0` schema does not expose a documented plugin-owned arbitrary
-Canvas mount API or a client request method that directly opens the Codex App
-browser from a plugin. The schema's `openPage` / `open_page` entries are Web
-Search actions, not a plugin workbench browser-open request contract.
+Official Codex docs confirm plugins, bundled skills, bundled MCP servers,
+Browser Use for operating the Codex App in-app browser, and the Codex App
+in-app browser for local development URLs. The generated Codex App Server
+`0.138.0` schema does not expose a documented plugin-owned arbitrary Canvas
+mount API or a client request method that directly opens the Codex App browser
+from a plugin. The schema's `openPage` / `open_page` entries are Web Search
+actions, not a plugin workbench browser-open request contract.
 
 Therefore slidex uses a Canvas-style local workbench: the plugin starts a
-loopback frontend server and returns a local URL for the supported Codex App
-browser/work-surface path. It does not claim or depend on a proprietary Canvas
-mount lifecycle.
+loopback frontend server, returns a local URL, and emits a structured
+`browserOpen` intent that tells Codex to prefer Browser plugin navigation with
+URL click/manual navigation as fallback. It does not claim or depend on a
+proprietary Canvas mount lifecycle.
 
 Official references:
 

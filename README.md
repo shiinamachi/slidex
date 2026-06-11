@@ -206,8 +206,10 @@ slidex workbench start --deck-id customer-retention
 ```
 
 Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
-Codex App browser. Saving writes `brief.md` and workbench artifacts to the
-deck's `out/` directory. Then run the normal workflow:
+Codex App browser. Plugin startup emits a Browser-first `browserOpen` intent:
+Codex should use the Browser plugin / `@Browser` when available, with URL click
+or manual navigation as fallback. Saving writes `brief.md` and workbench
+artifacts to the deck's `out/` directory. Then run the normal workflow:
 
 ```bash
 slidex run --deck decks/customer-retention

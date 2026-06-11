@@ -1,6 +1,6 @@
 {
     "name": "slidex",
-    "version": "0.1.0+codex.20260610114022",
+    "version": "0.1.0+codex.20260611075500",
     "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
     "author": {
         "name": "shiinamachi"
@@ -15,8 +15,8 @@
         "category": "Productivity",
         "capabilities": ["Interactive", "Read", "Write"],
         "defaultPrompt": [
-            "Start a new slidex deck in this workspace and open the slidex workbench.",
-            "Create a slidex deck called <deck_id> and save the initial brief from the workbench.",
+            "Start a new slidex deck in this workspace and immediately open the slidex workbench in the Codex App Browser using Browser/@Browser when available.",
+            "Create a slidex deck called <deck_id>, open the local workbench in the Codex App Browser using Browser/@Browser when available, and save the initial brief from the workbench.",
             "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
         ]
     },

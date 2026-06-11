@@ -202,8 +202,10 @@ slidex workbench start --deck-id customer-retention
 ```
 
 반환된 `http://127.0.0.1:<port>/workbench/<session>` URL을 Codex App 브라우저에서
-엽니다. 워크벤치를 저장하면 `brief.md`와 워크벤치 산출물이 deck의 `out/`
-디렉터리에 작성됩니다. 이후 일반 워크플로를 실행합니다:
+엽니다. Plugin startup은 Browser-first `browserOpen` intent를 내보내므로 Codex는
+가능하면 Browser plugin / `@Browser`로 이동하고, 불가능하면 URL 클릭 또는 수동
+navigation으로 폴백합니다. 워크벤치를 저장하면 `brief.md`와 워크벤치 산출물이
+deck의 `out/` 디렉터리에 작성됩니다. 이후 일반 워크플로를 실행합니다:
 
 ```bash
 slidex run --deck decks/customer-retention
