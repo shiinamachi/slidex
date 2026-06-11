@@ -46,6 +46,8 @@ const (
 
 	updateInstallRootEnv     = "SLIDEX_INSTALL_ROOT"
 	updateInstallMetadataEnv = "SLIDEX_INSTALL_METADATA"
+	updateAPIURLEnv          = "SLIDEX_UPDATE_API_URL"
+	updateAutoEnv            = "SLIDEX_AUTO_UPDATE"
 )
 
 var (
@@ -236,7 +238,7 @@ func runUpdateCheck(args []string) error {
 	jsonOut := fs.Bool("json", false, "write JSON status")
 	metadataPath := fs.String("metadata", "", "install metadata path")
 	installRoot := fs.String("install-root", "", "install root")
-	apiURL := fs.String("api-url", updateGitHubReleasesAPI, "GitHub releases API URL")
+	apiURL := fs.String("api-url", defaultUpdateAPIURL(), "GitHub releases API URL")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -291,7 +293,7 @@ func runUpdateApply(args []string) error {
 	checksums := fs.String("checksums", "", "release checksums file")
 	targetVersion := fs.String("target-version", "", "expected target version")
 	targetTag := fs.String("target-tag", "", "target release tag")
-	apiURL := fs.String("api-url", updateGitHubReleasesAPI, "GitHub releases API URL")
+	apiURL := fs.String("api-url", defaultUpdateAPIURL(), "GitHub releases API URL")
 	yes := fs.Bool("yes", false, "activate the staged update")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -668,6 +670,22 @@ func updateStatusSnapshot() map[string]any {
 	}
 }
 
+func defaultUpdateAPIURL() string {
+	if value := strings.TrimSpace(os.Getenv(updateAPIURLEnv)); value != "" {
+		return value
+	}
+	return updateGitHubReleasesAPI
+}
+
+func automaticUpdatesAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(updateAutoEnv))) {
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return true
+	}
+}
+
 func updateStatusBanners(status updateStatus) []statusBanner {
 	var banners []statusBanner
 	if status.Channel == updateChannelCanary {
@@ -949,6 +967,10 @@ func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, 
 	if err != nil {
 		return "", "", "", err
 	}
+	return downloadAndStageSelectedRelease(ctx, status, release)
+}
+
+func downloadAndStageSelectedRelease(ctx context.Context, status updateStatus, release updateRelease) (candidateRoot, targetVersion, targetTag string, err error) {
 	contract, err := releaseAssetContractFor(release.TagName, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return "", "", "", err

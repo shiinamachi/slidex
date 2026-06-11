@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -2149,4 +2150,101 @@ func writeTarGzFromDirForTest(t *testing.T, archivePath, root, topName string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func writeZipFromDirForTest(t *testing.T, archivePath, root, topName string) {
+	t.Helper()
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(filepath.Join(topName, rel))
+		header.Method = zip.Deflate
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		raw, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(writer, raw)
+		closeErr := raw.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+	closeErr := zw.Close()
+	fileErr := f.Close()
+	for _, err := range []error{walkErr, closeErr, fileErr} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func updateReleaseServerForCandidateForTest(t *testing.T, candidate, version string) *httptest.Server {
+	t.Helper()
+	contract, err := releaseAssetContractFor("v"+version, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(t.TempDir(), contract.ArchiveName)
+	topName := strings.TrimSuffix(strings.TrimSuffix(contract.ArchiveName, ".tar.gz"), ".zip")
+	if strings.HasSuffix(contract.ArchiveName, ".zip") {
+		writeZipFromDirForTest(t, archivePath, candidate, topName)
+	} else {
+		writeTarGzFromDirForTest(t, archivePath, candidate, topName)
+	}
+	archivePayload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archivePayload)
+	digest := hex.EncodeToString(sum[:])
+	checksumText := digest + "  " + contract.ArchiveName + "\n"
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `[{"tag_name":%q,"draft":false,"prerelease":%t,"assets":[{"name":%q,"browser_download_url":%q,"digest":%q},{"name":%q,"browser_download_url":%q}]}]`,
+				"v"+version,
+				channelFromPackageVersion(version) == updateChannelCanary,
+				contract.ArchiveName,
+				server.URL+"/assets/"+contract.ArchiveName,
+				"sha256:"+digest,
+				contract.ChecksumName,
+				server.URL+"/assets/"+contract.ChecksumName,
+			)
+		case "/assets/" + contract.ArchiveName:
+			_, _ = w.Write(archivePayload)
+		case "/assets/" + contract.ChecksumName:
+			_, _ = w.Write([]byte(checksumText))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	return server
 }

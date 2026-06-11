@@ -2,14 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"image/color"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -87,6 +90,83 @@ func TestBootstrapDeckUsesRepoTemplateForExternalWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "decks", "external-template", "brief.md")); err != nil {
 		t.Fatalf("template brief was not copied from repo fallback: %v", err)
+	}
+}
+
+func TestBootstrapDeckUsesEmbeddedTemplateWhenDefaultTemplateMissing(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(t.TempDir())
+	result, err := bootstrapDeckWorkspace(workspace, "embedded-template", defaultDeckTemplatePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "created" {
+		t.Fatalf("status = %q, want created", result.Status)
+	}
+	brief := readFileOrEmpty(filepath.Join(workspace, "decks", "embedded-template", "brief.md"))
+	if !strings.Contains(brief, "# Business Document Brief") {
+		t.Fatalf("embedded template brief was not copied: %q", brief)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "decks", "_template")); !os.IsNotExist(err) {
+		t.Fatalf("test workspace should not need a filesystem template, stat err=%v", err)
+	}
+}
+
+func TestEmbeddedDefaultTemplateMatchesRepoTemplate(t *testing.T) {
+	root := repoRootForTest(t)
+	repoTemplate := filepath.Join(root, defaultDeckTemplatePath)
+	repoFiles := map[string]string{}
+	if err := filepath.WalkDir(repoTemplate, func(filePath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(repoTemplate, filePath)
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+		repoFiles[filepath.ToSlash(rel)] = string(raw)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	embeddedFiles := map[string]string{}
+	if err := fs.WalkDir(embeddedTemplateAssets, embeddedTemplateRoot, func(assetPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(filepath.FromSlash(embeddedTemplateRoot), filepath.FromSlash(assetPath))
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		raw, err := embeddedTemplateAssets.ReadFile(assetPath)
+		if err != nil {
+			return err
+		}
+		embeddedFiles[rel] = string(raw)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(embeddedFiles) != len(repoFiles) {
+		t.Fatalf("embedded template file count = %d, want %d; embedded=%v repo=%v", len(embeddedFiles), len(repoFiles), embeddedFiles, repoFiles)
+	}
+	for rel, want := range repoFiles {
+		if got, ok := embeddedFiles[rel]; !ok || got != want {
+			t.Fatalf("embedded template %s drifted from repo template", rel)
+		}
 	}
 }
 
@@ -286,6 +366,109 @@ func TestWorkbenchShutdownRequiresDedicatedTokenAndSameOrigin(t *testing.T) {
 	if stopped.Status != "stopping" {
 		t.Fatalf("manifest status = %q, want stopping", stopped.Status)
 	}
+}
+
+func TestWorkbenchCompleteRequiresWizardDetail(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	payload := []byte(`{"title":"Demo","audience":"Board","decisionGoal":"Approve pilot"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/complete", bytes.NewReader(payload))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleComplete(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("incomplete wizard status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "sourceNotes") || !strings.Contains(rec.Body.String(), "keyMessages") {
+		t.Fatalf("completion error should list missing wizard fields: %s", rec.Body.String())
+	}
+}
+
+func TestWorkbenchCompleteStartsGeneration(t *testing.T) {
+	oldCommand := newWorkbenchGenerationCommand
+	newWorkbenchGenerationCommand = func(deckAbs string) (*exec.Cmd, []string, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1")
+		return cmd, []string{"slidex-test-generation", deckAbs}, nil
+	}
+	defer func() { newWorkbenchGenerationCommand = oldCommand }()
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	payload := []byte(`{
+		"initialRequest":"Create an investor update deck for the Q3 pilot decision.",
+		"title":"Q3 pilot decision deck",
+		"audience":"Executive investment committee",
+		"decisionGoal":"Approve whether to fund the Q3 pilot.",
+		"sourceNotes":"Use only the confirmed customer interviews and budget notes supplied by the user.",
+		"keyMessages":"Pilot scope, budget ask, implementation risk, and decision timeline.",
+		"requiredClaims":"Do not claim ROI, certifications, or customer counts unless sourced.",
+		"constraints":"Avoid unsupported security claims and keep confidential names out.",
+		"outputExpectations":"HTML and PDF deck suitable for executive review."
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/complete", bytes.NewReader(payload))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleComplete(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "generation_started" {
+		t.Fatalf("complete response status = %#v", response["status"])
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after complete")
+	}
+	if recorded.WizardCompletedAt == "" || recorded.GenerationStatus != "running" || recorded.GenerationPID <= 0 {
+		t.Fatalf("manifest should record wizard completion and running generation: %#v", recorded)
+	}
+	if recorded.GenerationLogPath != filepath.ToSlash(filepath.Join(deck, "out", workbenchGenerationLogName)) {
+		t.Fatalf("unexpected generation log path: %#v", recorded.GenerationLogPath)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		recorded, _ = readWorkbenchManifest(deck)
+		if recorded.GenerationStatus == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if recorded.GenerationStatus != "completed" || recorded.GenerationExitCode != 0 {
+		t.Fatalf("generation should complete through helper process: %#v", recorded)
+	}
+	brief := readFileOrEmpty(filepath.Join(deck, "brief.md"))
+	for _, want := range []string{"Original Plugin Request", "Key Messages", "Wizard Completion"} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("brief missing %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestWorkbenchGenerationHelperProcess(t *testing.T) {
+	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION") != "1" {
+		return
+	}
+	fmt.Println("generation helper complete")
+	os.Exit(0)
 }
 
 func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {
@@ -553,6 +736,57 @@ func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
 		}
+	}
+}
+
+func TestWorkbenchHTMLBootsLocalReactWizardAssets(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	for _, want := range []string{
+		"slidex React Wizard",
+		"const boot = ",
+		"/workbench/session-1/assets/react-18.3.1.production.min.js",
+		"/workbench/session-1/assets/react-dom-18.3.1.production.min.js",
+		"/workbench/session-1/assets/workbench-app.js",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/workbench/session-1/assets/workbench-app.js", nil)
+	rec := httptest.NewRecorder()
+	server.handleAsset(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ReactDOM.createRoot") {
+		t.Fatalf("workbench app asset did not serve React app: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSeedWorkbenchDraftPersistsInitialRequest(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	updated, err := seedWorkbenchDraft(deck, manifest, workbenchSaveInput{
+		InitialRequest: "Create a partner proposal deck for a June review.",
+		Title:          "Partner proposal",
+		Audience:       "Partnership committee",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "draft" || updated.DraftSavedAt == "" {
+		t.Fatalf("seeded manifest should record draft status: %#v", updated)
+	}
+	draft, ok := readWorkbenchDraft(deck)
+	if !ok {
+		t.Fatal("seeded draft missing")
+	}
+	if draft.Input.InitialRequest != "Create a partner proposal deck for a June review." {
+		t.Fatalf("seeded draft lost initial request: %#v", draft.Input)
 	}
 }
 
@@ -922,6 +1156,31 @@ func TestPublicWorkbenchStatusReportsActualTokenRedaction(t *testing.T) {
 	}
 }
 
+func TestPublicWorkbenchStatusIncludesBrowserOpenIntent(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatus(manifest)
+	browserOpen, ok := status["browserOpen"].(map[string]any)
+	if !ok {
+		t.Fatalf("public status missing browserOpen intent: %#v", status)
+	}
+	if browserOpen["target"] != "codex_app_in_app_browser" {
+		t.Fatalf("unexpected browserOpen target: %#v", browserOpen)
+	}
+	if browserOpen["preferredAction"] != "browser_plugin_navigation" || browserOpen["toolHint"] != "@Browser" {
+		t.Fatalf("browserOpen should prefer Browser plugin navigation: %#v", browserOpen)
+	}
+	if browserOpen["url"] != manifest.URL || browserOpen["serverBind"] != "127.0.0.1" {
+		t.Fatalf("browserOpen should carry loopback workbench URL: %#v", browserOpen)
+	}
+	if browserOpen["directClientRequestAPI"] != "not_available_in_codex_app_server_0.138.0" {
+		t.Fatalf("browserOpen should not claim direct App Server browser-open support: %#v", browserOpen)
+	}
+	if !strings.Contains(fmt.Sprint(status["browserOpenStrategy"]), "Browser plugin") {
+		t.Fatalf("browserOpenStrategy should mention Browser plugin: %#v", status["browserOpenStrategy"])
+	}
+}
+
 func TestPublicWorkbenchStatusIncludesUpdateBanners(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
@@ -979,6 +1238,88 @@ func TestPublicWorkbenchStatusIncludesPendingActivationBanner(t *testing.T) {
 	}
 	if !hasStatusBannerForTest(banners, "pending_update_activation") {
 		t.Fatalf("missing pending activation banner: %#v", banners)
+	}
+}
+
+func TestWorkbenchAutoUpdatePreflightLocalDevelopmentContinuesWithoutFetch(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := filepath.Join(installRoot, ".slidex", "missing-install.json")
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not fetch release metadata for local-development", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	t.Setenv(updateAPIURLEnv, server.URL)
+
+	result := runWorkbenchAutoUpdatePreflight(context.Background())
+	if result.Status != "disabled" || !result.ContinueToWorkbench || result.BlocksWorkbench {
+		t.Fatalf("local-development should continue to workbench without blocking: %#v", result)
+	}
+	if called {
+		t.Fatal("local-development update preflight should not fetch release metadata")
+	}
+}
+
+func TestMCPWorkbenchStartAutoAppliesReleaseUpdateBeforeWizard(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	server := updateReleaseServerForCandidateForTest(t, candidate, "0.2.0")
+	defer server.Close()
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, installMetadataPath(installRoot))
+	t.Setenv(updateAPIURLEnv, server.URL+"/releases")
+
+	workspace := filepath.Join(parent, "workspace")
+	result, err := callMCPWorkbenchStart(map[string]any{
+		"workspace": workspace,
+		"deckId":    "auto-update",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("workbench.start result = %#v, want object", result)
+	}
+	if payload["workbenchStarted"] != false {
+		t.Fatalf("workbench should not start after applying an update: %#v", payload)
+	}
+	autoUpdate, ok := payload["autoUpdate"].(workbenchAutoUpdateResult)
+	if !ok {
+		t.Fatalf("autoUpdate missing from workbench.start result: %#v", payload)
+	}
+	if !autoUpdate.BlocksWorkbench || autoUpdate.ContinueToWorkbench {
+		t.Fatalf("applied update should block the current workbench startup: %#v", autoUpdate)
+	}
+	if autoUpdate.TargetVersion != "0.2.0" {
+		t.Fatalf("auto update target = %#v, want 0.2.0", autoUpdate)
+	}
+	if runtime.GOOS == "windows" {
+		if autoUpdate.Status != "pending_activation" || !autoUpdate.PendingActivation {
+			t.Fatalf("windows auto update should require pending activation: %#v", autoUpdate)
+		}
+	} else {
+		if autoUpdate.Status != "applied_restart_required" || !autoUpdate.RestartRequired {
+			t.Fatalf("auto update should require restart after apply: %#v", autoUpdate)
+		}
+		if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+			t.Fatalf("install root VERSION after auto update = %q, want 0.2.0", got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "decks", "auto-update", "out", workbenchManifestName)); !os.IsNotExist(err) {
+		t.Fatalf("workbench manifest should not be created while update blocks startup, stat err=%v", err)
 	}
 }
 
@@ -1589,14 +1930,41 @@ func TestWorkbenchBrowserEvidenceRequiresCurrentSavedArtifacts(t *testing.T) {
 }
 
 func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
-	root := repoRootForTest(t)
 	workspace := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, "decks"), 0o755); err != nil {
+	deck := filepath.Join(workspace, "decks", "mcp-envelope")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyDir(filepath.Join(root, "decks", "_template"), filepath.Join(workspace, "decks", "_template")); err != nil {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
 		t.Fatal(err)
 	}
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", port, os.Getpid(), "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		_ = writeJSONResponse(w, map[string]any{
+			"status":    "ready",
+			"sessionId": manifest.SessionID,
+			"deckDir":   manifest.DeckDir,
+			"pid":       manifest.PID,
+		})
+	})
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
 	result, err := handleMCPRequest(map[string]any{
 		"method": "tools/call",
 		"params": map[string]any{
@@ -1614,11 +1982,15 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools/call result = %#v, want object", result)
 	}
-	if _, ok := payload["structuredContent"]; !ok {
+	structured, ok := payload["structuredContent"].(map[string]any)
+	if !ok {
 		t.Fatalf("tools/call result missing structuredContent: %#v", payload)
 	}
+	if _, ok := structured["browserOpen"].(map[string]any); !ok {
+		t.Fatalf("deck.bootstrap should return React wizard browserOpen intent: %#v", structured)
+	}
 	content, ok := payload["content"].([]map[string]any)
-	if !ok || len(content) != 1 || content[0]["type"] != "text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "mcp-envelope") {
+	if !ok || len(content) != 1 || content[0]["type"] != "text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "Open in Codex App Browser now:") {
 		t.Fatalf("tools/call content is not a text envelope: %#v", payload["content"])
 	}
 }

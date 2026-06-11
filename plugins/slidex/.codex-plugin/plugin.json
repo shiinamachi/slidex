@@ -1,6 +1,6 @@
 {
   "name": "slidex",
-  "version": "0.1.0+codex.20260610114022",
+  "version": "0.1.0+codex.20260611111827",
   "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
   "author": {
     "name": "shiinamachi"
@@ -8,9 +8,9 @@
   "license": "MIT",
   "skills": "./skills/",
   "interface": {
-    "displayName": "Slidex",
-    "shortDescription": "Create slidex decks and open the local workbench.",
-    "longDescription": "Slidex starts a loopback deck-creation workbench from Codex, bootstraps deck-local workspaces, and keeps the CLI as the source of truth for later HTML/PDF render, QA, and package stages.",
+    "displayName": "slidex",
+    "shortDescription": "Create slidex decks through a required local React Wizard.",
+    "longDescription": "slidex starts a loopback React Wizard workbench from Codex for every new deck, opens it in the Codex App Browser, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages. Plugin startup checks and applies verified production/canary release updates before opening the wizard, and the CLI embeds the default deck template so installed binaries can bootstrap new workbenches without a workspace-local template folder.",
     "developerName": "shiinamachi",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +19,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Start a new slidex deck in this workspace and open the slidex workbench.",
-      "Create a slidex deck called <deck_id> and save the initial brief from the workbench.",
+      "Start a new slidex deck, seed the React wizard, and open it in the Codex App Browser.",
+      "Create deck <deck_id>, open the React wizard, and generate after I complete it.",
       "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
     ]
   },

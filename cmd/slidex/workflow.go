@@ -213,7 +213,7 @@ func runInit(args []string) error {
 
 func parseInitArgs(args []string) (string, string, error) {
 	deckID := ""
-	fromTemplate := "decks/_template"
+	fromTemplate := defaultDeckTemplatePath
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -494,7 +494,15 @@ func workbenchDoctorSnapshot() map[string]any {
 		"mode":                                "loopback",
 		"status":                              "available",
 		"command":                             "slidex workbench start --deck-id <deck_id>",
-		"browserOpenMechanism":                "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin",
+		"frontend":                            "local_react_wizard",
+		"defaultTemplate":                     "embedded_decks_template_with_filesystem_override",
+		"autoUpdateAtStartup":                 "workbench.start checks and applies release updates before opening the React Wizard",
+		"newDeckStartupRequiredSurface":       "react_wizard_workbench",
+		"deckBootstrapMCPBehavior":            "deprecated_alias_for_workbench_start",
+		"wizardCompletionAction":              "Complete & generate saves brief/draft/manifest and starts slidex run --deck decks/<deck_id> --non-interactive",
+		"browserOpenMechanism":                "codex_app_browser_plugin_navigation_preferred_with_url_click_or_manual_fallback",
+		"browserOpenPreferredAction":          "use @Browser or the Browser plugin to navigate to workbench.url immediately when available",
+		"browserOpenFallback":                 "click the loopback URL or navigate manually in the Codex App in-app browser",
 		"directBrowserOpenRequestAPI":         "not_found_in_codex_app_server_0.138.0",
 		"directBrowserOpenRequestMethods":     capability["directBrowserOpenRequestMethods"],
 		"clientRequestSchemaPath":             capability["clientRequestSchemaPath"],
@@ -763,7 +771,7 @@ func doctorAppServerSkillSmokeEvidence(deckAbs string, manifest workbenchManifes
 		SkillFound:                      true,
 		PluginReadOK:                    true,
 		TurnSandboxPolicy:               "dangerFullAccess",
-		WorkbenchCommand:                appServerSkillSmokeWorkbenchCommand(workspace, manifest.DeckID, filepath.Join(workspace, "decks", "_template")),
+		WorkbenchCommand:                appServerSkillSmokeWorkbenchCommand(workspace, manifest.DeckID),
 		PromptSha256:                    strings.Repeat("d", 64),
 		EventCount:                      1,
 		DeckCreated:                     true,
@@ -3891,9 +3899,9 @@ func handleMCPRequest(req map[string]any) (any, error) {
 		return map[string]any{"protocolVersion": "2024-11-05", "serverInfo": map[string]any{"name": "slidex", "version": toolVersion}, "capabilities": map[string]any{"tools": map[string]any{}}}, nil
 	case "tools/list":
 		return map[string]any{"tools": []map[string]any{
-			mcpTool("deck.bootstrap", "Create a deck workspace under decks/<deck_id>"),
+			mcpTool("deck.bootstrap", "Deprecated alias for new deck startup; starts the React wizard workbench and returns a workbench URL"),
 			mcpTool("deck.inspect", "Inspect a deck workspace and expected files"),
-			mcpTool("workbench.start", "Start or reuse the loopback slidex workbench"),
+			mcpTool("workbench.start", "Start or reuse the loopback slidex React wizard workbench"),
 			mcpTool("workbench.status", "Report the loopback slidex workbench status"),
 			mcpTool("workbench.stop", "Stop the loopback slidex workbench started by slidex"),
 			mcpTool("inspect", "Inventory deck inputs and outputs"),
@@ -3921,13 +3929,33 @@ func mcpToolCallResult(result any) map[string]any {
 	if err != nil {
 		raw = []byte(fmt.Sprint(result))
 	}
+	text := string(raw)
+	if instruction := mcpBrowserOpenInstruction(result); instruction != "" {
+		text = instruction + "\n\n" + text
+	}
 	return map[string]any{
 		"content": []map[string]any{{
 			"type": "text",
-			"text": string(raw),
+			"text": text,
 		}},
 		"structuredContent": result,
 	}
+}
+
+func mcpBrowserOpenInstruction(result any) string {
+	obj, ok := result.(map[string]any)
+	if !ok {
+		return ""
+	}
+	browserOpen, _ := obj["browserOpen"].(map[string]any)
+	if browserOpen == nil {
+		return ""
+	}
+	urlValue, _ := browserOpen["url"].(string)
+	if strings.TrimSpace(urlValue) == "" {
+		return ""
+	}
+	return "Open in Codex App Browser now: " + urlValue + "\nPreferred action: use @Browser or the Browser plugin to navigate to this local workbench URL. If Browser use is unavailable, click the URL or navigate manually."
 }
 
 func mcpTool(name, description string) map[string]any {
@@ -3938,10 +3966,14 @@ func mcpTool(name, description string) map[string]any {
 			"workspace":          map[string]any{"type": "string"},
 			"deck":               map[string]any{"type": "string"},
 			"deckId":             map[string]any{"type": "string"},
+			"initialRequest":     map[string]any{"type": "string"},
 			"title":              map[string]any{"type": "string"},
 			"audience":           map[string]any{"type": "string"},
 			"decisionGoal":       map[string]any{"type": "string"},
 			"sourceNotes":        map[string]any{"type": "string"},
+			"keyMessages":        map[string]any{"type": "string"},
+			"requiredClaims":     map[string]any{"type": "string"},
+			"constraints":        map[string]any{"type": "string"},
 			"outputExpectations": map[string]any{"type": "string"},
 			"includeLogs":        map[string]any{"type": "boolean"},
 			"chrome":             map[string]any{"type": "string"},

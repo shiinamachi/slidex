@@ -8,14 +8,33 @@ The Go CLI remains the implementation source of truth.
 1. Install or enable the local `slidex` plugin.
 2. Invoke `@slidex` or `slidex-start` in a Codex App local/worktree thread.
 3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
-4. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
-   Codex App in-app browser, either by clicking the URL, navigating manually, or
-   asking `@Browser` to navigate there.
-5. Save initial deck creation input from the workbench.
-6. Verify `decks/<deck_id>/brief.md` and
-   `decks/<deck_id>/out/workbench_draft.json` plus
-   `decks/<deck_id>/out/workbench_manifest.json`.
-7. Optionally run local HTTP save smoke before GUI evidence:
+   New deck creation must go through this React Wizard path; do not fall back to
+   `slidex init`, manual directory creation, or direct `out/final_deck.html`
+   authoring.
+   When the user invocation contains usable details, pass them as seed fields
+   such as `--initial-request`, `--title`, `--audience`, `--decision-goal`,
+   `--source-notes`, `--key-messages`, `--required-claims`, `--constraints`,
+   and `--output-expectations`.
+4. For release-package installs, startup automatically checks the configured
+   production/canary channel and applies a newer verified release before the
+   wizard opens. If the response reports `autoUpdate.blocksWorkbench: true`,
+   stop this thread and follow the returned restart or pending-activation
+   instruction.
+5. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
+   Codex App in-app browser. The startup intent is Browser-first: use the
+   Browser plugin / `@Browser` to navigate there when available, then fall back
+   to clicking the URL or navigating manually.
+6. Complete the local React Wizard. It asks for title, audience, decision goal,
+   source notes, key messages, output expectations, and optional
+   claim/constraint details.
+7. Select `Complete & generate` in the wizard. This writes `brief.md`,
+   `out/workbench_draft.json`, and `out/workbench_manifest.json`, records
+   `wizardCompletedAt`, and starts `slidex run --deck decks/<deck_id>
+   --non-interactive` in the background.
+8. Verify `decks/<deck_id>/out/workbench_manifest.json` reports
+   `generationStatus` and inspect `decks/<deck_id>/out/workbench_generation.log`
+   if generation fails.
+9. Optionally run local HTTP save smoke before GUI evidence:
 
 ```bash
 slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>
@@ -26,7 +45,7 @@ verifies `brief.md`, `out/workbench_draft.json`,
 `out/workbench_manifest.json`, token redaction, and writes
 `out/workbench_save_smoke.json`. It is not Codex App GUI/browser evidence.
 
-8. After actually inspecting the Codex App browser surface, record deck-local
+10. After actually inspecting the Codex App browser surface, record deck-local
    evidence:
 
 ```bash
@@ -67,6 +86,13 @@ slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
 The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires
 `X-Slidex-Workbench-Token` for writes, and records only token hashes in
 manifests.
+
+The CLI embeds the default `decks/_template`, so installed binaries can start a
+new workbench even when the active user workspace does not contain a template
+folder. The MCP `deck.bootstrap` tool is kept only as a deprecated alias and
+returns the same React Wizard browser-open intent as `workbench.start`.
+Set `SLIDEX_AUTO_UPDATE=0` only when deliberately disabling release update
+preflight for diagnostics.
 
 Because the plugin MCP configuration runs `slidex` from `PATH`, local source
 checkout plugin invocation tests should install the current repository binary:
@@ -111,17 +137,19 @@ still requires `slidex workbench evidence` followed by
 
 ## Surface Decision
 
-Official Codex docs confirm plugins, bundled skills, bundled MCP servers, and
-the Codex App in-app browser for local development URLs. The generated Codex
-App Server `0.138.0` schema does not expose a documented plugin-owned arbitrary
-Canvas mount API or a client request method that directly opens the Codex App
-browser from a plugin. The schema's `openPage` / `open_page` entries are Web
-Search actions, not a plugin workbench browser-open request contract.
+Official Codex docs confirm plugins, bundled skills, bundled MCP servers,
+Browser Use for operating the Codex App in-app browser, and the Codex App
+in-app browser for local development URLs. The generated Codex App Server
+`0.138.0` schema does not expose a documented plugin-owned arbitrary Canvas
+mount API or a client request method that directly opens the Codex App browser
+from a plugin. The schema's `openPage` / `open_page` entries are Web Search
+actions, not a plugin workbench browser-open request contract.
 
 Therefore slidex uses a Canvas-style local workbench: the plugin starts a
-loopback frontend server and returns a local URL for the supported Codex App
-browser/work-surface path. It does not claim or depend on a proprietary Canvas
-mount lifecycle.
+loopback frontend server, returns a local URL, and emits a structured
+`browserOpen` intent that tells Codex to prefer Browser plugin navigation with
+URL click/manual navigation as fallback. It does not claim or depend on a
+proprietary Canvas mount lifecycle.
 
 Official references:
 

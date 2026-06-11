@@ -37,6 +37,7 @@ const (
 	workbenchSaveSmokeName       = "workbench_save_smoke.json"
 	workbenchSaveSmokeScreenshot = "workbench_save_smoke.png"
 	workbenchBrowserScreenshot   = "workbench_browser_screenshot"
+	workbenchGenerationLogName   = "workbench_generation.log"
 	workbenchControlName         = ".workbench_control.json"
 	workbenchLockName            = "workbench.lock"
 	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
@@ -74,9 +75,17 @@ type workbenchManifest struct {
 	UpdatedAt           string            `json:"updatedAt"`
 	BriefPath           string            `json:"briefPath,omitempty"`
 	InputSavedAt        string            `json:"inputSavedAt,omitempty"`
+	WizardCompletedAt   string            `json:"wizardCompletedAt,omitempty"`
 	DraftSavedAt        string            `json:"draftSavedAt,omitempty"`
 	DraftPath           string            `json:"draftPath,omitempty"`
 	SavedFieldLengths   map[string]int    `json:"savedFieldLengths,omitempty"`
+	GenerationStatus    string            `json:"generationStatus,omitempty"`
+	GenerationStartedAt string            `json:"generationStartedAt,omitempty"`
+	GenerationEndedAt   string            `json:"generationEndedAt,omitempty"`
+	GenerationPID       int               `json:"generationPid,omitempty"`
+	GenerationExitCode  int               `json:"generationExitCode,omitempty"`
+	GenerationCommand   []string          `json:"generationCommand,omitempty"`
+	GenerationLogPath   string            `json:"generationLogPath,omitempty"`
 	BrowserOpenStrategy string            `json:"browserOpenStrategy"`
 	Notes               []string          `json:"notes,omitempty"`
 	Paths               map[string]string `json:"paths,omitempty"`
@@ -210,11 +219,36 @@ type workbenchBrowserEvidenceInput struct {
 }
 
 type workbenchSaveInput struct {
+	InitialRequest     string `json:"initialRequest"`
 	Title              string `json:"title"`
 	Audience           string `json:"audience"`
 	DecisionGoal       string `json:"decisionGoal"`
 	SourceNotes        string `json:"sourceNotes"`
+	KeyMessages        string `json:"keyMessages"`
+	RequiredClaims     string `json:"requiredClaims"`
+	Constraints        string `json:"constraints"`
 	OutputExpectations string `json:"outputExpectations"`
+}
+
+type workbenchAutoUpdateResult struct {
+	Status                   string             `json:"status"`
+	UpdatesEnabled           bool               `json:"updatesEnabled"`
+	Channel                  string             `json:"channel,omitempty"`
+	InstallMode              string             `json:"installMode,omitempty"`
+	InstallRoot              string             `json:"installRoot,omitempty"`
+	CurrentVersion           string             `json:"currentVersion,omitempty"`
+	TargetVersion            string             `json:"targetVersion,omitempty"`
+	TargetTag                string             `json:"targetTag,omitempty"`
+	RestartRequired          bool               `json:"restartRequired"`
+	PendingActivation        bool               `json:"pendingActivation"`
+	PendingActivationCommand string             `json:"pendingActivationCommand,omitempty"`
+	PluginVerificationStatus string             `json:"pluginVerificationStatus,omitempty"`
+	NextVerificationCommand  string             `json:"nextVerificationCommand,omitempty"`
+	BlocksWorkbench          bool               `json:"blocksWorkbench"`
+	ContinueToWorkbench      bool               `json:"continueToWorkbench"`
+	Instruction              string             `json:"instruction,omitempty"`
+	Error                    string             `json:"error,omitempty"`
+	ApplyResult              *updateApplyResult `json:"applyResult,omitempty"`
 }
 
 func runWorkbench(args []string) error {
@@ -246,11 +280,40 @@ func runWorkbenchStart(args []string) error {
 	workspace := fs.String("workspace", ".", "workspace root containing decks/")
 	deckID := fs.String("deck-id", "", "deck id to create or open")
 	deck := fs.String("deck", "", "existing deck workspace directory")
-	fromTemplate := fs.String("from-template", "decks/_template", "template deck directory")
+	fromTemplate := fs.String("from-template", defaultDeckTemplatePath, "template deck directory")
+	initialRequest := fs.String("initial-request", "", "original user request to seed into the React wizard draft")
+	title := fs.String("title", "", "deck title to seed into the React wizard draft")
+	audience := fs.String("audience", "", "audience to seed into the React wizard draft")
+	decisionGoal := fs.String("decision-goal", "", "decision goal to seed into the React wizard draft")
+	sourceNotes := fs.String("source-notes", "", "source-material notes to seed into the React wizard draft")
+	keyMessages := fs.String("key-messages", "", "key messages to seed into the React wizard draft")
+	requiredClaims := fs.String("required-claims", "", "claims that need evidence review to seed into the React wizard draft")
+	constraints := fs.String("constraints", "", "constraints and exclusions to seed into the React wizard draft")
+	outputExpectations := fs.String("output-expectations", "", "output expectations to seed into the React wizard draft")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	result, manifest, startedNew, err := startWorkbench(*workspace, *deckID, *deck, *fromTemplate)
+	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
+	if autoUpdate.BlocksWorkbench {
+		return printJSON(map[string]any{
+			"toolName":         toolName,
+			"status":           autoUpdate.Status,
+			"autoUpdate":       autoUpdate,
+			"openInstruction":  autoUpdate.Instruction,
+			"workbenchStarted": false,
+		})
+	}
+	result, manifest, startedNew, err := startWorkbenchWithInput(*workspace, *deckID, *deck, *fromTemplate, workbenchSaveInput{
+		InitialRequest:     *initialRequest,
+		Title:              *title,
+		Audience:           *audience,
+		DecisionGoal:       *decisionGoal,
+		SourceNotes:        *sourceNotes,
+		KeyMessages:        *keyMessages,
+		RequiredClaims:     *requiredClaims,
+		Constraints:        *constraints,
+		OutputExpectations: *outputExpectations,
+	})
 	if err != nil {
 		return err
 	}
@@ -259,14 +322,16 @@ func runWorkbenchStart(args []string) error {
 		"status":                  manifest.Status,
 		"deck":                    result,
 		"workbench":               publicWorkbenchStatus(manifest),
-		"openInstruction":         "Open the returned workbench.url in the Codex App in-app browser or ask @Browser to navigate there.",
+		"browserOpen":             workbenchBrowserOpenIntent(manifest),
+		"openInstruction":         workbenchOpenInstruction(manifest),
 		"browserOpenStrategy":     manifest.BrowserOpenStrategy,
+		"autoUpdate":              autoUpdate,
 		"proprietaryCanvasAPI":    "not_used",
 		"tokenHandling":           "write token is redacted from CLI output and manifest",
 		"startedNew":              startedNew,
 		"reusedExisting":          !startedNew,
 		"workbenchManifestPath":   filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
-		"supportedURLMechanism":   "Codex in-app browser can open local URLs by URL click, manual navigation, or Browser plugin use.",
+		"supportedURLMechanism":   "Codex in-app browser can open local URLs by Browser plugin navigation, URL click, or manual navigation.",
 		"unsupportedURLMechanism": "No Codex 0.138.0 App Server client request method was found for plugin-owned automatic browser opening.",
 	})
 }
@@ -299,7 +364,7 @@ func runWorkbenchServe(args []string) error {
 	if *deck == "" || *sessionID == "" || *token == "" || *shutdownToken == "" || *port <= 0 {
 		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID --token-env ENV --shutdown-token-env ENV --port PORT")
 	}
-	deckAbs, err := resolveDeckDir(*workspace, "", *deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(*workspace, "", *deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return err
 	}
@@ -341,7 +406,7 @@ func runWorkbenchSaveSmoke(args []string) error {
 	workspace := fs.String("workspace", ".", "workspace root containing decks/")
 	deckID := fs.String("deck-id", "workbench-save-smoke", "deck id to create or open")
 	deck := fs.String("deck", "", "existing deck workspace directory")
-	fromTemplate := fs.String("from-template", "decks/_template", "template deck directory")
+	fromTemplate := fs.String("from-template", defaultDeckTemplatePath, "template deck directory")
 	title := fs.String("title", "Workbench save smoke", "deck title to submit")
 	audience := fs.String("audience", "Codex App verification reviewer", "audience to submit")
 	decisionGoal := fs.String("decision-goal", "Verify the slidex workbench can persist initial deck creation input.", "decision goal to submit")
@@ -429,23 +494,21 @@ func runWorkbenchVerifyEvidence(args []string) error {
 }
 
 func callMCPDeckBootstrap(args map[string]any) (any, error) {
-	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	if deckID == "" {
 		deckID, _ = args["deck_id"].(string)
 	}
-	result, err := bootstrapDeckWorkspace(workspace, deckID, "decks/_template", true)
-	if err != nil {
-		return nil, err
+	if deckID != "" {
+		args["deckId"] = deckID
 	}
-	return result, nil
+	return callMCPWorkbenchStart(args)
 }
 
 func callMCPDeckInspect(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -456,18 +519,194 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
-	result, manifest, startedNew, err := startWorkbench(workspace, deckID, deck, "decks/_template")
+	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
+	if autoUpdate.BlocksWorkbench {
+		return map[string]any{
+			"toolName":         toolName,
+			"status":           autoUpdate.Status,
+			"autoUpdate":       autoUpdate,
+			"openInstruction":  autoUpdate.Instruction,
+			"workbenchStarted": false,
+		}, nil
+	}
+	result, manifest, startedNew, err := startWorkbenchWithInput(workspace, deckID, deck, defaultDeckTemplatePath, workbenchSaveInput{
+		InitialRequest:     stringArg(args, "initialRequest", "initial_request"),
+		Title:              stringArg(args, "title"),
+		Audience:           stringArg(args, "audience"),
+		DecisionGoal:       stringArg(args, "decisionGoal", "decision_goal"),
+		SourceNotes:        stringArg(args, "sourceNotes", "source_notes"),
+		KeyMessages:        stringArg(args, "keyMessages", "key_messages"),
+		RequiredClaims:     stringArg(args, "requiredClaims", "required_claims"),
+		Constraints:        stringArg(args, "constraints"),
+		OutputExpectations: stringArg(args, "outputExpectations", "output_expectations"),
+	})
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"deck":                 result,
 		"workbench":            publicWorkbenchStatus(manifest),
+		"browserOpen":          workbenchBrowserOpenIntent(manifest),
 		"startedNew":           startedNew,
 		"reusedExisting":       !startedNew,
-		"openInstruction":      "Open workbench.url in the Codex App in-app browser, or ask @Browser to navigate to it.",
+		"openInstruction":      workbenchOpenInstruction(manifest),
+		"autoUpdate":           autoUpdate,
 		"proprietaryCanvasAPI": "not_used",
 	}, nil
+}
+
+func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateResult {
+	result := workbenchAutoUpdateResult{
+		Status:              "skipped",
+		ContinueToWorkbench: true,
+	}
+	if !automaticUpdatesAllowed() {
+		result.Status = "disabled_by_environment"
+		result.Instruction = "Automatic slidex release updates are disabled by " + updateAutoEnv + ". Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	status, err := currentUpdateStatus("", "")
+	if err != nil {
+		result.Status = "status_error"
+		result.Error = err.Error()
+		result.Instruction = "slidex could not read update status. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	result = workbenchAutoUpdateFromStatus(status, "disabled")
+	if !status.UpdatesEnabled {
+		result.Status = "disabled"
+		result.ContinueToWorkbench = true
+		result.Instruction = firstNonEmpty(status.Guidance, "Automatic release updates are disabled for this install. Continue to the React Wizard with the currently installed version.")
+		return result
+	}
+	if status.PendingActivation {
+		result.Status = "pending_activation"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+		result.Instruction = workbenchAutoUpdateInstruction(result)
+		return result
+	}
+	if status.RestartRequired {
+		result.Status = "restart_required"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+		result.Instruction = workbenchAutoUpdateInstruction(result)
+		return result
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	releases, err := fetchUpdateReleases(ctx, defaultUpdateAPIURL())
+	if err != nil {
+		result.Status = "check_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update check failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	release, err := selectUpdateReleaseForStatus(status, releases)
+	if err != nil {
+		result.Status = "check_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update check failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	result.TargetVersion = release.Version
+	result.TargetTag = release.TagName
+	if release.Version == status.CurrentVersion {
+		result.Status = "current"
+		result.Instruction = "slidex is current for the " + status.Channel + " channel. Continue to the React Wizard."
+		return result
+	}
+
+	candidateRoot, targetVersion, targetTag, err := downloadAndStageSelectedRelease(ctx, status, release)
+	if err != nil {
+		result.Status = "apply_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update download or staging failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	result.TargetVersion = targetVersion
+	result.TargetTag = targetTag
+	applyResult, err := applyCandidateBundle(status, candidateRoot, targetVersion, targetTag)
+	result.ApplyResult = &applyResult
+	if err != nil {
+		result.Status = "apply_failed"
+		result.Error = err.Error()
+		result.Instruction = "Automatic update apply failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+	if hasFailures(applyResult.CandidateValidation) {
+		result.Status = "apply_failed"
+		result.Error = "candidate bundle validation failed"
+		result.Instruction = "Automatic update validation failed. Continue to the React Wizard with the currently installed version."
+		return result
+	}
+
+	updatedStatus, statusErr := currentUpdateStatus("", "")
+	if statusErr == nil {
+		result = workbenchAutoUpdateFromStatus(updatedStatus, result.Status)
+		result.ApplyResult = &applyResult
+	} else {
+		result.RestartRequired = applyResult.RestartRequired
+		result.PluginVerificationStatus = applyResult.PluginVerificationStatus
+		result.NextVerificationCommand = applyResult.NextVerificationCommand
+	}
+	switch applyResult.Status {
+	case "applied":
+		result.Status = "applied_restart_required"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+	case "pending-restart":
+		result.Status = "pending_activation"
+		result.BlocksWorkbench = true
+		result.ContinueToWorkbench = false
+		result.PendingActivation = true
+	default:
+		result.Status = "apply_failed"
+		result.Error = "unexpected update apply status: " + applyResult.Status
+		result.BlocksWorkbench = false
+		result.ContinueToWorkbench = true
+	}
+	result.Instruction = workbenchAutoUpdateInstruction(result)
+	return result
+}
+
+func workbenchAutoUpdateFromStatus(status updateStatus, resultStatus string) workbenchAutoUpdateResult {
+	return workbenchAutoUpdateResult{
+		Status:                   resultStatus,
+		UpdatesEnabled:           status.UpdatesEnabled,
+		Channel:                  status.Channel,
+		InstallMode:              status.InstallMode,
+		InstallRoot:              status.InstallRoot,
+		CurrentVersion:           status.CurrentVersion,
+		TargetVersion:            status.TargetVersion,
+		TargetTag:                status.TargetTag,
+		RestartRequired:          status.RestartRequired,
+		PendingActivation:        status.PendingActivation,
+		PendingActivationCommand: status.PendingActivationCommand,
+		PluginVerificationStatus: status.PluginVerificationStatus,
+		NextVerificationCommand:  status.NextVerificationCommand,
+		ContinueToWorkbench:      true,
+	}
+}
+
+func workbenchAutoUpdateInstruction(result workbenchAutoUpdateResult) string {
+	if result.PendingActivation {
+		return "A slidex update was staged automatically and must be activated before the React Wizard opens. Restart Codex so the old slidex MCP process exits, run the pending activation command if shown, then start a new Codex thread and invoke slidex again."
+	}
+	if result.RestartRequired || result.BlocksWorkbench {
+		return "A slidex update was applied automatically. Restart Codex and start a new thread before creating this deck so the updated slidex plugin skills are active."
+	}
+	return result.Instruction
+}
+
+func stringArg(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := args[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func callMCPWorkbenchStatus(args map[string]any) (any, error) {
@@ -843,6 +1082,10 @@ func workbenchSaveSmokeStatus(result workbenchSaveSmokeResult) string {
 }
 
 func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrapResult, workbenchManifest, bool, error) {
+	return startWorkbenchWithInput(workspace, deckID, deck, fromTemplate, workbenchSaveInput{})
+}
+
+func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed workbenchSaveInput) (deckBootstrapResult, workbenchManifest, bool, error) {
 	deckAbs, err := resolveDeckDir(workspace, deckID, deck, true, fromTemplate)
 	if err != nil {
 		return deckBootstrapResult{}, workbenchManifest{}, false, err
@@ -865,7 +1108,11 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 	if existing, ok := readWorkbenchManifest(deckAbs); ok {
 		if isWorkbenchReady(existing) {
 			existing.Status = "running"
-			return result, existing, false, nil
+			if seeded, err := seedWorkbenchDraft(deckAbs, existing, seed); err != nil {
+				return result, existing, false, err
+			} else {
+				return result, seeded, false, nil
+			}
 		}
 		removeWorkbenchControl(deckAbs)
 		existing.Status = "stale"
@@ -939,7 +1186,31 @@ func startWorkbench(workspace, deckID, deck, fromTemplate string) (deckBootstrap
 		}
 		return result, workbenchManifest{}, false, err
 	}
+	if seeded, err := seedWorkbenchDraft(deckAbs, manifest, seed); err != nil {
+		return result, manifest, true, err
+	} else {
+		manifest = seeded
+	}
 	return result, manifest, true, nil
+}
+
+func seedWorkbenchDraft(deckAbs string, manifest workbenchManifest, input workbenchSaveInput) (workbenchManifest, error) {
+	input = normalizeWorkbenchInput(input)
+	if !hasAnyWorkbenchInput(input) {
+		return manifest, nil
+	}
+	draft, err := writeWorkbenchDraft(deckAbs, input, "draft")
+	if err != nil {
+		return manifest, err
+	}
+	manifest.Status = "draft"
+	manifest.DraftSavedAt = draft.UpdatedAt
+	manifest.DraftPath = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName))
+	manifest.UpdatedAt = draft.UpdatedAt
+	if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
+		return manifest, err
+	}
+	return manifest, nil
 }
 
 type workbenchPortRetryExhaustedError struct {
@@ -986,9 +1257,11 @@ func serveWorkbench(deckAbs, workspace, sessionID, token, shutdownToken string, 
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/readyz", server.handleReady)
 	mux.HandleFunc("/workbench/"+sessionID, server.handleWorkbench)
+	mux.HandleFunc("/workbench/"+sessionID+"/assets/", server.handleAsset)
 	mux.HandleFunc("/workbench/"+sessionID+"/api/session", server.handleSession)
 	mux.HandleFunc("/workbench/"+sessionID+"/api/draft", server.handleDraft)
 	mux.HandleFunc("/workbench/"+sessionID+"/api/save", server.handleSave)
+	mux.HandleFunc("/workbench/"+sessionID+"/api/complete", server.handleComplete)
 	mux.HandleFunc("/workbench/"+sessionID+"/api/shutdown", server.handleShutdown)
 	httpServer := &http.Server{
 		Addr:              workbenchListenAddr(port),
@@ -1054,6 +1327,29 @@ func (s *workbenchHTTPServer) handleWorkbench(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(w, s.workbenchHTML())
+}
+
+func (s *workbenchHTTPServer) handleAsset(w http.ResponseWriter, r *http.Request) {
+	prefix := "/workbench/" + s.sessionID + "/assets/"
+	if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, prefix) {
+		http.NotFound(w, r)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, prefix)
+	switch name {
+	case "react-18.3.1.production.min.js", "react-dom-18.3.1.production.min.js", "workbench-app.js":
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	raw, err := embeddedWorkbenchAssets.ReadFile("workbench_assets/" + name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(raw)
 }
 
 func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1156,37 +1452,197 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	input = normalizeWorkbenchInput(input)
-	if err := writeWorkbenchBrief(s.deckAbs, input); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	draft, err := writeWorkbenchDraft(s.deckAbs, input, "saved")
+	manifest, err := s.saveWorkbenchInput(input, "saved", "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	_ = writeJSONResponse(w, map[string]any{"status": "saved", "manifest": publicWorkbenchStatus(manifest)})
+}
+
+func (s *workbenchHTTPServer) handleComplete(w http.ResponseWriter, r *http.Request) {
+	if !workbenchSessionPathMatches(r.URL.Path, s.sessionID, "/api/complete") {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !sameOriginRequired(r, s.manifest.URL) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	if !validWorkbenchToken(r.Header.Get("X-Slidex-Workbench-Token"), s.token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	defer r.Body.Close()
+	var input workbenchSaveInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	input = normalizeWorkbenchInput(input)
+	if err := validateWorkbenchCompletionInput(input); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	manifest, err := s.saveWorkbenchInput(input, "saved", time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	manifest, reused, err := s.startGeneration(manifest)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	status := "generation_started"
+	if reused {
+		status = "generation_reused"
+	}
+	_ = writeJSONResponse(w, map[string]any{"status": status, "manifest": publicWorkbenchStatus(manifest)})
+}
+
+func (s *workbenchHTTPServer) saveWorkbenchInput(input workbenchSaveInput, status, wizardCompletedAt string) (workbenchManifest, error) {
+	input = normalizeWorkbenchInput(input)
+	if err := writeWorkbenchBrief(s.deckAbs, input); err != nil {
+		return workbenchManifest{}, err
+	}
+	draft, err := writeWorkbenchDraft(s.deckAbs, input, status)
+	if err != nil {
+		return workbenchManifest{}, err
+	}
 	manifest := s.manifest
 	now := time.Now().UTC().Format(time.RFC3339)
-	manifest.Status = "saved"
+	manifest.Status = status
 	manifest.InputSavedAt = now
+	if wizardCompletedAt != "" {
+		manifest.WizardCompletedAt = wizardCompletedAt
+	}
 	manifest.DraftSavedAt = draft.UpdatedAt
 	manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
 	manifest.UpdatedAt = now
 	manifest.BriefPath = filepath.ToSlash(filepath.Join(s.deckAbs, "brief.md"))
-	manifest.SavedFieldLengths = map[string]int{
+	manifest.SavedFieldLengths = workbenchFieldLengths(input)
+	if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
+		return workbenchManifest{}, err
+	}
+	s.manifest = manifest
+	return manifest, nil
+}
+
+func validateWorkbenchCompletionInput(input workbenchSaveInput) error {
+	missing := []string{}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "title", value: input.Title},
+		{name: "audience", value: input.Audience},
+		{name: "decisionGoal", value: input.DecisionGoal},
+		{name: "sourceNotes", value: input.SourceNotes},
+		{name: "keyMessages", value: input.KeyMessages},
+		{name: "outputExpectations", value: input.OutputExpectations},
+	} {
+		if len([]rune(strings.TrimSpace(field.value))) < 8 {
+			missing = append(missing, field.name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("wizard completion requires more detail for: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func workbenchFieldLengths(input workbenchSaveInput) map[string]int {
+	return map[string]int{
+		"initialRequest":     len(input.InitialRequest),
 		"title":              len(input.Title),
 		"audience":           len(input.Audience),
 		"decisionGoal":       len(input.DecisionGoal),
 		"sourceNotes":        len(input.SourceNotes),
+		"keyMessages":        len(input.KeyMessages),
+		"requiredClaims":     len(input.RequiredClaims),
+		"constraints":        len(input.Constraints),
 		"outputExpectations": len(input.OutputExpectations),
 	}
+}
+
+var newWorkbenchGenerationCommand = defaultWorkbenchGenerationCommand
+
+func defaultWorkbenchGenerationCommand(deckAbs string) (*exec.Cmd, []string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, nil, err
+	}
+	args := []string{"run", "--deck", deckAbs, "--non-interactive"}
+	cmd := exec.Command(exe, args...)
+	return cmd, append([]string{exe}, args...), nil
+}
+
+func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workbenchManifest, bool, error) {
+	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
+		return manifest, true, nil
+	}
+	logPath := filepath.Join(s.deckAbs, "out", workbenchGenerationLogName)
+	logFile, err := openSecureAppendFile(logPath, 0o600)
+	if err != nil {
+		return manifest, false, err
+	}
+	cmd, command, err := newWorkbenchGenerationCommand(s.deckAbs)
+	if err != nil {
+		_ = logFile.Close()
+		return manifest, false, err
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	configureManagedAppServerCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return manifest, false, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	manifest.Status = "generating"
+	manifest.GenerationStatus = "running"
+	manifest.GenerationStartedAt = now
+	manifest.GenerationEndedAt = ""
+	manifest.GenerationPID = cmd.Process.Pid
+	manifest.GenerationExitCode = 0
+	manifest.GenerationCommand = command
+	manifest.GenerationLogPath = filepath.ToSlash(logPath)
+	manifest.UpdatedAt = now
 	if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		signalManagedProcess(cmd.Process.Pid)
+		_ = logFile.Close()
+		return manifest, false, err
 	}
 	s.manifest = manifest
-	_ = writeJSONResponse(w, map[string]any{"status": "saved", "manifest": publicWorkbenchStatus(manifest)})
+	go s.waitForGeneration(cmd, logFile, manifest)
+	return manifest, false, nil
+}
+
+func (s *workbenchHTTPServer) waitForGeneration(cmd *exec.Cmd, logFile *os.File, started workbenchManifest) {
+	err := cmd.Wait()
+	_ = logFile.Close()
+	manifest := started
+	if current, ok := readWorkbenchManifest(s.deckAbs); ok {
+		manifest = current
+	}
+	manifest.GenerationEndedAt = time.Now().UTC().Format(time.RFC3339)
+	manifest.UpdatedAt = manifest.GenerationEndedAt
+	manifest.GenerationExitCode = cmd.ProcessState.ExitCode()
+	if err == nil {
+		manifest.Status = "generated"
+		manifest.GenerationStatus = "completed"
+	} else {
+		manifest.Status = "generation_failed"
+		manifest.GenerationStatus = "failed"
+	}
+	if writeWorkbenchManifest(s.deckAbs, manifest) == nil {
+		s.manifest = manifest
+	}
 }
 
 func (s *workbenchHTTPServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
@@ -1228,15 +1684,19 @@ func workbenchSessionPathMatches(path, sessionID, suffix string) bool {
 }
 
 func (s *workbenchHTTPServer) workbenchHTML() string {
+	filePathHTML := workbenchFilePathHTML(s.manifest)
 	bootstrap := map[string]any{
-		"deckId":    s.manifest.DeckID,
-		"deckDir":   s.manifest.DeckDir,
-		"sessionId": s.sessionID,
-		"apiBase":   "/workbench/" + s.sessionID + "/api",
-		"token":     s.token,
+		"deckId":       s.manifest.DeckID,
+		"deckDir":      s.manifest.DeckDir,
+		"sessionId":    s.sessionID,
+		"apiBase":      "/workbench/" + s.sessionID + "/api",
+		"assetBase":    "/workbench/" + s.sessionID + "/assets/",
+		"token":        s.token,
+		"filePathHTML": filePathHTML,
 	}
 	raw, _ := json.Marshal(bootstrap)
 	title := html.EscapeString(s.manifest.DeckID)
+	assetBase := "/workbench/" + s.sessionID + "/assets/"
 	return `<!doctype html>
 <html lang="ko">
 <head>
@@ -1244,12 +1704,14 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>slidex workbench - ` + title + `</title>
   <style>
-    :root { color-scheme: light; --ink:#182026; --muted:#53606b; --line:#d7dde2; --soft:#f4f7f9; --accent:#0f766e; --accent-strong:#0b5f59; --paper:#ffffff; --warn:#8a5a00; }
+    :root { color-scheme: light; --ink:#182026; --muted:#53606b; --line:#d7dde2; --soft:#f4f7f9; --accent:#0f766e; --accent-strong:#0b5f59; --paper:#ffffff; --warn:#8a5a00; --blue:#2563eb; --amber:#b45309; }
     * { box-sizing: border-box; }
     body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--ink); background:var(--soft); }
     main { max-width: 1120px; margin: 0 auto; padding: 28px; }
-    header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:22px; }
+    .wizard-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:18px; }
+    .eyebrow { margin:0 0 5px; color:var(--accent); font-size:12px; font-weight:750; text-transform:uppercase; letter-spacing:.08em; }
     h1 { margin:0; font-size:24px; line-height:1.2; letter-spacing:0; }
+    h2 { margin:0; font-size:17px; line-height:1.3; letter-spacing:0; }
     .meta { color:var(--muted); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
     .status-banners { display:grid; gap:10px; margin:0 0 18px; }
     .status-banner { border:1px solid var(--line); border-left-width:4px; border-radius:6px; background:var(--paper); padding:10px 12px; font-size:13px; line-height:1.45; }
@@ -1258,108 +1720,90 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
     .status-banner.warn { border-left-color:var(--warn); }
     .status-banner.info { border-left-color:#2563eb; }
     .status-banner.ok { border-left-color:var(--accent); }
-    form { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:16px; }
-    label { display:grid; gap:7px; font-size:13px; font-weight:650; }
+    .stepper { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
+    .step { border:1px solid var(--line); border-radius:6px; padding:8px 10px; min-height:36px; background:var(--paper); color:var(--ink); font-weight:700; cursor:pointer; }
+    .step.active { border-color:var(--accent); color:var(--accent-strong); box-shadow: inset 0 0 0 1px var(--accent); }
+    form { display:grid; gap:14px; }
+    .step-panel { border:1px solid var(--line); border-radius:8px; background:var(--paper); padding:16px; }
+    .field-grid { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:14px; margin-top:14px; }
+    .field { display:grid; gap:7px; font-size:13px; font-weight:650; }
     input, textarea { width:100%; min-width:0; border:1px solid var(--line); border-radius:6px; padding:11px 12px; font:inherit; background:var(--paper); color:var(--ink); }
-    textarea { min-height:132px; resize:vertical; line-height:1.45; }
-    .wide { grid-column:1 / -1; }
-    .actions { grid-column:1 / -1; display:flex; align-items:center; gap:12px; margin-top:4px; }
+    textarea { min-height:122px; resize:vertical; line-height:1.45; }
+    .field-wide { grid-column:1 / -1; }
+    .actions { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
     button { border:0; border-radius:6px; padding:10px 14px; min-height:40px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
     button:hover { background:var(--accent-strong); }
     button:disabled { opacity:.58; cursor:not-allowed; }
-    output { font-size:13px; color:var(--muted); }
-    output.warn { color:var(--warn); }
-    .paths { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; }
-    .paths h2 { margin:0 0 10px; font-size:14px; line-height:1.3; letter-spacing:0; }
+    button.primary { background:var(--blue); }
+    button.primary:hover { background:#1d4ed8; }
+    .status { font-size:13px; color:var(--muted); }
+    .status.warn { color:var(--warn); }
+    .review-grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; }
+    .review-item { border:1px solid var(--line); border-radius:6px; padding:10px; display:grid; gap:4px; font-size:13px; }
+    .review-item span { color:var(--accent-strong); }
+    .review-item.missing span { color:var(--amber); }
+    .generation, .paths { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; }
+    .generation dl,
     .paths dl { margin:0; display:grid; grid-template-columns: minmax(90px, max-content) minmax(0, 1fr); gap:8px 14px; font-size:13px; line-height:1.45; }
+    .generation dt,
     .paths dt { color:var(--muted); font-weight:650; }
+    .generation dd,
     .paths dd { margin:0; overflow-wrap:anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .paths h2 { margin:0 0 10px; font-size:14px; line-height:1.3; letter-spacing:0; }
     .notice { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; color:var(--muted); font-size:13px; line-height:1.5; }
-    @media (max-width: 760px) { main { padding:20px; } header { display:block; } form { grid-template-columns:1fr; } }
+    @media (max-width: 760px) { main { padding:20px; } .wizard-header { display:block; } .field-grid, .review-grid { grid-template-columns:1fr; } .deck-dir { margin-top:8px; } }
   </style>
 </head>
 <body>
   <main>
-    <header>
-      <div>
-        <h1>slidex workbench</h1>
-        <div class="meta">Deck: <strong>` + title + `</strong></div>
-      </div>
-      <div class="meta">` + html.EscapeString(s.manifest.DeckDir) + `</div>
-    </header>
     ` + workbenchStatusBannersHTML() + `
-    <form id="deck-form">
-      <label>Deck title<input name="title" autocomplete="off" required></label>
-      <label>Audience<input name="audience" autocomplete="off" required></label>
-      <label class="wide">Decision goal<input name="decisionGoal" autocomplete="off" required></label>
-      <label>Source-material notes<textarea name="sourceNotes" spellcheck="true"></textarea></label>
-      <label>Output expectations<textarea name="outputExpectations" spellcheck="true"></textarea></label>
-      <div class="actions"><button type="submit">Save initial brief</button><output id="status"></output></div>
-    </form>
-    <section class="paths" aria-label="Deck files">
-      <h2>Deck files</h2>
-      <dl>` + workbenchFilePathHTML(s.manifest) + `</dl>
-    </section>
-    <div class="notice">Later strategy, build, render, QA, and package stages remain separate slidex workflow steps.</div>
+    <div id="slidex-react-root">
+      <header class="wizard-header">
+        <div>
+          <p class="eyebrow">slidex React Wizard</p>
+          <h1>Deck intake workbench</h1>
+          <div class="meta">Deck: <strong>` + title + `</strong></div>
+        </div>
+        <div class="meta deck-dir">` + html.EscapeString(s.manifest.DeckDir) + `</div>
+      </header>
+      <nav class="stepper" aria-label="Wizard steps">
+        <button class="step active" type="button">1. 요청 정리</button>
+        <button class="step" type="button">2. 목표</button>
+        <button class="step" type="button">3. 근거</button>
+        <button class="step" type="button">4. 메시지</button>
+        <button class="step" type="button">5. 검토</button>
+      </nav>
+      <form id="deck-form">
+        <section class="step-panel">
+          <h2>요청 정리</h2>
+          <div class="field-grid">
+            <label class="field field-wide"><span>요청 원문</span><textarea name="initialRequest" spellcheck="true"></textarea></label>
+            <label class="field"><span>문서 제목</span><input name="title" autocomplete="off" required></label>
+            <label class="field"><span>핵심 청중</span><input name="audience" autocomplete="off" required></label>
+            <label class="field field-wide"><span>결정 목표</span><textarea name="decisionGoal" spellcheck="true" required></textarea></label>
+            <label class="field field-wide"><span>근거 자료와 확정된 사실</span><textarea name="sourceNotes" spellcheck="true"></textarea></label>
+            <label class="field field-wide"><span>핵심 메시지</span><textarea name="keyMessages" spellcheck="true"></textarea></label>
+            <label class="field field-wide"><span>검증 필요 주장</span><textarea name="requiredClaims" spellcheck="true"></textarea></label>
+            <label class="field field-wide"><span>제외/주의사항</span><textarea name="constraints" spellcheck="true"></textarea></label>
+            <label class="field field-wide"><span>출력 기대</span><textarea name="outputExpectations" spellcheck="true"></textarea></label>
+          </div>
+        </section>
+        <div class="actions"><button type="submit">Save brief</button><button class="primary" type="button">Complete & generate</button><output class="status"></output></div>
+      </form>
+      <section class="paths" aria-label="Deck files">
+        <h2>Deck files</h2>
+        <dl>` + filePathHTML + `</dl>
+      </section>
+      <div class="notice">React assets are served locally from this workbench session. If scripts are unavailable, this fallback form still exposes the deck intake fields.</div>
+    </div>
   </main>
   <script>
     const boot = ` + string(raw) + `;
-    const form = document.getElementById("deck-form");
-    const status = document.getElementById("status");
-    let draftTimer = null;
-    let filling = false;
-    function formData() {
-      return Object.fromEntries(new FormData(form).entries());
-    }
-    function setStatus(text, warn = false) {
-      status.value = text;
-      status.classList.toggle("warn", warn);
-    }
-    async function loadDraft() {
-      const response = await fetch(boot.apiBase + "/draft", {headers: {"X-Slidex-Workbench-Token": boot.token}});
-      if (!response.ok) return;
-      const payload = await response.json();
-      if (!payload.draft || !payload.draft.input) return;
-      filling = true;
-      for (const [key, value] of Object.entries(payload.draft.input)) {
-        const field = form.elements[key];
-        if (field && !field.value) field.value = value || "";
-      }
-      filling = false;
-      setStatus("Recovered draft from out/workbench_draft.json");
-    }
-    async function saveDraft() {
-      const data = formData();
-      if (!Object.values(data).some((value) => String(value || "").trim() !== "")) return;
-      const response = await fetch(boot.apiBase + "/draft", {
-        method: "POST",
-        headers: {"Content-Type": "application/json", "X-Slidex-Workbench-Token": boot.token},
-        body: JSON.stringify(data)
-      });
-      if (response.ok) setStatus("Draft saved");
-    }
-    form.addEventListener("input", () => {
-      if (filling) return;
-      clearTimeout(draftTimer);
-      draftTimer = setTimeout(saveDraft, 500);
-    });
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const data = formData();
-      setStatus("Saving...");
-      const response = await fetch(boot.apiBase + "/save", {
-        method: "POST",
-        headers: {"Content-Type": "application/json", "X-Slidex-Workbench-Token": boot.token},
-        body: JSON.stringify(data)
-      });
-      if (!response.ok) {
-        setStatus("Save failed", true);
-        return;
-      }
-      setStatus("Saved to brief.md and out/workbench_manifest.json");
-    });
-    loadDraft();
+    window.__SLIDEX_WORKBENCH__ = boot;
   </script>
+  <script src="` + assetBase + `react-18.3.1.production.min.js"></script>
+  <script src="` + assetBase + `react-dom-18.3.1.production.min.js"></script>
+  <script src="` + assetBase + `workbench-app.js"></script>
 </body>
 </html>`
 }
@@ -1429,8 +1873,18 @@ func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExistin
 		return deckBootstrapResult{}, err
 	}
 	templateAbs := resolveTemplateDir(root, fromTemplate)
-	if err := copyDir(templateAbs, deckAbs); err != nil {
-		return deckBootstrapResult{}, err
+	if pathExists(templateAbs) {
+		if err := copyDir(templateAbs, deckAbs); err != nil {
+			return deckBootstrapResult{}, err
+		}
+	} else if isDefaultTemplateRef(fromTemplate) {
+		if err := copyEmbeddedDefaultTemplate(deckAbs); err != nil {
+			return deckBootstrapResult{}, err
+		}
+	} else {
+		if err := copyDir(templateAbs, deckAbs); err != nil {
+			return deckBootstrapResult{}, err
+		}
 	}
 	return deckBootstrapResult{Workspace: filepath.ToSlash(root), DeckID: deckID, DeckDir: filepath.ToSlash(displayDeckPath(root, deckAbs)), Status: "created"}, nil
 }
@@ -1438,7 +1892,7 @@ func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExistin
 func resolveTemplateDir(root, fromTemplate string) string {
 	template := fromTemplate
 	if template == "" {
-		template = "decks/_template"
+		template = defaultDeckTemplatePath
 	}
 	if filepath.IsAbs(template) {
 		return filepath.Clean(template)
@@ -1447,7 +1901,7 @@ func resolveTemplateDir(root, fromTemplate string) string {
 	if pathExists(rootCandidate) {
 		return rootCandidate
 	}
-	if filepath.Clean(template) != filepath.Clean("decks/_template") {
+	if !isDefaultTemplateRef(template) {
 		return rootCandidate
 	}
 	if cwd, err := os.Getwd(); err == nil {
@@ -1653,7 +2107,7 @@ func isSymlinkOrReparsePoint(path string, info os.FileInfo) bool {
 }
 
 func workbenchStatus(workspace, deckID, deck string) (workbenchManifest, error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchManifest{}, err
 	}
@@ -1688,7 +2142,7 @@ func workbenchStatusForDeck(deckAbs string) workbenchManifest {
 }
 
 func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchManifest{}, err
 	}
@@ -1857,7 +2311,7 @@ func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid
 		ReadinessPath:       "/readyz",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-		BrowserOpenStrategy: "Codex App in-app browser URL click/manual navigation or Browser plugin navigation; no proprietary Canvas mount API is used.",
+		BrowserOpenStrategy: "Codex App Browser-first navigation: use the Browser plugin or @Browser to open workbench.url when available; fall back to URL click or manual navigation. No proprietary Canvas mount API is used.",
 		Notes: []string{
 			"Server binds to 127.0.0.1 only.",
 			"Mutating routes require X-Slidex-Workbench-Token and same-origin validation.",
@@ -2011,7 +2465,7 @@ func localPluginVersion() string {
 }
 
 func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbenchBrowserEvidenceInput) (workbenchBrowserEvidence, error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchBrowserEvidence{}, err
 	}
@@ -2151,7 +2605,7 @@ func inspectWorkbenchBrowserScreenshot(raw []byte) (dimension, bool, string, err
 }
 
 func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (result workbenchBrowserEvidenceVerification, err error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchBrowserEvidenceVerification{}, err
 	}
@@ -2418,7 +2872,16 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		"port":                manifest.Port,
 		"serverBind":          manifest.ServerBind,
 		"browserOpenStrategy": manifest.BrowserOpenStrategy,
+		"browserOpen":         workbenchBrowserOpenIntent(manifest),
 		"manifest":            filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
+		"wizardCompletedAt":   manifest.WizardCompletedAt,
+		"generationStatus":    manifest.GenerationStatus,
+		"generationStartedAt": manifest.GenerationStartedAt,
+		"generationEndedAt":   manifest.GenerationEndedAt,
+		"generationPid":       manifest.GenerationPID,
+		"generationExitCode":  manifest.GenerationExitCode,
+		"generationCommand":   manifest.GenerationCommand,
+		"generationLog":       manifest.GenerationLogPath,
 		"update":              update,
 		"statusBanners":       update["banners"],
 	}
@@ -2431,6 +2894,28 @@ func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
 		status["browserEvidenceVerification"] = filepath.ToSlash(verificationPath)
 	}
 	return status
+}
+
+func workbenchOpenInstruction(manifest workbenchManifest) string {
+	if manifest.URL == "" {
+		return "Open the slidex workbench in the Codex App in-app browser after workbench.url is available."
+	}
+	return "Immediately open " + manifest.URL + " in the Codex App in-app browser using the Browser plugin or @Browser when available; if Browser use is unavailable, click the URL or navigate manually."
+}
+
+func workbenchBrowserOpenIntent(manifest workbenchManifest) map[string]any {
+	return map[string]any{
+		"target":                    "codex_app_in_app_browser",
+		"preferredAction":           "browser_plugin_navigation",
+		"toolHint":                  "@Browser",
+		"url":                       manifest.URL,
+		"fallbackAction":            "url_click_or_manual_navigation",
+		"requiresLoopback":          true,
+		"serverBind":                manifest.ServerBind,
+		"proprietaryCanvasAPI":      "not_used",
+		"directClientRequestAPI":    "not_available_in_codex_app_server_0.138.0",
+		"actualBrowserEvidenceGate": "slidex workbench evidence followed by slidex workbench verify-evidence",
+	}
 }
 
 func chooseLoopbackPort() (int, error) {
@@ -2554,16 +3039,20 @@ func originFromURL(rawURL string) (string, bool) {
 }
 
 func normalizeWorkbenchInput(input workbenchSaveInput) workbenchSaveInput {
+	input.InitialRequest = strings.TrimSpace(input.InitialRequest)
 	input.Title = strings.TrimSpace(input.Title)
 	input.Audience = strings.TrimSpace(input.Audience)
 	input.DecisionGoal = strings.TrimSpace(input.DecisionGoal)
 	input.SourceNotes = strings.TrimSpace(input.SourceNotes)
+	input.KeyMessages = strings.TrimSpace(input.KeyMessages)
+	input.RequiredClaims = strings.TrimSpace(input.RequiredClaims)
+	input.Constraints = strings.TrimSpace(input.Constraints)
 	input.OutputExpectations = strings.TrimSpace(input.OutputExpectations)
 	return input
 }
 
 func hasAnyWorkbenchInput(input workbenchSaveInput) bool {
-	return input.Title != "" || input.Audience != "" || input.DecisionGoal != "" || input.SourceNotes != "" || input.OutputExpectations != ""
+	return input.InitialRequest != "" || input.Title != "" || input.Audience != "" || input.DecisionGoal != "" || input.SourceNotes != "" || input.KeyMessages != "" || input.RequiredClaims != "" || input.Constraints != "" || input.OutputExpectations != ""
 }
 
 func writeWorkbenchBrief(deckAbs string, input workbenchSaveInput) error {
@@ -2572,14 +3061,29 @@ func writeWorkbenchBrief(deckAbs string, input workbenchSaveInput) error {
 	}
 	var b strings.Builder
 	b.WriteString("# " + input.Title + "\n\n")
+	if input.InitialRequest != "" {
+		b.WriteString("## Original Plugin Request\n\n" + input.InitialRequest + "\n\n")
+	}
 	b.WriteString("## Audience\n\n" + input.Audience + "\n\n")
 	b.WriteString("## Decision Goal\n\n" + input.DecisionGoal + "\n\n")
 	if input.SourceNotes != "" {
 		b.WriteString("## Source-Material Notes\n\n" + input.SourceNotes + "\n\n")
 	}
+	if input.KeyMessages != "" {
+		b.WriteString("## Key Messages\n\n" + input.KeyMessages + "\n\n")
+	}
+	if input.RequiredClaims != "" {
+		b.WriteString("## Claims Requiring Evidence Review\n\n" + input.RequiredClaims + "\n\n")
+	}
+	if input.Constraints != "" {
+		b.WriteString("## Constraints And Exclusions\n\n" + input.Constraints + "\n\n")
+	}
 	if input.OutputExpectations != "" {
 		b.WriteString("## Output Expectations\n\n" + input.OutputExpectations + "\n\n")
 	}
+	b.WriteString("## Wizard Completion\n\n")
+	b.WriteString("- The React wizard marked this intake as ready for generation after required title, audience, decision goal, source notes, key messages, and output expectations were provided.\n")
+	b.WriteString("- If any user-provided claim lacks evidence, label it as an assumption or remove it during generation.\n\n")
 	b.WriteString("## Evidence Policy\n\n")
 	b.WriteString("- Material claims must be sourced, user-confirmed, or labeled as assumptions.\n")
 	b.WriteString("- Unsupported metrics, outcomes, certifications, security claims, and guarantees must be removed or rewritten.\n")

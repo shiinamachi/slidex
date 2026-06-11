@@ -361,6 +361,13 @@ After any update that may change bundled plugin content:
    `pluginVerificationStatus` is `verified`, and `verifiedPluginPath` /
    `verifiedStartSkillPath` match this install root.
 
+For plugin-only users, `@slidex` / `workbench.start` runs the same release
+update preflight before opening the React Wizard. When a newer verified
+production/canary release is available, startup applies it automatically and
+returns a restart or pending-activation instruction instead of opening the
+wizard. Local-development installs still report updates disabled and continue
+to the wizard with the current binary.
+
 ---
 
 ## Source build (development only)

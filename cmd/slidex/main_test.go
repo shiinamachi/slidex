@@ -1231,6 +1231,16 @@ func TestAppServerPluginSmokeHelpers(t *testing.T) {
 	if got := structuredContentFromMCPToolCall(resp)["status"]; got != "running" {
 		t.Fatalf("structured content status = %#v", got)
 	}
+	toolResult := mcpToolCallResult(map[string]any{
+		"browserOpen": map[string]any{
+			"url":             "http://127.0.0.1:49152/workbench/session",
+			"preferredAction": "browser_plugin_navigation",
+		},
+	})
+	content, _ := toolResult["content"].([]map[string]any)
+	if len(content) != 1 || !strings.Contains(metadataString(content[0]["text"]), "Open in Codex App Browser now: http://127.0.0.1:49152/workbench/session") {
+		t.Fatalf("MCP tool result should surface browser-open instruction before JSON: %#v", toolResult)
+	}
 	summary := summarizeJSONForEvidence(map[string]any{"token": "secret-value", "safe": "ok"})
 	raw, _ := json.Marshal(summary)
 	if strings.Contains(string(raw), "secret-value") {
@@ -1736,12 +1746,12 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 		t.Fatal("missing skill should not be found")
 	}
 
-	command := appServerSkillSmokeWorkbenchCommandForOS("linux", "/tmp/slidex workspace", "demo", "/repo/decks/_template")
+	command := appServerSkillSmokeWorkbenchCommandForOS("linux", "/tmp/slidex workspace", "demo")
 	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
 		t.Fatalf("command was not shell quoted as expected: %s", command)
 	}
 	dangerousWindowsPath := `C:\Users\Me\slidex %workspace%!^&() O'Hare`
-	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", dangerousWindowsPath, "demo", `C:\repo\decks\_template`)
+	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", dangerousWindowsPath, "demo")
 	if !strings.HasPrefix(windowsCommand, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ") {
 		t.Fatalf("windows command should force encoded PowerShell execution: %s", windowsCommand)
 	}
@@ -1749,7 +1759,7 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 		t.Fatalf("windows command should not expose shell-metacharacter path outside encoded payload: %s", windowsCommand)
 	}
 	windowsScript := decodeWindowsPowerShellCommandForTest(t, windowsCommand)
-	for _, want := range []string{"& 'slidex'", "'workbench'", "'start'", "'--workspace'", "'C:\\Users\\Me\\slidex %workspace%!^&() O''Hare'", "'--from-template'", "'C:\\repo\\decks\\_template'"} {
+	for _, want := range []string{"& 'slidex'", "'workbench'", "'start'", "'--workspace'", "'C:\\Users\\Me\\slidex %workspace%!^&() O''Hare'", "'--deck-id'", "'demo'"} {
 		if !strings.Contains(windowsScript, want) {
 			t.Fatalf("decoded windows command missing %q:\n%s", want, windowsScript)
 		}
@@ -1888,8 +1898,14 @@ func TestAppServerSkillSmokeSchemaRequiresSavedInputProof(t *testing.T) {
 
 func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	snapshot := workbenchDoctorSnapshot()
-	if snapshot["browserOpenMechanism"] != "codex_in_app_browser_url_click_manual_navigation_or_browser_plugin" {
+	if snapshot["browserOpenMechanism"] != "codex_app_browser_plugin_navigation_preferred_with_url_click_or_manual_fallback" {
 		t.Fatalf("unexpected browser open mechanism: %#v", snapshot)
+	}
+	if snapshot["browserOpenPreferredAction"] != "use @Browser or the Browser plugin to navigate to workbench.url immediately when available" {
+		t.Fatalf("unexpected browser preferred action: %#v", snapshot)
+	}
+	if snapshot["browserOpenFallback"] != "click the loopback URL or navigate manually in the Codex App in-app browser" {
+		t.Fatalf("unexpected browser fallback: %#v", snapshot)
 	}
 	if snapshot["directBrowserOpenRequestAPI"] != "not_found_in_codex_app_server_0.138.0" {
 		t.Fatalf("doctor snapshot should not claim a direct browser-open request API: %#v", snapshot)

@@ -67,7 +67,7 @@ Install slidex canary build from https://github.com/shiinamachi/slidex. Read INS
 | 🖼️ | **자동 렌더링** | Headless Chrome/Chromium/Edge로 슬라이드 PNG + PDF 생성 |
 | ✅ | **품질 검증** | QA 몽타주, QA 리포트, 최신성 검사 |
 | 📦 | **패키지 검증** | 필수 산출물 존재 여부 및 HTML 일치 확인 |
-| 🔌 | **Codex Plugin** | Codex App 브라우저에서 대화형 워크벤치로 deck 생성 |
+| 🔌 | **Codex Plugin** | Codex App 브라우저에서 로컬 React Wizard로 deck 생성 |
 | 📋 | **근거 기반** | 모든 주장은 출처가 있거나, 확인되었거나, 가정으로 표시 |
 
 ---
@@ -195,19 +195,25 @@ slidex package --deck decks/<deck_id>
 ## Codex Plugin Workbench
 
 저장소에 포함된 Codex Plugin(`plugins/slidex/`)을 통해 Codex App 인앱 브라우저에서
-대화형 워크벤치로 deck brief를 만들 수 있습니다.
+로컬 React Wizard로 deck brief를 만들 수 있습니다.
 
 ```bash
 slidex workbench start --deck-id customer-retention
 ```
 
 반환된 `http://127.0.0.1:<port>/workbench/<session>` URL을 Codex App 브라우저에서
-엽니다. 워크벤치를 저장하면 `brief.md`와 워크벤치 산출물이 deck의 `out/`
-디렉터리에 작성됩니다. 이후 일반 워크플로를 실행합니다:
-
-```bash
-slidex run --deck decks/customer-retention
-```
+엽니다. Plugin startup은 Browser-first `browserOpen` intent를 내보내므로 Codex는
+가능하면 Browser plugin / `@Browser`로 이동하고, 불가능하면 URL 클릭 또는 수동
+navigation으로 폴백합니다. Plugin을 통한 새 deck 생성은 반드시 이 React Wizard를
+먼저 표시해야 하며, `slidex init`, 수동 디렉터리 생성, `out/final_deck.html` 직접
+작성으로 폴백하지 않습니다. CLI는 기본 `decks/_template`을 바이너리에 내장하므로
+사용자 workspace에 템플릿 폴더가 없어도 workbench를 bootstrap할 수 있습니다.
+production 또는 canary release 설치본에서는 startup이 새 verified release를 자동
+확인/적용한 뒤 Wizard를 엽니다. 업데이트가 적용되면 Wizard 대신 재시작 또는
+pending activation 안내를 반환합니다. Wizard에서 `Complete & generate`를 선택하면 `brief.md`,
+`out/workbench_draft.json`, `out/workbench_manifest.json`이 저장되고
+`slidex run --deck decks/<deck_id> --non-interactive`가 백그라운드로 시작됩니다.
+생성 상태와 로그 경로는 `out/workbench_manifest.json`에 기록됩니다.
 
 ---
 
