@@ -1,24 +1,28 @@
 {
-    "name": "slidex",
-    "version": "0.1.0+codex.20260611075500",
-    "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
-    "author": {
-        "name": "shiinamachi"
-    },
-    "license": "MIT",
-    "skills": "./skills/",
-    "interface": {
-        "displayName": "slidex",
-        "shortDescription": "Create slidex decks with a local React wizard workbench.",
-        "longDescription": "slidex starts a loopback React wizard workbench from Codex, opens it in the Codex App Browser, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages.",
-        "developerName": "shiinamachi",
-        "category": "Productivity",
-        "capabilities": ["Interactive", "Read", "Write"],
-        "defaultPrompt": [
-            "Start a new slidex deck, seed the React wizard, and open it in the Codex App Browser.",
-            "Create deck <deck_id>, open the React wizard, and generate after I complete it.",
-            "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
-        ]
-    },
-    "mcpServers": "./.mcp.json"
+  "name": "slidex",
+  "version": "0.1.0+codex.20260611084410",
+  "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
+  "author": {
+    "name": "shiinamachi"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "slidex",
+    "shortDescription": "Create slidex decks with a local React wizard workbench.",
+    "longDescription": "slidex starts a loopback React wizard workbench from Codex, opens it in the Codex App Browser, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages.",
+    "developerName": "shiinamachi",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Start a new slidex deck, seed the React wizard, and open it in the Codex App Browser.",
+      "Create deck <deck_id>, open the React wizard, and generate after I complete it.",
+      "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
 }
