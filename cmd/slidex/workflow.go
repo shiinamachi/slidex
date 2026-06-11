@@ -1928,8 +1928,11 @@ func runClean(args []string) error {
 			removed = append(removed, runLogPath)
 		}
 		agentRuns := filepath.Join(outDir, "agent_runs")
-		info, err := os.Stat(agentRuns)
-		if err == nil && info.ModTime().Before(cutoff) && !retainedRun {
+		staleAgentRuns, err := directoryTreeOlderThan(agentRuns, cutoff)
+		if err != nil {
+			return err
+		}
+		if staleAgentRuns && !retainedRun {
 			if err := os.RemoveAll(agentRuns); err != nil {
 				return err
 			}
@@ -1937,6 +1940,47 @@ func runClean(args []string) error {
 		}
 	}
 	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "removed": removed})
+}
+
+func directoryTreeOlderThan(root string, cutoff time.Time) (bool, error) {
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if isSymlinkOrReparsePoint(root, rootInfo) || !rootInfo.IsDir() || !rootInfo.ModTime().Before(cutoff) {
+		return false, nil
+	}
+	stale := true
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if isSymlinkOrReparsePoint(path, info) {
+			stale = false
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.ModTime().Before(cutoff) {
+			stale = false
+			if d.IsDir() && path != root {
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return stale, nil
 }
 
 type runLogSegment struct {

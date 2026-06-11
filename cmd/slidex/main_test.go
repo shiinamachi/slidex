@@ -3237,6 +3237,31 @@ func TestCleanLogsKeepsReviewArtifacts(t *testing.T) {
 	}
 }
 
+func TestCleanLogsKeepsAgentRunsWithFreshNestedFiles(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	runDir := filepath.Join(deck, "out", "agent_runs")
+	nested := filepath.Join(runDir, "nested", "fresh.json")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nested, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(runDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Dir(nested), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := runClean([]string{"--deck", deck, "--logs", "--older-than", "1h"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(nested); err != nil {
+		t.Fatalf("fresh nested agent run should remain: %v", err)
+	}
+}
+
 func TestCleanLogsRetainsLatestSuccessfulAndFailedRuns(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	outDir := filepath.Join(deck, "out")
