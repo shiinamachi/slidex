@@ -152,20 +152,21 @@ type qaFinding struct {
 }
 
 type qaResult struct {
-	ToolName         string      `json:"toolName"`
-	Version          string      `json:"version"`
-	DeckDir          string      `json:"deckDir"`
-	Status           string      `json:"status"`
-	RuntimeMode      string      `json:"runtimeMode,omitempty"`
-	RuntimeReason    string      `json:"runtimeReason,omitempty"`
-	VisualReviewMode string      `json:"visualReviewMode,omitempty"`
-	VisualStatus     string      `json:"visualStatus,omitempty"`
-	FilesChecked     []string    `json:"filesChecked"`
-	SlideCount       int         `json:"slideCount"`
-	PDFPageCount     int         `json:"pdfPageCount"`
-	RenderMethod     string      `json:"renderMethod,omitempty"`
-	Findings         []qaFinding `json:"findings"`
-	GeneratedReport  string      `json:"generatedReport,omitempty"`
+	ToolName            string      `json:"toolName"`
+	Version             string      `json:"version"`
+	DeckDir             string      `json:"deckDir"`
+	Status              string      `json:"status"`
+	DeterministicStatus string      `json:"deterministicStatus,omitempty"`
+	RuntimeMode         string      `json:"runtimeMode,omitempty"`
+	RuntimeReason       string      `json:"runtimeReason,omitempty"`
+	VisualReviewMode    string      `json:"visualReviewMode,omitempty"`
+	VisualStatus        string      `json:"visualStatus,omitempty"`
+	FilesChecked        []string    `json:"filesChecked"`
+	SlideCount          int         `json:"slideCount"`
+	PDFPageCount        int         `json:"pdfPageCount"`
+	RenderMethod        string      `json:"renderMethod,omitempty"`
+	Findings            []qaFinding `json:"findings"`
+	GeneratedReport     string      `json:"generatedReport,omitempty"`
 }
 
 func main() {
@@ -3447,27 +3448,16 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	}
 	result.Findings = append(result.Findings, verifyHTMLEditSync(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "final_deck.generated_baseline.html"))...)
 
-	if hasFailures(result.Findings) {
-		result.Status = "fail"
-	} else if hasWarnings(result.Findings) {
-		result.Status = "pass_with_risks"
-	} else {
-		result.Status = "pass"
-	}
+	result.DeterministicStatus = statusFromFindings(result.Findings)
+	result.Status = result.DeterministicStatus
 	if err := writeVisualReviewImageSet(filepath.Join(outDir, "visual_reviews", "image_set.json"), manifest); err != nil {
 		result.Findings = append(result.Findings, fail("visual_review.image_set", err.Error(), filepath.Join(outDir, "visual_reviews", "image_set.json")))
-		result.Status = "fail"
+		result.VisualStatus = "fail"
 	}
 	visualStatus, visualFindings := visualRunner(deckAbs, manifest, visualReview)
-	result.VisualStatus = visualStatus
+	result.VisualStatus = firstNonEmpty(result.VisualStatus, visualStatus)
 	result.Findings = append(result.Findings, visualFindings...)
-	if hasFailures(result.Findings) {
-		result.Status = "fail"
-	} else if hasWarnings(result.Findings) {
-		result.Status = "pass_with_risks"
-	} else {
-		result.Status = "pass"
-	}
+	result.Status = combinedQAStatus(result.DeterministicStatus, result.VisualStatus, result.Findings)
 	if writeReport {
 		reportPath := filepath.Join(outDir, "qa_report.md")
 		if err := writeQAReport(reportPath, result); err != nil {
@@ -3497,7 +3487,7 @@ func writeQAReport(path string, result qaResult) error {
 	b.WriteString("  htmlSha256: " + firstNonEmpty(mustSHA256(htmlPath), "missing") + "\n")
 	b.WriteString("  renderManifestSha256: " + firstNonEmpty(mustSHA256(manifestPath), "missing") + "\n")
 	b.WriteString("  pngSetSha256: " + firstNonEmpty(pngSetHash, "missing") + "\n")
-	b.WriteString("  deterministicStatus: " + result.Status + "\n")
+	b.WriteString("  deterministicStatus: " + firstNonEmpty(result.DeterministicStatus, result.Status) + "\n")
 	b.WriteString("  runtimeMode: " + firstNonEmpty(result.RuntimeMode, "deterministic") + "\n")
 	if result.RuntimeReason != "" {
 		b.WriteString("  runtimeReason: " + quoteYAMLScalar(result.RuntimeReason) + "\n")
@@ -4815,6 +4805,21 @@ func statusFromFindings(findings []qaFinding) string {
 		return "pass_with_risks"
 	}
 	return "pass"
+}
+
+func combinedQAStatus(deterministicStatus, visualStatus string, findings []qaFinding) string {
+	status := statusFromFindings(findings)
+	for _, candidate := range []string{deterministicStatus, visualStatus} {
+		switch candidate {
+		case "fail", "blocked", "missing":
+			return "fail"
+		case "pass_with_risks":
+			if status == "pass" {
+				status = "pass_with_risks"
+			}
+		}
+	}
+	return status
 }
 
 func hasFailures(findings []qaFinding) bool {

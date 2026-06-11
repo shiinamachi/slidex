@@ -2923,6 +2923,39 @@ func TestQAReportRecordsCodexRuntimeMode(t *testing.T) {
 	}
 }
 
+func TestQAStatusSeparatesDeterministicAndVisualResults(t *testing.T) {
+	if got := combinedQAStatus("pass", "pass_with_risks", nil); got != "pass_with_risks" {
+		t.Fatalf("visual risk should affect overall status, got %q", got)
+	}
+	if got := combinedQAStatus("pass", "blocked", nil); got != "fail" {
+		t.Fatalf("blocked visual review should fail overall status, got %q", got)
+	}
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(outDir, "qa_report.md")
+	result := qaResult{
+		ToolName:            toolName,
+		Version:             toolVersion,
+		DeckDir:             deck,
+		Status:              "pass_with_risks",
+		DeterministicStatus: "pass",
+		VisualStatus:        "pass_with_risks",
+		RuntimeMode:         "deterministic",
+	}
+	if err := writeQAReport(reportPath, result); err != nil {
+		t.Fatal(err)
+	}
+	report := readFileOrEmpty(reportPath)
+	for _, want := range []string{"deterministicStatus: pass", "visualStatus: pass_with_risks", "Overall status: pass_with_risks"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("qa report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestExecAuditCorrectionIsWrittenBackToArtifact(t *testing.T) {
 	runPath := filepath.Join(t.TempDir(), "run.json")
 	original := map[string]any{"schemaVersion": "slidex.codexExecRun.v1", "structuredOutput": map[string]any{"status": "blocked"}}
