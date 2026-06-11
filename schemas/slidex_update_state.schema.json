@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.update_state.schema.json",
+  "title": "slidex Update State",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "toolName",
+    "currentVersion",
+    "channel",
+    "restartRequired",
+    "verificationStatus",
+    "verificationCommand",
+    "updatedAt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "slidex.updateState.v1"
+    },
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "currentVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetTag": {
+      "type": "string",
+      "minLength": 1
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["production", "canary", "local-development"]
+    },
+    "restartRequired": {
+      "type": "boolean"
+    },
+    "restartReason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pluginUpdatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verificationStatus": {
+      "type": "string",
+      "enum": ["restart_required", "verified", "drift"]
+    },
+    "verificationCommand": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedPluginVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedPluginPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifiedStartSkillPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updatedAt": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

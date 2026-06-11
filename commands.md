@@ -165,8 +165,32 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 저장소 안의 `INSTALL.md`를 읽고 수행합니다.
 
 ```text
-Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, and run "slidex --help" and "slidex doctor --render" to confirm success. Report each step's result.
+Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, confirm GitHub CLI is available for release integrity and attestation verification, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum and GitHub artifact attestation, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, restart Codex, start a new Codex thread, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm the CLI. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. Run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" to confirm bundled plugin skills match the install. If update status reports restartRequired, restart Codex, start a new thread, rerun "slidex codex app-server plugin-smoke --json", and then rerun "slidex update verify --json" before treating bundled skills as active. Report each step's result.
 ```
+
+Release package update:
+
+```bash
+slidex update status --json
+slidex update check --json
+slidex update apply --yes --json
+slidex codex app-server plugin-smoke --json
+slidex update verify --json
+```
+
+On Windows, `update apply` may report `pendingActivation: true` if the active
+executable could be locked. Complete that staged handoff before plugin smoke by
+running the reported `pendingActivationCommand`. It uses an activator binary
+outside the old install root and staged candidate so the directories can be
+renamed safely:
+
+```bash
+<pendingActivationCommand from update status>
+```
+
+기본 `update apply`는 GitHub CLI release integrity와 artifact attestation 검증을
+요구합니다. `--attestation-policy allow-unverified`는 명시적인 수동 보안 판단이
+있을 때만 사용합니다.
 
 개발자 source build:
 

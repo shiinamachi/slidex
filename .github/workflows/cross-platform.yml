@@ -184,6 +184,8 @@ jobs:
         run: go build -o "${{ runner.temp }}/slidex-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/slidex
       - name: Build release package smoke
         env:
+          SLIDEX_BUILD_CHANNEL: local-development
+          SLIDEX_RELEASE_TAG: ci-${{ matrix.goos }}-${{ matrix.goarch }}
           SLIDEX_RELEASE_VERSION: ci-${{ matrix.goos }}-${{ matrix.goarch }}
           SLIDEX_DIST_DIR: ${{ runner.temp }}/slidex-dist-${{ matrix.goos }}-${{ matrix.goarch }}
           SLIDEX_TARGETS: ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -203,6 +205,8 @@ jobs:
       - cross-compile
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -235,9 +239,130 @@ jobs:
           fi
       - name: Build release packages
         env:
+          SLIDEX_BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
+          SLIDEX_RELEASE_TAG: ${{ needs.release-metadata.outputs.tag_name }}
+          SLIDEX_COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
           SLIDEX_RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
           SLIDEX_DIST_DIR: dist
         run: ./scripts/package-release.sh
+      - name: Smoke release package before publish
+        env:
+          BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
+          COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
+          TAG_NAME: ${{ needs.release-metadata.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          checksum="dist/slidex_${RELEASE_VERSION}_checksums.txt"
+          archive="dist/slidex_${RELEASE_VERSION}_linux_amd64.tar.gz"
+          test -f "$checksum"
+          test -f "$archive"
+          (cd dist && sha256sum -c "slidex_${RELEASE_VERSION}_checksums.txt")
+
+          smoke_root="${RUNNER_TEMP}/slidex-release-smoke"
+          rm -rf "$smoke_root"
+          mkdir -p "$smoke_root"
+          tar -xzf "$archive" -C "$smoke_root"
+          package_root="$smoke_root/slidex_${RELEASE_VERSION}_linux_amd64"
+          metadata="$package_root/.slidex/install.json"
+          python3 - dist "$BUILD_CHANNEL" "$TAG_NAME" "$RELEASE_VERSION" "$COMMIT_SHA" <<'PY'
+          import json
+          import sys
+          import tarfile
+          import zipfile
+          from datetime import datetime
+          from pathlib import Path
+
+          dist, channel, tag, version, commit = sys.argv[1:]
+          dist = Path(dist)
+          prefix = f"slidex_{version}_"
+          archives = sorted(path for path in dist.iterdir() if path.name.startswith(prefix) and path.name != f"slidex_{version}_checksums.txt")
+          if not archives:
+              raise SystemExit(f"{dist}: no release archives found for {version}")
+
+          def parse_target(asset):
+              if asset.endswith(".tar.gz"):
+                  target = asset[:-7]
+              elif asset.endswith(".zip"):
+                  target = asset[:-4]
+              else:
+                  raise SystemExit(f"{asset}: unsupported release archive extension")
+              if not target.startswith(prefix):
+                  raise SystemExit(f"{asset}: unexpected release archive name")
+              os_arch = target[len(prefix):]
+              if "_" not in os_arch:
+                  raise SystemExit(f"{asset}: missing os/arch segment")
+              return target, *os_arch.rsplit("_", 1)
+
+          def read_metadata(path, root):
+              metadata_name = f"{root}/.slidex/install.json"
+              if path.name.endswith(".tar.gz"):
+                  with tarfile.open(path, "r:gz") as archive:
+                      try:
+                          member = archive.extractfile(metadata_name)
+                      except KeyError:
+                          raise SystemExit(f"{path}: missing {metadata_name}")
+                      if member is None:
+                          raise SystemExit(f"{path}: {metadata_name} is not a regular file")
+                      return json.load(member)
+              with zipfile.ZipFile(path) as archive:
+                  try:
+                      with archive.open(metadata_name) as member:
+                          return json.load(member)
+                  except KeyError:
+                      raise SystemExit(f"{path}: missing {metadata_name}")
+
+          for archive in archives:
+              root, goos, goarch = parse_target(archive.name)
+              data = read_metadata(archive, root)
+              expected = {
+                  "schemaVersion": "slidex.install.v1",
+                  "toolName": "slidex",
+                  "channel": channel,
+                  "tag": tag,
+                  "version": version,
+                  "commit": commit,
+                  "releaseAssetName": archive.name,
+                  "installMode": "release-package",
+                  "os": goos,
+                  "arch": goarch,
+              }
+              for key, want in expected.items():
+                  got = data.get(key)
+                  if got != want:
+                      raise SystemExit(f"{archive}: {key} = {got!r}, want {want!r}")
+              build_time = data.get("buildTime")
+              if not build_time:
+                  raise SystemExit(f"{archive}: buildTime is missing")
+              datetime.fromisoformat(build_time.replace("Z", "+00:00"))
+          PY
+
+          "$package_root/slidex" --help >/dev/null
+          SLIDEX_INSTALL_ROOT="$package_root" \
+            SLIDEX_INSTALL_METADATA="$metadata" \
+            "$package_root/slidex" update status --json > "$smoke_root/update-status.json"
+          python3 - "$smoke_root/update-status.json" "$BUILD_CHANNEL" "$RELEASE_VERSION" <<'PY'
+          import json
+          import sys
+
+          path, channel, version = sys.argv[1:]
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+          expected = {
+              "channel": channel,
+              "currentVersion": version,
+              "installMode": "release-package",
+              "updatesEnabled": True,
+          }
+          for key, want in expected.items():
+              got = data.get(key)
+              if got != want:
+                  raise SystemExit(f"{path}: {key} = {got!r}, want {want!r}")
+          PY
+      - name: Generate artifact attestations
+        uses: actions/attest@281a49d4cbb0a72c9575a50d18f6deb515a11deb # v4
+        with:
+          subject-path: dist/*
       - name: Publish GitHub Release
         env:
           BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
@@ -257,14 +382,19 @@ jobs:
           Source branch: ${SOURCE_REF}
           Source commit: ${COMMIT_SHA}
           Version: ${RELEASE_VERSION}
-          Code signing is deferred and is not part of this release pipeline.
+          Release package assets are SHA-256 checksummed and have GitHub artifact attestations generated by this workflow.
           NOTES
           release_flags=()
           if [[ "$PRERELEASE" == "true" ]]; then
             release_flags+=(--prerelease)
           fi
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" dist/* --clobber
-          else
-            gh release create "$TAG_NAME" dist/* --verify-tag --title "slidex ${RELEASE_VERSION}" --notes-file "$notes_file" "${release_flags[@]}"
+            printf 'release %s already exists; refusing to overwrite immutable release assets\n' "$TAG_NAME" >&2
+            exit 2
           fi
+          gh release create "$TAG_NAME" dist/* --verify-tag --title "slidex ${RELEASE_VERSION}" --notes-file "$notes_file" "${release_flags[@]}"
+          gh release verify "$TAG_NAME" --repo shiinamachi/slidex
+          for asset in dist/slidex_"${RELEASE_VERSION}"_*; do
+            [[ "$asset" == *"_checksums.txt" ]] && continue
+            gh release verify-asset "$TAG_NAME" "$asset" --repo shiinamachi/slidex
+          done

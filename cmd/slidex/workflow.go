@@ -311,6 +311,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 	findings = append(findings, doctorPluginPackageFindings(pluginList)...)
 	findings = append(findings, doctorProtocolBundleFindings(protocol)...)
 	findings = append(findings, doctorWorkbenchFindings()...)
+	findings = append(findings, doctorUpdateSchemaFindings()...)
 	if checkCodex {
 		codexVersion = installedCodexVersion()
 		if !codexVersionAtLeast(codexVersion, requiredCodexVersion) {
@@ -348,6 +349,7 @@ func doctorReport(deck string, checkCodex, checkRender bool) map[string]any {
 		"chromeVersion":               chrome,
 		"protocolSchema":              protocol,
 		"plugin":                      pluginDoctorSnapshot(pluginList),
+		"update":                      updateStatusSnapshot(),
 		"workbench":                   workbenchDoctorSnapshot(),
 		"dangerousAppServerApiPolicy": dangerousAppServerPolicySnapshot(),
 		"codexDoctorJson":             json.RawMessage(nullOrRaw(codexDoctor)),
@@ -513,6 +515,8 @@ func workbenchDoctorSnapshot() map[string]any {
 		"browserEvidenceRequired":             true,
 		"browserEvidenceCommand":              "slidex workbench evidence --deck-id <deck_id> --inspector <name-or-role> --surface codex_app_in_app_browser --invocation <plugin-invocation> --thread-id <codex-app-thread-id-if-visible> --url <workbench.url> --screenshot <path-to-codex-browser-screenshot.png> --workbench-visible --saved-input-verified",
 		"browserEvidenceVerifyCommand":        "slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot",
+		"statusBanners":                       updateStatusSnapshot()["banners"],
+		"postRestartVerificationCommand":      "slidex codex app-server plugin-smoke --json",
 	}
 }
 
@@ -7020,6 +7024,10 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 	if err != nil {
 		return err
 	}
+	return validateRawJSONAgainstSchema(raw, schemaPath)
+}
+
+func validateRawJSONAgainstSchema(instanceRaw []byte, schemaPath string) error {
 	schemaRaw, err := os.ReadFile(schemaPath)
 	if err != nil {
 		return err
@@ -7028,7 +7036,7 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
 		return err
 	}
-	findings := validateWithFullJSONSchema(raw, schema, schemaPath)
+	findings := validateWithFullJSONSchema(instanceRaw, schema, schemaPath)
 	if hasFailures(findings) {
 		return fmt.Errorf("payload failed %s validation: %v", schemaPath, findings)
 	}

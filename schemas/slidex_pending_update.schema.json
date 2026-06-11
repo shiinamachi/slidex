@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.pending_update.schema.json",
+  "title": "slidex Pending Update",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "toolName",
+    "targetVersion",
+    "installRoot",
+    "stagedRoot",
+    "reason",
+    "createdAt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "slidex.pendingUpdate.v1"
+    },
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "targetVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetTag": {
+      "type": "string"
+    },
+    "installRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stagedRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "activatorPath": {
+      "type": "string"
+    },
+    "activationCommand": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

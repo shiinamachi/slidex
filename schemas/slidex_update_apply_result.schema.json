@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/slidex.update_apply_result.schema.json",
+  "title": "slidex Update Apply Result",
+  "type": "object",
+  "required": [
+    "toolName",
+    "currentVersion",
+    "targetVersion",
+    "channel",
+    "installRoot",
+    "status",
+    "restartRequired",
+    "pluginVerificationStatus",
+    "nextVerificationCommand",
+    "attestation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "toolName": {
+      "type": "string",
+      "const": "slidex"
+    },
+    "currentVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetVersion": {
+      "type": "string"
+    },
+    "targetTag": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["production", "canary", "local-development"]
+    },
+    "installRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "failed",
+        "candidate-invalid",
+        "pending-restart",
+        "rollback",
+        "applied",
+        "pending-not-found",
+        "pending-invalid"
+      ]
+    },
+    "stagedRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backupRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pendingUpdatePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "restartRequired": {
+      "type": "boolean"
+    },
+    "pluginVerificationStatus": {
+      "type": "string",
+      "enum": ["not_verified", "restart_required", "verified", "drift"]
+    },
+    "nextVerificationCommand": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attestation": {
+      "type": "object",
+      "required": ["policy", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "type": "string",
+          "enum": ["require", "allow-unverified"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["not_applicable", "skipped", "verified", "fail"]
+        },
+        "command": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "candidateValidation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["severity", "check", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["pass", "warn", "fail"]
+        },
+        "check": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
