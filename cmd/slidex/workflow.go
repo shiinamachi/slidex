@@ -6398,7 +6398,7 @@ func markThreadRole(outDir, threadID, role, mode, parentThreadID string) error {
 func artifactsForExisting(paths []string) []artifact {
 	var out []artifact
 	for _, path := range uniqueStrings(paths) {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := regularFileInfoForRead(path); err == nil {
 			out = append(out, artifactFromPath(path))
 		}
 	}

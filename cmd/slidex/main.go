@@ -309,9 +309,15 @@ func inspectDeck(deck string) (inventory, error) {
 	if err != nil {
 		return inventory{}, err
 	}
-	info, err := os.Stat(deckAbs)
+	if err := rejectSymlinkAncestors(filepath.Dir(deckAbs)); err != nil {
+		return inventory{}, err
+	}
+	info, err := os.Lstat(deckAbs)
 	if err != nil {
 		return inventory{}, err
+	}
+	if isSymlinkOrReparsePoint(deckAbs, info) {
+		return inventory{}, fmt.Errorf("deck path must not be a symlink or reparse point: %s", filepath.ToSlash(deckAbs))
 	}
 	if !info.IsDir() {
 		return inventory{}, fmt.Errorf("deck path is not a directory: %s", deck)
@@ -353,7 +359,7 @@ func inspectDeck(deck string) (inventory, error) {
 }
 
 func makeFileEntry(root, path string) (fileEntry, error) {
-	info, err := os.Stat(path)
+	info, err := regularFileInfoForRead(path)
 	if err != nil {
 		return fileEntry{}, err
 	}
@@ -4560,8 +4566,46 @@ func dependencyFreshnessKey(dep dependency) string {
 	return dep.Kind + "|" + dep.ID + "|" + dep.Path + "|" + dep.URL + "|" + dep.Version + "|" + dep.SHA256
 }
 
-func sha256File(path string) (string, error) {
+func regularFileInfoForRead(path string) (os.FileInfo, error) {
+	if err := rejectSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return nil, fmt.Errorf("read target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("read target must be a file: %s", filepath.ToSlash(path))
+	}
+	return info, nil
+}
+
+func openRegularFileForRead(path string) (*os.File, os.FileInfo, error) {
+	info, err := regularFileInfoForRead(path)
+	if err != nil {
+		return nil, nil, err
+	}
 	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	openedInfo, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !os.SameFile(info, openedInfo) {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("read target changed while opening: %s", filepath.ToSlash(path))
+	}
+	return f, openedInfo, nil
+}
+
+func sha256File(path string) (string, error) {
+	f, _, err := openRegularFileForRead(path)
 	if err != nil {
 		return "", err
 	}
@@ -4584,7 +4628,7 @@ func mustSHA256(path string) string {
 }
 
 func artifactFromPath(path string) artifact {
-	info, err := os.Stat(path)
+	info, err := regularFileInfoForRead(path)
 	if err != nil {
 		return artifact{Path: path}
 	}

@@ -3603,6 +3603,57 @@ func TestCopyFileRejectsSymlinkEndpoints(t *testing.T) {
 	}
 }
 
+func TestReadHashesRejectSymlinkTargets(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(target, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	if _, err := sha256File(link); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected sha256File symlink rejection, got %v", err)
+	}
+	artifact := artifactFromPath(link)
+	if artifact.SHA256 != "" || artifact.Size != 0 {
+		t.Fatalf("artifact should not hash symlink target: %#v", artifact)
+	}
+	if got := artifactsForExisting([]string{link}); len(got) != 0 {
+		t.Fatalf("artifactsForExisting should skip symlink target: %#v", got)
+	}
+}
+
+func TestInspectDeckWarnsAndSkipsSymlinkEntries(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	assetDir := filepath.Join(deck, "assets")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(assetDir, "link.txt")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	inv, err := inspectDeck(deck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range append(inv.Inputs, inv.Outputs...) {
+		if entry.Path == "assets/link.txt" {
+			t.Fatalf("symlink entry should not be inventoried: %#v", inv)
+		}
+	}
+	if len(inv.Warnings) == 0 || !strings.Contains(strings.Join(inv.Warnings, "\n"), "symlink") {
+		t.Fatalf("symlink warning missing: %#v", inv.Warnings)
+	}
+}
+
 func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 	cases := []struct {
 		goos string
