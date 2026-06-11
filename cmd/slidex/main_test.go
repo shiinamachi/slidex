@@ -3941,6 +3941,44 @@ func TestInjectDocumentBaseReplacesOnlyActualUnacceptableBase(t *testing.T) {
 	}
 }
 
+func TestInjectDocumentBaseNormalizesMixedBaseTags(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	baseTag := `<base href="` + baseHref + `">`
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "bad_before_expected",
+			src:  `<!doctype html><html><head><base href="https://evil.example/"><base href="file:///deck/out/"><title>Deck</title></head><body></body></html>`,
+		},
+		{
+			name: "expected_before_relative",
+			src:  `<!doctype html><html><head><base href="file:///deck/out/"><base href="../relative/"><title>Deck</title></head><body></body></html>`,
+		},
+		{
+			name: "duplicate_expected",
+			src:  `<!doctype html><html><head><base href="file:///deck/out/"><base href="file:///deck/out/"><title>Deck</title></head><body></body></html>`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := injectDocumentBase(tc.src, baseHref)
+			if strings.Count(got, baseTag) != 1 {
+				t.Fatalf("expected exactly one canonical base:\n%s", got)
+			}
+			for _, forbidden := range []string{`https://evil.example/`, `../relative/`} {
+				if strings.Contains(got, forbidden) {
+					t.Fatalf("unacceptable base survived:\n%s", got)
+				}
+			}
+			if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
+				t.Fatalf("canonical base should be first in head:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestInjectHeadBaseReplacesRelativeBase(t *testing.T) {
 	got := injectHeadBase(`<base href="./"><title>Deck</title>`, "file:///deck/out/")
 	if !strings.HasPrefix(got, `<base href="file:///deck/out/">`) {

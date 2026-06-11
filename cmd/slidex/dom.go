@@ -108,10 +108,12 @@ func injectDocumentBase(src, baseHref string) string {
 	if baseHref == "" {
 		return src
 	}
-	if ok, ranges := inspectBaseElements(src, baseHref, true); ok {
+	inspection := inspectBaseElements(src, baseHref, true)
+	if inspection.isCanonical() {
 		return src
-	} else if len(ranges) > 0 {
-		src = removeStringRanges(src, ranges)
+	}
+	if len(inspection.ranges) > 0 {
+		src = removeStringRanges(src, inspection.ranges)
 	}
 	base := `<base href="` + xhtml.EscapeString(baseHref) + `">`
 	if loc := headOpenElementRe.FindStringIndex(src); loc != nil {
@@ -128,12 +130,23 @@ func injectHeadBase(head, baseHref string) string {
 	if baseHref == "" {
 		return head
 	}
-	if ok, ranges := inspectBaseElements(head, baseHref, false); ok {
+	inspection := inspectBaseElements(head, baseHref, false)
+	if inspection.isCanonical() {
 		return head
-	} else if len(ranges) > 0 {
-		head = removeStringRanges(head, ranges)
+	}
+	if len(inspection.ranges) > 0 {
+		head = removeStringRanges(head, inspection.ranges)
 	}
 	return `<base href="` + xhtml.EscapeString(baseHref) + `">` + "\n" + head
+}
+
+type baseInspection struct {
+	ranges        []stringRange
+	expectedCount int
+}
+
+func (inspection baseInspection) isCanonical() bool {
+	return len(inspection.ranges) == 1 && inspection.expectedCount == 1
 }
 
 type stringRange struct {
@@ -141,18 +154,18 @@ type stringRange struct {
 	end   int
 }
 
-func inspectBaseElements(src, baseHref string, requireHead bool) (bool, []stringRange) {
+func inspectBaseElements(src, baseHref string, requireHead bool) baseInspection {
 	z := xhtml.NewTokenizer(strings.NewReader(src))
 	inHead := !requireHead
 	cursor := 0
-	var ranges []stringRange
+	var inspection baseInspection
 	for {
 		tt := z.Next()
 		if tt == xhtml.ErrorToken {
 			if z.Err() == io.EOF {
-				return false, ranges
+				return inspection
 			}
-			return false, ranges
+			return inspection
 		}
 		tokenRange := currentTokenRange(src, &cursor, string(z.Raw()))
 		nameBytes, _ := z.TagName()
@@ -165,16 +178,16 @@ func inspectBaseElements(src, baseHref string, requireHead bool) (bool, []string
 			}
 			if inHead && name == "base" {
 				if baseHrefMatches(tokenAttr(z, "href"), baseHref) {
-					return true, nil
+					inspection.expectedCount++
 				}
-				ranges = append(ranges, tokenRange)
+				inspection.ranges = append(inspection.ranges, tokenRange)
 			}
 		case xhtml.SelfClosingTagToken:
 			if inHead && name == "base" {
 				if baseHrefMatches(tokenAttr(z, "href"), baseHref) {
-					return true, nil
+					inspection.expectedCount++
 				}
-				ranges = append(ranges, tokenRange)
+				inspection.ranges = append(inspection.ranges, tokenRange)
 			}
 		case xhtml.EndTagToken:
 			if requireHead && name == "head" {
