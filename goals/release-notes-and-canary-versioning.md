@@ -30,7 +30,7 @@ Implement a repository-managed release notes and version bump workflow for slide
 - Canary package versions should use the exact SemVer prerelease shape `<VERSION>-canary.<timestamp>`, and canary tags should be `v<VERSION>-canary.<timestamp>`.
 - The timestamp should be UTC in compact numeric form `YYYYMMDDHHMMSS`, for example `0.2.0-canary.20260611032635`, because it sorts lexically and avoids punctuation that complicates asset names.
 - The mise task may call a repo script or Go CLI helper; implementation should choose the smaller maintainable option that is testable and matches existing repo patterns.
-- Production release notes must be present and non-placeholder. Canary releases may use the same base version note as draft context but should still include build metadata.
+- Superseded by `goals/channel-release-notes-solid-workbench-monorepo.md`: production release notes must be present and non-placeholder at `release-notes/<VERSION>.md`; canary releases must use separate timestamped notes at `release-notes/canary/<VERSION>/<YYYYMMDDHHMMSS>.md` and must not reuse the base-version production note as draft context.
 
 ## Verification Checklist
 

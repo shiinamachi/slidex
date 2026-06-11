@@ -2142,11 +2142,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "release.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "release-notes/${BASE_VERSION}.md", "production release notes still contain template placeholders", "Release notes source", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "Release package assets are SHA-256 checksummed", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "RELEASE_TIMESTAMP", "scripts/write-release-notes-body.sh", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, ".mise.toml"),
-			want: []string{"go = \"1.26.3\"", "[tasks.\"version:bump\"]", "scripts/bump-version.sh"},
+			want: []string{"go = \"1.26.3\"", "[tasks.\"version:bump\"]", "scripts/bump-version.sh", "[tasks.\"release-notes:canary\"]", "scripts/create-canary-release-note.sh"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
@@ -2161,8 +2161,20 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 			want: []string{"# slidex {{VERSION}}", "## Highlights", "## Verification Notes"},
 		},
 		{
+			path: filepath.Join(root, "release-notes", "canary", "_template.md"),
+			want: []string{"# slidex {{RELEASE_VERSION}}", "{{BASE_VERSION}}", "{{TIMESTAMP}}", "{{COMMIT_SHA}}", "## Verification Notes"},
+		},
+		{
 			path: filepath.Join(root, "release-notes", toolVersion+".md"),
 			want: []string{"# slidex " + toolVersion, "## Highlights", "## Verification Notes"},
+		},
+		{
+			path: filepath.Join(root, "scripts", "create-canary-release-note.sh"),
+			want: []string{"release-notes/canary/<base-version>/<timestamp>.md", "release-notes/canary/_template.md", "YYYYMMDDHHMMSS", "BASE_VERSION", "RELEASE_VERSION", "COMMIT_SHA"},
+		},
+		{
+			path: filepath.Join(root, "scripts", "write-release-notes-body.sh"),
+			want: []string{"BUILD_CHANNEL", "RELEASE_TIMESTAMP", "${notes_dir}/canary/${base_version}/${release_timestamp}.md", "Release notes source", "release notes still contain template placeholders", "missing %s release notes"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
@@ -2196,6 +2208,9 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		t.Fatal("scripts/package-release.sh must be executable")
 	}
 	workflow := readFileOrEmpty(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if strings.Contains(workflow, "release_notes_path=\"release-notes/${BASE_VERSION}.md\"") {
+		t.Fatal("release workflow must not hard-code the production release note path for every build channel")
+	}
 	if strings.Contains(workflow, "--clobber") {
 		t.Fatal("release workflow must not clobber existing release assets")
 	}
@@ -2203,6 +2218,167 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("release workflow must use SHA-256 checks only: found %q", forbidden)
 		}
+	}
+}
+
+func TestCanaryReleaseNoteScriptCreatesTimestampedNote(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash script contract is covered on Unix release runners")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash unavailable: %v", err)
+	}
+	root := repoRootForTest(t)
+	notesDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(notesDir, "canary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	template := readFileOrEmpty(filepath.Join(root, "release-notes", "canary", "_template.md"))
+	if err := os.WriteFile(filepath.Join(notesDir, "canary", "_template.md"), []byte(template), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := filepath.Join(root, "scripts", "create-canary-release-note.sh")
+	timestamp := "20260611032635"
+	releaseVersion := "9.8.7-canary." + timestamp
+	cmd := exec.Command("bash", script, "--base-version", "9.8.7", "--timestamp", timestamp, "--commit-sha", "abcdef0123456789", "--release-version", releaseVersion, "--notes-dir", notesDir)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("create canary release note failed: %v\n%s", err, out)
+	}
+	note := filepath.Join(notesDir, "canary", "9.8.7", timestamp+".md")
+	raw := readFileOrEmpty(note)
+	for _, want := range []string{"# slidex " + releaseVersion, "Base version: 9.8.7", "Canary timestamp: " + timestamp, "Source commit: abcdef0123456789"} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("generated canary note missing %q:\n%s", want, raw)
+		}
+	}
+	for _, forbidden := range []string{"{{BASE_VERSION}}", "{{TIMESTAMP}}", "{{RELEASE_VERSION}}", "{{COMMIT_SHA}}"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("generated canary note still contains %q:\n%s", forbidden, raw)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, "9.8.7.md")); !os.IsNotExist(err) {
+		t.Fatalf("canary helper should not create production note path, stat err=%v", err)
+	}
+
+	cmd = exec.Command("bash", script, "--base-version", "9.8.7", "--timestamp", timestamp, "--commit-sha", "abcdef0123456789", "--notes-dir", notesDir)
+	cmd.Dir = root
+	out, err = cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "canary release note already exists") {
+		t.Fatalf("canary helper should refuse overwrite, err=%v out=%s", err, out)
+	}
+
+	headRaw, err := exec.Command("git", "rev-parse", "--verify", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("resolve HEAD failed: %v", err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	timestampCmd := exec.Command("git", "show", "-s", "--format=%cd", "--date=format-local:%Y%m%d%H%M%S", head)
+	timestampCmd.Dir = root
+	timestampCmd.Env = append(os.Environ(), "TZ=UTC")
+	derivedRaw, err := timestampCmd.Output()
+	if err != nil {
+		t.Fatalf("derive HEAD timestamp failed: %v", err)
+	}
+	derivedTimestamp := strings.TrimSpace(string(derivedRaw))
+	cmd = exec.Command("bash", script, "--base-version", "9.8.8", "--commit-sha", head, "--notes-dir", notesDir)
+	cmd.Dir = root
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("create derived canary release note failed: %v\n%s", err, out)
+	}
+	derivedNote := filepath.Join(notesDir, "canary", "9.8.8", derivedTimestamp+".md")
+	derived := readFileOrEmpty(derivedNote)
+	if !strings.Contains(derived, "9.8.8-canary."+derivedTimestamp) || !strings.Contains(derived, head) {
+		t.Fatalf("derived canary note used wrong timestamp or commit:\n%s", derived)
+	}
+}
+
+func TestReleaseNotesBodyScriptUsesChannelSpecificSources(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash script contract is covered on Unix release runners")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash unavailable: %v", err)
+	}
+	root := repoRootForTest(t)
+	notesDir := t.TempDir()
+	timestamp := "20260611032635"
+	productionNote := filepath.Join(notesDir, "1.2.3.md")
+	canaryNote := filepath.Join(notesDir, "canary", "1.2.3", timestamp+".md")
+	if err := os.MkdirAll(filepath.Dir(canaryNote), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(productionNote, []byte("# slidex 1.2.3\n\n## Highlights\n\n- Production ready.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canaryNote, []byte("# slidex 1.2.3-canary.20260611032635\n\n## Highlights\n\n- Canary ready.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := filepath.Join(root, "scripts", "write-release-notes-body.sh")
+	runBody := func(t *testing.T, channel, releaseVersion, releaseTimestamp string) (string, string, error) {
+		t.Helper()
+		outFile := filepath.Join(t.TempDir(), "notes.md")
+		cmd := exec.Command("bash", script, outFile)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"SLIDEX_RELEASE_NOTES_DIR="+notesDir,
+			"BASE_VERSION=1.2.3",
+			"BUILD_CHANNEL="+channel,
+			"COMMIT_SHA=abcdef0123456789",
+			"RELEASE_TIMESTAMP="+releaseTimestamp,
+			"RELEASE_VERSION="+releaseVersion,
+			"SOURCE_REF=testing",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", string(out), err
+		}
+		return readFileOrEmpty(outFile), string(out), nil
+	}
+
+	body, out, err := runBody(t, "production", "1.2.3", "")
+	if err != nil {
+		t.Fatalf("production release body failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(body, "Production ready.") || !strings.Contains(body, "Release notes source: "+productionNote) {
+		t.Fatalf("production body used wrong note:\n%s", body)
+	}
+	if strings.Contains(body, "Canary ready.") {
+		t.Fatalf("production body should not include canary note:\n%s", body)
+	}
+
+	body, out, err = runBody(t, "canary", "1.2.3-canary."+timestamp, timestamp)
+	if err != nil {
+		t.Fatalf("canary release body failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(body, "Canary ready.") || !strings.Contains(body, "Release notes source: "+canaryNote) {
+		t.Fatalf("canary body used wrong note:\n%s", body)
+	}
+	if strings.Contains(body, "Production ready.") {
+		t.Fatalf("canary body must not reuse production note:\n%s", body)
+	}
+
+	if err := os.Remove(canaryNote); err != nil {
+		t.Fatal(err)
+	}
+	_, out, err = runBody(t, "canary", "1.2.3-canary."+timestamp, timestamp)
+	if err == nil || !strings.Contains(out, "missing canary release notes") {
+		t.Fatalf("missing canary note should fail clearly, err=%v out=%s", err, out)
+	}
+	if err := os.WriteFile(canaryNote, []byte("# slidex 1.2.3-canary.20260611032635\n\n- TODO: Fill this.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, out, err = runBody(t, "canary", "1.2.3-canary."+timestamp, timestamp)
+	if err == nil || !strings.Contains(out, "canary release notes still contain template placeholders") {
+		t.Fatalf("placeholder canary note should fail clearly, err=%v out=%s", err, out)
+	}
+	_, out, err = runBody(t, "canary", "1.2.3-canary.20260611000000", timestamp)
+	if err == nil || !strings.Contains(out, "canary RELEASE_VERSION must be 1.2.3-canary."+timestamp) {
+		t.Fatalf("timestamp/version mismatch should fail clearly, err=%v out=%s", err, out)
 	}
 }
 

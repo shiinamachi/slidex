@@ -368,34 +368,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ needs.release-metadata.outputs.prerelease }}
+          RELEASE_TIMESTAMP: ${{ needs.release-metadata.outputs.release_timestamp }}
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
           SOURCE_REF: ${{ needs.release-metadata.outputs.source_ref }}
           TAG_NAME: ${{ needs.release-metadata.outputs.tag_name }}
         run: |
           set -euo pipefail
           notes_file="${RUNNER_TEMP}/slidex-release-notes.md"
-          release_notes_path="release-notes/${BASE_VERSION}.md"
-          if [[ ! -f "$release_notes_path" ]]; then
-            printf 'missing release notes for %s: %s\n' "$BASE_VERSION" "$release_notes_path" >&2
-            exit 2
-          fi
-          if [[ "$BUILD_CHANNEL" == "production" ]] && grep -Eq 'TODO:|\{\{VERSION\}\}' "$release_notes_path"; then
-            printf 'production release notes still contain template placeholders: %s\n' "$release_notes_path" >&2
-            exit 2
-          fi
-          {
-            cat "$release_notes_path"
-            printf '\n## Release metadata\n\n'
-            printf 'Release packages are built by GitHub Actions for Linux, macOS, and Windows on amd64 and arm64.\n'
-            printf 'Each archive includes the slidex CLI binary plus the runtime templates, schemas, Codex plugin package, repo marketplace, and install guide required for local use.\n'
-            printf '\n'
-            printf 'Build channel: %s\n' "$BUILD_CHANNEL"
-            printf 'Source branch: %s\n' "$SOURCE_REF"
-            printf 'Source commit: %s\n' "$COMMIT_SHA"
-            printf 'Version: %s\n' "$RELEASE_VERSION"
-            printf 'Release notes source: %s\n' "$release_notes_path"
-            printf 'Release package assets are SHA-256 checksummed by this workflow.\n'
-          } > "$notes_file"
+          ./scripts/write-release-notes-body.sh "$notes_file"
           release_flags=()
           if [[ "$PRERELEASE" == "true" ]]; then
             release_flags+=(--prerelease)

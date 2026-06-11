@@ -4,3 +4,7 @@ go = "1.26.3"
 [tasks."version:bump"]
 description = "Bump VERSION, sync version metadata, and create release notes"
 run = "scripts/bump-version.sh"
+
+[tasks."release-notes:canary"]
+description = "Create a timestamped canary release note for the current VERSION"
+run = "scripts/create-canary-release-note.sh"

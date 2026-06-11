@@ -23,14 +23,19 @@ Codex Plugin. The root `VERSION` file is the single canonical version file.
    The task updates `VERSION`, runs
    `go run ./cmd/slidex sync-version-metadata`, and creates
    `release-notes/<VERSION>.md` from `release-notes/_template.md`.
-2. Fill in the new release note before publishing. Production releases fail if
-   the matching `release-notes/<VERSION>.md` file is missing or still contains
-   template placeholders. Canary releases use the same base-version note as
-   draft release context and append build metadata in the GitHub Release body.
-3. Refresh only the plugin manifest build metadata cachebuster after plugin
+2. Fill in the new release note before publishing. Production releases read
+   `release-notes/<VERSION>.md` and fail if the file is missing or still
+   contains template placeholders. Canary releases use a separate timestamped
+   note at `release-notes/canary/<VERSION>/<YYYYMMDDHHMMSS>.md`, where the
+   timestamp matches the canary version suffix.
+3. Create canary notes with `mise run release-notes:canary -- --timestamp
+   <YYYYMMDDHHMMSS>` when the workflow timestamp is already known, or omit the
+   timestamp to derive it from the selected commit time. The helper uses
+   `release-notes/canary/_template.md` and refuses to overwrite existing notes.
+4. Refresh only the plugin manifest build metadata cachebuster after plugin
    metadata changes. Do not increment the base version just to force Codex to
    reinstall a local plugin.
-4. Production release tags must be `v<VERSION>`. Canary release tags are
+5. Production release tags must be `v<VERSION>`. Canary release tags are
    `v<VERSION>-canary.<YYYYMMDDHHMMSS>`, where the timestamp is the selected
    source commit time normalized to UTC. Release asset names always use the
    package version without the leading tag `v`, for example
@@ -39,14 +44,14 @@ Codex Plugin. The root `VERSION` file is the single canonical version file.
    `scripts/package-release.sh` rejects release package names whose version
    does not match the CLI version or that canary pattern, except `dev-*` and
    `ci-*` smoke packages.
-5. GitHub Actions releases are dispatched manually. Choose `canary` to build
+6. GitHub Actions releases are dispatched manually. Choose `canary` to build
    the current `develop` branch commit, or `production` to build the current
    `main` branch commit.
-6. Release packages include `.slidex/install.json`. The updater treats its
+7. Release packages include `.slidex/install.json`. The updater treats its
    `channel` as immutable: `production` follows stable releases, `canary`
    follows canary prereleases, and `local-development` disables automatic
    release updates.
-7. Release assets are not overwritten. If a release tag already exists, the
+8. Release assets are not overwritten. If a release tag already exists, the
    release job fails instead of uploading with `--clobber`. The release job
    generates SHA-256 checksums for release assets before publishing.
 
