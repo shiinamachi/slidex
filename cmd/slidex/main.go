@@ -2032,7 +2032,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		return renderManifest{}, err
 	}
 
-	head := extractHead(string(raw))
+	head := injectHeadBase(extractHead(string(raw)), documentBaseHrefForHTMLPath(cfg.HTMLPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-render-*")
 	if err != nil {
 		return renderManifest{}, err
@@ -2754,11 +2754,17 @@ func cleanRenderedSlides(outDir string) error {
 	return nil
 }
 
+var (
+	cssURLRe         = regexp.MustCompile(`(?is)url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")\s][^)]*?))\s*\)`)
+	styleAttributeRe = regexp.MustCompile(`(?is)\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+)
+
 func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []dependency, []dependency) {
 	base := filepath.Dir(htmlPath)
 	var styles []dependency
 	var assets []dependency
 	var fonts []dependency
+	assetSeen := map[string]bool{}
 
 	styleRe := regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style>`)
 	for i, m := range styleRe.FindAllStringSubmatch(src, -1) {
@@ -2768,9 +2774,10 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 			Kind:   "inline_css",
 			SHA256: sha256Bytes(block),
 		})
+		assets = collectCSSURLDependencies(assets, assetSeen, base, m[1], fmt.Sprintf("inline_css_url_%02d", i+1))
 	}
 	linkRe := regexp.MustCompile(`(?is)<link\b[^>]*href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>`)
-	for _, m := range linkRe.FindAllStringSubmatch(src, -1) {
+	for i, m := range linkRe.FindAllStringSubmatch(src, -1) {
 		href := firstNonEmpty(m[2], m[3], m[4])
 		if href == "" {
 			continue
@@ -2778,6 +2785,11 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 		dep := dependency{Kind: "stylesheet"}
 		fillDependency(&dep, base, href)
 		styles = append(styles, dep)
+		if dep.Path != "" {
+			if raw, err := os.ReadFile(dep.Path); err == nil {
+				assets = collectCSSURLDependencies(assets, assetSeen, filepath.Dir(dep.Path), string(raw), fmt.Sprintf("linked_css_url_%02d", i+1))
+			}
+		}
 	}
 	imgRe := regexp.MustCompile(`(?is)<(?:img|image|source)\b[^>]*(?:src|href)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))`)
 	for _, m := range imgRe.FindAllStringSubmatch(src, -1) {
@@ -2787,7 +2799,11 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 		}
 		dep := dependency{Kind: "asset"}
 		fillDependency(&dep, base, ref)
-		assets = append(assets, dep)
+		assets = appendDependencyIfNew(assets, assetSeen, dep)
+	}
+	for i, m := range styleAttributeRe.FindAllStringSubmatch(src, -1) {
+		css := firstNonEmpty(m[1], m[2])
+		assets = collectCSSURLDependencies(assets, assetSeen, base, css, fmt.Sprintf("style_attr_url_%02d", i+1))
 	}
 	fontURLRe := regexp.MustCompile(`(?is)@font-face\s*{.*?url\(\s*["']?([^'")]+)["']?\s*\).*?}`)
 	for i, m := range fontURLRe.FindAllStringSubmatch(src, -1) {
@@ -2801,6 +2817,50 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 	}
 	fonts = append(fonts, fontPresetDependency(fontPreset))
 	return styles, assets, fonts
+}
+
+func collectCSSURLDependencies(deps []dependency, seen map[string]bool, base, cssText, idPrefix string) []dependency {
+	for i, m := range cssURLRe.FindAllStringSubmatch(cssText, -1) {
+		ref := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
+		if shouldSkipCSSURLDependency(ref) {
+			continue
+		}
+		dep := dependency{ID: fmt.Sprintf("%s_%02d", idPrefix, i+1), Kind: "asset"}
+		fillDependency(&dep, base, ref)
+		deps = appendDependencyIfNew(deps, seen, dep)
+	}
+	return deps
+}
+
+func shouldSkipCSSURLDependency(ref string) bool {
+	if ref == "" || strings.HasPrefix(ref, "#") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(ref), "data:")
+}
+
+func appendDependencyIfNew(deps []dependency, seen map[string]bool, dep dependency) []dependency {
+	key := dependencyIdentityKey(dep)
+	if key != "" {
+		if seen[key] {
+			return deps
+		}
+		seen[key] = true
+	}
+	return append(deps, dep)
+}
+
+func dependencyIdentityKey(dep dependency) string {
+	switch {
+	case dep.Path != "":
+		return dep.Kind + "|path|" + filepath.Clean(dep.Path)
+	case dep.URL != "":
+		return dep.Kind + "|url|" + dep.URL
+	case dep.ID != "":
+		return dep.Kind + "|id|" + dep.ID
+	default:
+		return dep.Kind + "|risk|" + dep.Risk
+	}
 }
 
 func fontPresetDependency(fontPreset string) dependency {

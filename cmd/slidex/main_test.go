@@ -3593,21 +3593,52 @@ func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 	}
 }
 
+func TestInjectDocumentBaseUsesSourceDirectory(t *testing.T) {
+	htmlPath := filepath.Join(t.TempDir(), "out", "final_deck.html")
+	baseHref := documentBaseHrefForHTMLPath(htmlPath)
+	src := `<html><head><title>Deck</title></head><body><img src="assets/hero.png"></body></html>`
+	got := injectDocumentBase(src, baseHref)
+	baseTag := `<base href="` + baseHref + `">`
+	if !strings.Contains(got, baseTag) {
+		t.Fatalf("document base tag missing:\n%s", got)
+	}
+	if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
+		t.Fatalf("document base tag should be inserted at the start of head:\n%s", got)
+	}
+	again := injectDocumentBase(got, "file:///other/")
+	if strings.Count(again, `<base href=`) != 1 {
+		t.Fatalf("document base tag should not be duplicated:\n%s", again)
+	}
+}
+
+func TestInjectHeadBaseKeepsExistingBase(t *testing.T) {
+	head := `<base href="file:///deck/out/"><title>Deck</title>`
+	if got := injectHeadBase(head, "file:///other/"); got != head {
+		t.Fatalf("existing base tag should be preserved, got %q", got)
+	}
+}
+
 func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
 	dir := t.TempDir()
 	htmlPath := filepath.Join(dir, "final_deck.html")
-	stylesheet := filepath.Join(dir, "style one.css")
+	stylesheet := filepath.Join(dir, "styles", "style one.css")
 	asset := filepath.Join(dir, "assets", "hero image.png")
 	fileAsset := filepath.Join(dir, "absolute image.png")
 	font := filepath.Join(dir, "fonts", "brand font.woff2")
+	inlineBG := filepath.Join(dir, "assets", "inline bg.png")
+	attrBG := filepath.Join(dir, "assets", "attr bg.png")
+	linkedBG := filepath.Join(dir, "styles", "images", "linked bg.png")
 	for _, item := range []struct {
 		path string
 		body string
 	}{
-		{stylesheet, "body{}\n"},
+		{stylesheet, `body{background-image:url("images/linked%20bg.png?rev=1")}` + "\n"},
 		{asset, "asset\n"},
 		{fileAsset, "file asset\n"},
 		{font, "font\n"},
+		{inlineBG, "inline bg\n"},
+		{attrBG, "attr bg\n"},
+		{linkedBG, "linked bg\n"},
 	} {
 		if err := os.MkdirAll(filepath.Dir(item.path), 0o755); err != nil {
 			t.Fatal(err)
@@ -3617,12 +3648,16 @@ func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
 		}
 	}
 	src := fmt.Sprintf(`<!doctype html>
-<link rel="stylesheet" href="style%%20one.css?v=1">
+<link rel="stylesheet" href="styles/style%%20one.css?v=1">
 <img src="assets/hero%%20image.png#view">
 <img src="%s">
-<style>@font-face { font-family: Brand; src: url("fonts/brand%%20font.woff2?x=1"); }</style>`, fileURLFromPath(fileAsset))
+<style>
+.hero { background-image: url("assets/inline%%20bg.png"); }
+@font-face { font-family: Brand; src: url("fonts/brand%%20font.woff2?x=1"); }
+</style>
+<section style="background-image: url('assets/attr%%20bg.png#shape')"></section>`, fileURLFromPath(fileAsset))
 	styles, assets, fonts := collectDependencies(htmlPath, src, "pretendard")
-	for _, path := range []string{stylesheet, asset, fileAsset, font} {
+	for _, path := range []string{stylesheet, asset, fileAsset, font, inlineBG, attrBG, linkedBG} {
 		dep, ok := findDependencyByPath(append(append(styles, assets...), fonts...), path)
 		if !ok {
 			t.Fatalf("dependency path %q not found\nstyles=%#v\nassets=%#v\nfonts=%#v", path, styles, assets, fonts)

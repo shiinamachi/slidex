@@ -19,6 +19,12 @@ type chromeEnumeratedSlide struct {
 	Headline  string `json:"headline"`
 }
 
+var (
+	baseElementRe     = regexp.MustCompile(`(?is)<base\b`)
+	headOpenElementRe = regexp.MustCompile(`(?is)<head\b[^>]*>`)
+	htmlOpenElementRe = regexp.MustCompile(`(?is)<html\b[^>]*>`)
+)
+
 func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
 	if selector != ".slide" {
 		return nil, "", fmt.Errorf("unsupported selector for Chrome enumeration: %s", selector)
@@ -27,7 +33,7 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if err != nil {
 		return nil, "", err
 	}
-	injected := injectSlideEnumerationScript(string(raw))
+	injected := injectDocumentBase(injectSlideEnumerationScript(string(raw)), documentBaseHrefForHTMLPath(htmlPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-dom-enum-*")
 	if err != nil {
 		return nil, "", err
@@ -83,6 +89,41 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 		return nil, "", errorsNew("Chrome DOM enumeration found no .slide elements")
 	}
 	return slides, "chrome-dom", nil
+}
+
+func documentBaseHrefForHTMLPath(htmlPath string) string {
+	dir := filepath.Dir(htmlPath)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	dir = filepath.Clean(dir)
+	sep := string(os.PathSeparator)
+	if !strings.HasSuffix(dir, sep) {
+		dir += sep
+	}
+	return fileURLFromPath(dir)
+}
+
+func injectDocumentBase(src, baseHref string) string {
+	if baseHref == "" || baseElementRe.MatchString(src) {
+		return src
+	}
+	base := `<base href="` + xhtml.EscapeString(baseHref) + `">`
+	if loc := headOpenElementRe.FindStringIndex(src); loc != nil {
+		return src[:loc[1]] + "\n" + base + src[loc[1]:]
+	}
+	if loc := htmlOpenElementRe.FindStringIndex(src); loc != nil {
+		head := "\n<head>\n" + base + "\n</head>"
+		return src[:loc[1]] + head + src[loc[1]:]
+	}
+	return "<head>\n" + base + "\n</head>\n" + src
+}
+
+func injectHeadBase(head, baseHref string) string {
+	if baseHref == "" || baseElementRe.MatchString(head) {
+		return head
+	}
+	return `<base href="` + xhtml.EscapeString(baseHref) + `">` + "\n" + head
 }
 
 func injectSlideEnumerationScript(src string) string {
