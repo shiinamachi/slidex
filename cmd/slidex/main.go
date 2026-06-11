@@ -2032,7 +2032,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		slides = parserSlides
 		enumMethod = "go-html-parser-fallback"
 	}
-	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
+	if err := prepareRenderedSlidesDir(cfg.OutDir); err != nil {
 		return renderManifest{}, err
 	}
 	if err := cleanRenderedSlides(cfg.OutDir); err != nil {
@@ -2596,6 +2596,9 @@ func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, 
 }
 
 func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
+	if err := prepareRenderedSlidesDir(filepath.Dir(pngPath)); err != nil {
+		return err
+	}
 	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
 	if err != nil {
 		return err
@@ -2738,6 +2741,29 @@ func isBlank(img image.Image) bool {
 		return true
 	}
 	return float64(nonWhite)/float64(total) < 0.002
+}
+
+func prepareRenderedSlidesDir(path string) error {
+	if err := rejectSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	if err := rejectSymlinkAncestors(path); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("rendered slides directory must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("rendered slides path must be a directory: %s", filepath.ToSlash(path))
+	}
+	return nil
 }
 
 func cleanRenderedSlides(outDir string) error {

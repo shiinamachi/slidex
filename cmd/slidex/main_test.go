@@ -4158,6 +4158,30 @@ func TestCollectDependenciesDoesNotScanSymlinkedStylesheet(t *testing.T) {
 	}
 }
 
+func TestPrepareRenderedSlidesDirRejectsSymlinkBeforeCleanup(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	externalDir := t.TempDir()
+	externalSlide := filepath.Join(externalDir, "slide_01.png")
+	if err := os.WriteFile(externalSlide, []byte("external slide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	renderedDir := filepath.Join(outDir, "rendered_slides")
+	if err := os.Symlink(externalDir, renderedDir); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	err := prepareRenderedSlidesDir(renderedDir)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected rendered_slides symlink rejection, got %v", err)
+	}
+	if got := readFileOrEmpty(externalSlide); got != "external slide" {
+		t.Fatalf("external slide was modified or deleted: %q", got)
+	}
+}
+
 func TestCollectDependenciesFlagsExternalLocalFiles(t *testing.T) {
 	dir := t.TempDir()
 	deck := filepath.Join(dir, "deck")
