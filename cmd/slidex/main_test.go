@@ -3997,6 +3997,43 @@ func writeTestVisualReviewPass(t *testing.T, deck string, manifest renderManifes
 	}
 }
 
+func TestRedactSecretsInAnyFailsClosedAndPreservesSafeTokenMetadata(t *testing.T) {
+	tokenHash := strings.Repeat("a", 64)
+	payload := map[string]any{
+		"token":         "secret-value",
+		"tokenUsage":    map[string]any{"total": 123},
+		"tokenSha256":   tokenHash,
+		"tokenRedacted": true,
+		"message":       "CODEX_API_KEY=secret-token Authorization: Bearer raw-token",
+	}
+	raw, err := json.Marshal(redactSecretsInAny(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, secret := range []string{"secret-value", "secret-token", "raw-token"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("redacted payload leaked %q: %s", secret, text)
+		}
+	}
+	for _, expected := range []string{`"tokenUsage"`, `"total":123`, tokenHash, `"tokenRedacted":true`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("redacted payload lost safe metadata %q: %s", expected, text)
+		}
+	}
+
+	raw, err = json.Marshal(redactSecretsInAny(map[string]any{
+		"token": "secret-value",
+		"bad":   func() {},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "secret-value") {
+		t.Fatalf("failed redaction should not return original payload: %s", raw)
+	}
+}
+
 func TestStateAndRunLogUseSecurePermissionsAndRedaction(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	outDir := filepath.Join(deck, "out")

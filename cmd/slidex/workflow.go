@@ -6757,21 +6757,80 @@ func systemSymlinkAncestorAllowed(goos, path string) bool {
 func redactSecretsInAny(v any) any {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return v
+		return "[REDACTION_FAILED]"
 	}
-	s := redactSecrets(string(raw))
-	var out any
-	if json.Unmarshal([]byte(s), &out) != nil {
-		return v
+	var normalized any
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return "[REDACTION_FAILED]"
 	}
-	return out
+	return redactJSONValue(normalized)
+}
+
+func redactJSONValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, value := range typed {
+			if isSensitiveJSONKey(key) {
+				out[key] = "[REDACTED]"
+				continue
+			}
+			out[key] = redactJSONValue(value)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, value := range typed {
+			out[i] = redactJSONValue(value)
+		}
+		return out
+	case string:
+		return redactSecrets(typed)
+	default:
+		return typed
+	}
+}
+
+func isSensitiveJSONKey(key string) bool {
+	normalized := normalizeJSONKey(key)
+	if normalized == "" {
+		return false
+	}
+	for _, fragment := range []string{"sha256", "hash", "redacted", "usage", "budget", "count", "window"} {
+		if strings.Contains(normalized, fragment) {
+			return false
+		}
+	}
+	switch normalized {
+	case "token", "accesstoken", "refreshtoken", "idtoken", "authtoken", "bearertoken", "capabilitytoken", "sessiontoken", "csrftoken", "shutdowntoken", "authorization", "authorizationheader", "password", "passwd":
+		return true
+	}
+	return strings.Contains(normalized, "apikey") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "cookie") ||
+		strings.HasSuffix(normalized, "password")
+}
+
+func normalizeJSONKey(key string) string {
+	replacer := strings.NewReplacer("_", "", "-", "", ".", "", " ", "")
+	return replacer.Replace(strings.ToLower(key))
+}
+
+var secretRedactionPatterns = []struct {
+	pattern     *regexp.Regexp
+	replacement string
+}{
+	{regexp.MustCompile(`(?i)(OPENAI_API_KEY=)[^"\s]+`), `${1}[REDACTED]`},
+	{regexp.MustCompile(`(?i)(CODEX_API_KEY=)[^"\s]+`), `${1}[REDACTED]`},
+	{regexp.MustCompile(`(?i)(Authorization:\s*Bearer\s+)[^"\s]+`), `${1}[REDACTED]`},
+	{regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._-]+`), `${1}[REDACTED]`},
+	{regexp.MustCompile(`(?i)((?:token|secret|cookie|set-cookie)["']?\s*[:=]\s*["']?)[^"',\s}]+`), `${1}[REDACTED]`},
 }
 
 func redactSecrets(s string) string {
-	patterns := []string{`OPENAI_API_KEY=[^"\s]+`, `CODEX_API_KEY=[^"\s]+`, `Authorization:\s*Bearer\s+[^"\s]+`, `Bearer\s+[A-Za-z0-9._-]+`, `(?i)(token|secret|cookie|set-cookie)["']?\s*[:=]\s*["']?[^"',\s}]+`}
 	out := s
-	for _, pattern := range patterns {
-		out = regexp.MustCompile(pattern).ReplaceAllString(out, "${1}[REDACTED]")
+	for _, redaction := range secretRedactionPatterns {
+		out = redaction.pattern.ReplaceAllString(out, redaction.replacement)
 	}
 	return out
 }
