@@ -7486,15 +7486,22 @@ func verifyStructuredReviewImageEvidence(path, deckAbs string, rawEvidence []any
 }
 
 func verifyTextArtifactFreshness(check, path, referencePath string, requiredHashes []string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFile(path)
 	if err != nil {
 		return []qaFinding{fail("package."+check+"_freshness", "missing artifact: "+err.Error(), path)}
 	}
 	var findings []qaFinding
-	refInfo, refErr := os.Stat(referencePath)
-	info, infoErr := os.Stat(path)
+	refInfo, refErr := regularFileInfoForRead(referencePath)
+	info, infoErr := regularFileInfoForRead(path)
 	if refErr == nil && infoErr == nil && info.ModTime().Before(refInfo.ModTime()) {
 		findings = append(findings, fail("package."+check+"_freshness", "artifact is older than render manifest", path))
+	} else {
+		if refErr != nil {
+			findings = append(findings, fail("package."+check+"_freshness", "reference artifact is unreadable: "+refErr.Error(), referencePath))
+		}
+		if infoErr != nil {
+			findings = append(findings, fail("package."+check+"_freshness", "artifact metadata is unreadable: "+infoErr.Error(), path))
+		}
 	}
 	text := string(raw)
 	for _, hash := range requiredHashes {
@@ -7558,7 +7565,11 @@ func hashFileSet(glob string) string {
 	for _, path := range paths {
 		b.WriteString(filepath.ToSlash(path))
 		b.WriteString(" ")
-		b.WriteString(mustSHA256(path))
+		hash, err := sha256File(path)
+		if err != nil {
+			hash = "ERROR:" + err.Error()
+		}
+		b.WriteString(hash)
 		b.WriteString("\n")
 	}
 	if b.Len() == 0 {

@@ -382,10 +382,35 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 		t.Fatalf("package should pass, got %#v", pkg)
 	}
 	specPath := filepath.Join(outDir, "deck_spec.json")
+	manifestPath := filepath.Join(outDir, "render_manifest.json")
 	qaReportPath := filepath.Join(outDir, "qa_report.md")
 	visualReviewPath := filepath.Join(outDir, "visual_reviews", "latest_review.json")
 	originalSpec := readFileOrEmpty(specPath)
+	originalManifest := readFileOrEmpty(manifestPath)
 	originalQAReport := readFileOrEmpty(qaReportPath)
+
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(manifestPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badManifestPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badManifestFindings, _ := badManifestPkg["findings"].([]qaFinding)
+	if badManifestPkg["status"] != "fail" ||
+		!hasFindingCheck(badManifestFindings, "package.manifest_read") ||
+		!hasFindingCheck(badManifestFindings, "ED-PACKAGE-001") {
+		t.Fatalf("package should fail closed on invalid render manifest path, got %#v", badManifestPkg)
+	}
+	if err := os.RemoveAll(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureWriteFile(manifestPath, []byte(originalManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	var visualPayload map[string]any
 	if err := json.Unmarshal([]byte(readFileOrEmpty(visualReviewPath)), &visualPayload); err != nil {
@@ -814,6 +839,27 @@ func TestVerifyHTMLEditSyncFailsWhenBaselineDiffers(t *testing.T) {
 	findings := verifyHTMLEditSync(htmlPath, baselinePath)
 	if !hasFindingCheck(findings, "ED-RENDER-003") {
 		t.Fatalf("expected ED-RENDER-003 finding, got %#v", findings)
+	}
+}
+
+func TestVerifyHTMLEditSyncFailsClosedOnHashErrors(t *testing.T) {
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "final_deck.html")
+	if err := os.WriteFile(htmlPath, []byte("<html>edited</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.html")
+	if err := os.WriteFile(outside, []byte("<html>outside</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baselinePath := filepath.Join(dir, "final_deck.generated_baseline.html")
+	if err := os.Symlink(outside, baselinePath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	findings := verifyHTMLEditSync(htmlPath, baselinePath)
+	if !hasFindingCheck(findings, "ED-RENDER-003") || !hasFindingCheck(findings, "could not hash") {
+		t.Fatalf("expected fail-closed HTML sync hash finding, got %#v", findings)
 	}
 }
 
@@ -4164,6 +4210,26 @@ func TestCaptureURLScreenshotRejectsSymlinkTarget(t *testing.T) {
 	}
 	if got := readFileOrEmpty(outside); got != "outside\n" {
 		t.Fatalf("outside symlink target was modified: %q", got)
+	}
+}
+
+func TestVerifyTextArtifactFreshnessRejectsSymlinkArtifact(t *testing.T) {
+	reference := filepath.Join(t.TempDir(), "render_manifest.json")
+	if err := os.WriteFile(reference, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "qa_report.md")
+	if err := os.WriteFile(outside, []byte("report\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "qa_report.md")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	findings := verifyTextArtifactFreshness("qa_report", link, reference, nil)
+	if !hasFindingCheck(findings, "package.qa_report_freshness") || !hasFindingCheck(findings, "symlink") {
+		t.Fatalf("expected symlink text artifact freshness failure, got %#v", findings)
 	}
 }
 

@@ -1563,11 +1563,11 @@ func formatCountMap(counts map[string]int) string {
 func verifyHTMLEditSync(htmlPath, baselinePath string) []qaFinding {
 	htmlHash, htmlErr := sha256File(htmlPath)
 	if htmlErr != nil {
-		return nil
+		return []qaFinding{fail("ED-RENDER-003", "could not hash final_deck.html: "+htmlErr.Error(), htmlPath)}
 	}
 	baselineHash, baselineErr := sha256File(baselinePath)
 	if baselineErr != nil {
-		return nil
+		return []qaFinding{fail("ED-RENDER-003", "could not hash final_deck.generated_baseline.html: "+baselineErr.Error(), baselinePath)}
 	}
 	if htmlHash != baselineHash {
 		return []qaFinding{fail("ED-RENDER-003", "final_deck.html differs from final_deck.generated_baseline.html; run slidex sync-html-edits before delivery", htmlPath)}
@@ -4399,8 +4399,8 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	var findings []qaFinding
 	for _, rel := range required {
 		path := filepath.Join(outDir, rel)
-		if _, err := os.Stat(path); err != nil {
-			findings = append(findings, fail("ED-PACKAGE-001", "missing required delivery file", path))
+		if _, err := regularFileInfoForRead(path); err != nil {
+			findings = append(findings, fail("ED-PACKAGE-001", "missing or invalid required delivery file: "+err.Error(), path))
 		}
 	}
 	pngs, _ := filepath.Glob(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
@@ -4421,7 +4421,9 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		structuredReviewPaths = append(structuredReviewPaths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+safeFilenameComponent(stage)+".json"))
 	}
 	findings = append(findings, verifyPackageSpec(specPath)...)
-	if raw, err := os.ReadFile(manifestPath); err == nil {
+	if raw, err := readRegularFile(manifestPath); err != nil {
+		findings = append(findings, fail("package.manifest_read", err.Error(), manifestPath))
+	} else {
 		manifest, err := decodeRenderManifest(raw, manifestPath)
 		if err != nil {
 			findings = append(findings, fail("package.manifest_parse", err.Error(), manifestPath))
