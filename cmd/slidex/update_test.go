@@ -717,7 +717,7 @@ func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyCandidateBundle(status, t.TempDir(), "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
+	result, err := applyCandidateBundle(status, t.TempDir(), "0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +740,7 @@ func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0-canary.20260610010000")
 
-	result, err := applyCandidateBundle(status, candidate, "0.2.0-canary.20260610010000", "v0.2.0-canary.20260610010000", allowUnverifiedAttestationForTest())
+	result, err := applyCandidateBundle(status, candidate, "0.2.0-canary.20260610010000", "v0.2.0-canary.20260610010000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,7 +759,7 @@ func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 	}
 	stableCandidate := filepath.Join(parent, "stable-candidate")
 	writeCandidateBundleForTest(t, stableCandidate, "0.2.0")
-	result, err = applyCandidateBundle(canaryStatus, stableCandidate, "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
+	result, err = applyCandidateBundle(canaryStatus, stableCandidate, "0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -787,7 +787,7 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
+	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -906,7 +906,7 @@ func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--attestation-policy", attestationPolicyAllowUnverified, "--yes", "--json"}); err != nil {
+	if err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--yes", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
@@ -921,7 +921,7 @@ func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	}
 }
 
-func TestRunUpdateApplyRequiresAttestationBeforeActivation(t *testing.T) {
+func TestRunUpdateApplyRequiresMatchingChecksumBeforeActivation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")
 	}
@@ -942,29 +942,23 @@ func TestRunUpdateApplyRequiresAttestationBeforeActivation(t *testing.T) {
 	}
 	archivePath := filepath.Join(parent, contract.ArchiveName)
 	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
-	payload, err := os.ReadFile(archivePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(payload)
 	checksumPath := filepath.Join(parent, contract.ChecksumName)
-	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(checksumPath, []byte(strings.Repeat("0", 64)+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
-	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--archive", archivePath, "--checksums", checksumPath, "--target-version", "0.2.0", "--target-tag", "v0.2.0", "--yes"})
-	if err == nil || !strings.Contains(err.Error(), "attestation") {
-		t.Fatalf("expected attestation failure, got %v", err)
+	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--archive", archivePath, "--checksums", checksumPath, "--target-version", "0.2.0", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("expected SHA-256 mismatch failure, got %v", err)
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
-		t.Fatalf("install root should not activate without attestation, got VERSION %q", got)
+		t.Fatalf("install root should not activate with checksum mismatch, got VERSION %q", got)
 	}
 	if candidateExtractedUnderForTest(t, filepath.Join(installRoot, ".slidex", "staged")) {
-		t.Fatal("archive should not be extracted before required attestation passes")
+		t.Fatal("archive should not be extracted before checksum verification passes")
 	}
 }
 
-func TestRunUpdateApplyArchiveAttestationFailureJSONReportsFailureContract(t *testing.T) {
+func TestRunUpdateApplyArchiveChecksumFailureJSONReportsFailureContract(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")
 	}
@@ -985,16 +979,10 @@ func TestRunUpdateApplyArchiveAttestationFailureJSONReportsFailureContract(t *te
 	}
 	archivePath := filepath.Join(parent, contract.ArchiveName)
 	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
-	payload, err := os.ReadFile(archivePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(payload)
 	checksumPath := filepath.Join(parent, contract.ChecksumName)
-	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(checksumPath, []byte(strings.Repeat("f", 64)+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
 
 	var runErr error
 	output := captureStdoutForTest(t, func() {
@@ -1004,36 +992,35 @@ func TestRunUpdateApplyArchiveAttestationFailureJSONReportsFailureContract(t *te
 			"--archive", archivePath,
 			"--checksums", checksumPath,
 			"--target-version", "0.2.0",
-			"--target-tag", "v0.2.0",
 			"--yes",
 			"--json",
 		})
 	})
-	if runErr == nil || !strings.Contains(runErr.Error(), "attestation") {
-		t.Fatalf("expected attestation failure, got %v\n%s", runErr, output)
+	if runErr == nil || !strings.Contains(runErr.Error(), "SHA-256 mismatch") {
+		t.Fatalf("expected SHA-256 mismatch failure, got %v\n%s", runErr, output)
 	}
 	var result updateApplyResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("invalid attestation failure JSON: %v\n%s", err, output)
+		t.Fatalf("invalid checksum failure JSON: %v\n%s", err, output)
 	}
 	if err := validatePayloadAgainstBundledSchema(result, updateApplyResultSchemaFile); err != nil {
-		t.Fatalf("attestation failure JSON should match schema: %v\n%s", err, output)
+		t.Fatalf("checksum failure JSON should match schema: %v\n%s", err, output)
 	}
-	if result.Status != "failed" || result.Channel != updateChannelProduction || result.TargetVersion != "0.2.0" || result.TargetTag != "v0.2.0" {
-		t.Fatalf("attestation failure fields missing: %#v", result)
-	}
-	if result.Attestation.Policy != attestationPolicyRequire || result.Attestation.Status != "fail" || !strings.Contains(result.Attestation.Error, "GitHub CLI") {
-		t.Fatalf("attestation failure details missing: %#v", result.Attestation)
+	if result.Status != "failed" || result.Channel != updateChannelProduction || result.TargetVersion != "0.2.0" {
+		t.Fatalf("checksum failure fields missing: %#v", result)
 	}
 	if result.PluginVerificationStatus != "not_verified" || result.NextVerificationCommand != "slidex update verify --json" || result.RestartRequired {
-		t.Fatalf("attestation failure plugin/restart fields missing: %#v", result)
+		t.Fatalf("checksum failure plugin/restart fields missing: %#v", result)
 	}
-	if !strings.Contains(result.Error, "GitHub CLI") {
-		t.Fatalf("attestation failure error missing: %#v", result)
+	if !strings.Contains(result.Error, "SHA-256 mismatch") {
+		t.Fatalf("checksum failure error missing: %#v", result)
 	}
 }
 
-func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
+func TestRunUpdateApplyArchiveAppliesWithoutTargetTag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
@@ -1062,15 +1049,22 @@ func TestRunUpdateApplyArchiveRequiresTargetTagBeforeExtraction(t *testing.T) {
 	}
 
 	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--archive", archivePath, "--checksums", checksumPath, "--target-version", "0.2.0", "--yes"})
-	if err == nil || !strings.Contains(err.Error(), "--target-tag is required") {
-		t.Fatalf("expected target-tag failure before archive extraction, got %v", err)
+	if err != nil {
+		t.Fatalf("archive apply without target tag failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(installRoot, ".slidex", "staged")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("archive should not be extracted before required target tag is present, stat err = %v", err)
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("archive apply without target tag VERSION = %q", got)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.TargetTag != "v0.2.0" {
+		t.Fatalf("archive apply should infer target tag from metadata, got %q", status.TargetTag)
 	}
 }
 
-func TestRunUpdateApplyDownloadRequiresAttestationBeforeExtraction(t *testing.T) {
+func TestRunUpdateApplyDownloadRequiresMatchingChecksumBeforeExtraction(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")
 	}
@@ -1094,7 +1088,7 @@ func TestRunUpdateApplyDownloadRequiresAttestationBeforeExtraction(t *testing.T)
 	}
 	sum := sha256.Sum256(archivePayload)
 	digest := hex.EncodeToString(sum[:])
-	checksumText := digest + "  " + contract.ArchiveName + "\n"
+	checksumText := strings.Repeat("1", 64) + "  " + contract.ArchiveName + "\n"
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1116,70 +1110,13 @@ func TestRunUpdateApplyDownloadRequiresAttestationBeforeExtraction(t *testing.T)
 		}
 	}))
 	defer server.Close()
-	t.Setenv("PATH", t.TempDir())
 
 	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--api-url", server.URL + "/releases", "--yes"})
-	if err == nil || !strings.Contains(err.Error(), "attestation") {
-		t.Fatalf("expected downloaded release attestation failure, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("expected downloaded release checksum failure, got %v", err)
 	}
 	if candidateExtractedUnderForTest(t, filepath.Join(installRoot, ".slidex", "downloads")) {
-		t.Fatal("downloaded archive should not be extracted before required attestation passes")
-	}
-}
-
-func TestVerifyReleaseAttestationRequiresGitHubCLIByDefault(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	result, err := verifyReleaseAttestation("/tmp/slidex_0.2.0_linux_amd64.tar.gz", "v0.2.0", attestationPolicyRequire)
-	if err == nil {
-		t.Fatal("required attestation verification should fail without gh")
-	}
-	if result.Policy != attestationPolicyRequire || result.Status != "fail" || !strings.Contains(result.Error, "GitHub CLI") {
-		t.Fatalf("unexpected attestation result: %#v err=%v", result, err)
-	}
-}
-
-func TestVerifyReleaseAttestationRunsRequiredGitHubChecks(t *testing.T) {
-	binDir := t.TempDir()
-	logPath := filepath.Join(t.TempDir(), "gh.log")
-	writeFakeGitHubCLIForTest(t, filepath.Join(binDir, executableNameForTest("gh")))
-	t.Setenv("PATH", binDir)
-	t.Setenv("GH_LOG", logPath)
-
-	archivePath := filepath.Join(t.TempDir(), "slidex_0.2.0_linux_amd64.tar.gz")
-	if err := os.WriteFile(archivePath, []byte("archive"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	result, err := verifyReleaseAttestation(archivePath, "v0.2.0", attestationPolicyRequire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "verified" || result.Policy != attestationPolicyRequire {
-		t.Fatalf("unexpected attestation result: %#v", result)
-	}
-	log := readFileOrEmpty(logPath)
-	wants := []string{
-		"attestation verify " + archivePath + " --repo shiinamachi/slidex --cert-oidc-issuer https://token.actions.githubusercontent.com --cert-identity-regex",
-	}
-	last := -1
-	for _, want := range wants {
-		index := strings.Index(log, want)
-		if index < 0 {
-			t.Fatalf("fake gh log missing %q:\n%s", want, log)
-		}
-		if index <= last {
-			t.Fatalf("fake gh commands out of order:\n%s", log)
-		}
-		last = index
-	}
-}
-
-func TestVerifyReleaseAttestationCanBeExplicitlyBypassed(t *testing.T) {
-	result, err := verifyReleaseAttestation("/tmp/slidex_0.2.0_linux_amd64.tar.gz", "v0.2.0", attestationPolicyAllowUnverified)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "skipped" || result.Policy != attestationPolicyAllowUnverified {
-		t.Fatalf("unexpected attestation result: %#v", result)
+		t.Fatal("downloaded archive should not be extracted before checksum verification passes")
 	}
 }
 
@@ -1241,7 +1178,6 @@ func TestRunUpdateApplyLocalDevelopmentJSONReportsFailureContract(t *testing.T) 
 			"--metadata", filepath.Join(sourceRoot, ".slidex", "missing.json"),
 			"--candidate", candidate,
 			"--target-version", "0.2.0",
-			"--attestation-policy", attestationPolicyAllowUnverified,
 			"--yes",
 			"--json",
 		})
@@ -1267,29 +1203,7 @@ func TestRunUpdateApplyLocalDevelopmentJSONReportsFailureContract(t *testing.T) 
 	}
 }
 
-func TestRunUpdateApplyCandidateRequiresAllowUnverifiedPolicy(t *testing.T) {
-	parent := t.TempDir()
-	installRoot := filepath.Join(parent, "slidex")
-	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
-	candidate := filepath.Join(parent, "candidate")
-	writeCandidateBundleForTest(t, candidate, "0.2.0")
-
-	err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
-	if err == nil || !strings.Contains(err.Error(), "--candidate bypasses release archive attestation") {
-		t.Fatalf("candidate apply without explicit allow-unverified err = %v", err)
-	}
-	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
-		t.Fatalf("candidate should not activate without explicit allow-unverified, VERSION = %q", got)
-	}
-}
-
-func TestRunUpdateApplyCandidateRecordsAllowUnverifiedAttestation(t *testing.T) {
+func TestRunUpdateApplyCandidateReportsJSON(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
@@ -1309,13 +1223,12 @@ func TestRunUpdateApplyCandidateRecordsAllowUnverifiedAttestation(t *testing.T) 
 			"--metadata", installMetadataPath(installRoot),
 			"--candidate", candidate,
 			"--target-version", "0.2.0",
-			"--attestation-policy", attestationPolicyAllowUnverified,
 			"--yes",
 			"--json",
 		})
 	})
 	if runErr != nil {
-		t.Fatalf("candidate apply with explicit allow-unverified failed: %v\n%s", runErr, output)
+		t.Fatalf("candidate apply failed: %v\n%s", runErr, output)
 	}
 	var result updateApplyResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
@@ -1323,12 +1236,6 @@ func TestRunUpdateApplyCandidateRecordsAllowUnverifiedAttestation(t *testing.T) 
 	}
 	if err := validatePayloadAgainstBundledSchema(result, updateApplyResultSchemaFile); err != nil {
 		t.Fatalf("candidate apply JSON should match schema: %v\n%s", err, output)
-	}
-	if result.Attestation.Policy != attestationPolicyAllowUnverified || result.Attestation.Status != "skipped" {
-		t.Fatalf("candidate apply attestation should be explicit skipped: %#v", result.Attestation)
-	}
-	if !strings.Contains(result.Attestation.Output, "candidate bundle provided directly") {
-		t.Fatalf("candidate apply attestation output should explain bypass: %#v", result.Attestation)
 	}
 	if result.Status != "applied" && result.Status != "pending-restart" {
 		t.Fatalf("candidate apply result status = %#v", result)
@@ -1858,49 +1765,6 @@ func TestUpdateStatusHumanAndJSONReportPendingActivation(t *testing.T) {
 		if !strings.Contains(humanOutput, want) {
 			t.Fatalf("human update status missing %q:\n%s", want, humanOutput)
 		}
-	}
-}
-
-func allowUnverifiedAttestationForTest() attestationVerification {
-	return attestationVerification{Policy: attestationPolicyAllowUnverified, Status: "skipped"}
-}
-
-func executableNameForTest(name string) string {
-	if runtime.GOOS == "windows" {
-		return name + ".exe"
-	}
-	return name
-}
-
-func writeFakeGitHubCLIForTest(t *testing.T, path string) {
-	t.Helper()
-	dir := t.TempDir()
-	source := filepath.Join(dir, "main.go")
-	code := `package main
-
-import (
-	"os"
-	"strings"
-)
-
-func main() {
-	logPath := os.Getenv("GH_LOG")
-	if logPath != "" {
-		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			panic(err)
-		}
-		_, _ = f.WriteString(strings.Join(os.Args[1:], " ") + "\n")
-		_ = f.Close()
-	}
-}
-`
-	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("go", "build", "-o", path, source)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("fake gh build failed: %v\n%s", err, out)
 	}
 }
 

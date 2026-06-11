@@ -105,7 +105,7 @@ https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<ASSET_VERS
 
 ---
 
-## Step 4 — Verify the SHA-256 checksum and optional GitHub artifact attestation
+## Step 4 — Verify the SHA-256 checksum
 
 Store the package filename:
 
@@ -139,25 +139,8 @@ Write-Host "SHA-256 verified."
 ```
 
 > **If the checksum does not match, stop immediately and report the failure.**
-
-Default Codex App installs do **not** require GitHub CLI (`gh`) or GitHub
-login. Do not install `gh`, do not run `gh auth login`, and do not stop the
-default install only because `gh` is unavailable.
-
-If `gh` is already installed and authenticated, or if the user explicitly asks
-for stronger release provenance verification, run the optional GitHub artifact
-attestation check:
-
-```bash
-gh attestation verify "$PACKAGE_FILE" \
-  --repo shiinamachi/slidex \
-  --cert-oidc-issuer https://token.actions.githubusercontent.com \
-  --cert-identity-regex '^https://github.com/shiinamachi/slidex/.github/workflows/release.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$'
-```
-
-If optional attestation is skipped, report `attestation: skipped` and continue
-after the SHA-256 checksum passes. If the user explicitly requested attestation
-and the command fails, stop and report the package as not provenance-verified.
+> Do not install GitHub CLI or ask the user to log in to GitHub for this
+> install flow.
 
 ---
 
@@ -310,9 +293,7 @@ Each release package includes:
 | Install/update metadata | `.slidex/install.json` |
 
 Code signing is deferred. Always verify the SHA-256 checksum before installing a
-downloaded release package. Use the optional GitHub artifact attestation check
-when `gh` is already available or when the user explicitly asks for stronger
-release provenance verification.
+downloaded release package.
 
 ---
 
@@ -336,10 +317,8 @@ the verified bundle as one unit:
 slidex update apply --yes --json
 ```
 
-By default, `update apply` requires GitHub CLI artifact attestation
-verification for the selected release asset. It runs documented GitHub surfaces
-equivalent to `gh attestation verify`. If this verification cannot be
-completed, the update fails before activation.
+`update apply` verifies the release archive against the matching SHA-256
+checksum before extraction or activation.
 
 For a manually downloaded archive, pass the local files explicitly:
 
@@ -348,15 +327,13 @@ slidex update apply \
   --archive slidex_<ASSET_VERSION>_<OS>_<ARCH>.<EXT> \
   --checksums slidex_<ASSET_VERSION>_checksums.txt \
   --target-version <ASSET_VERSION> \
-  --target-tag <TAG> \
   --yes \
   --json
 ```
 
 Do not pass `--candidate` for unattended release updates. A direct extracted
-candidate has no release archive attestation evidence, so `update apply
---candidate` requires `--attestation-policy allow-unverified` and is treated as
-an explicit manual security decision.
+candidate bypasses release archive download and checksum verification, so it is
+for explicit manual repair or development use only.
 
 `update apply` validates the candidate bundle before activation. On Unix-like
 systems it stages the candidate, keeps a backup of the previous install root,
@@ -370,10 +347,6 @@ and the staged candidate so those directories can be renamed safely:
 ```bash
 <pendingActivationCommand from update status>
 ```
-
-`--attestation-policy allow-unverified` exists only for an explicit manual
-product/security decision. Runs that use it are not considered unattended
-verified updates.
 
 After any update that may change bundled plugin content:
 

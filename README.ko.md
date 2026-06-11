@@ -33,8 +33,7 @@ Canary 빌드는 개발 중인 프리릴리즈 빌드이며 불안정할 수 있
 Install slidex canary build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the canary channel install instructions; keep canary separate from any existing production install.
 ```
 
-> 선택적 GitHub artifact attestation 검증을 포함한 전체 내부 설치 절차는
-> [INSTALL.md](INSTALL.md)에 있습니다.
+> 전체 내부 설치 절차는 [INSTALL.md](INSTALL.md)에 있습니다.
 
 ---
 

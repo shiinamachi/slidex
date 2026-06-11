@@ -36,8 +36,7 @@ changes:
 Install slidex canary build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the canary channel install instructions; keep canary separate from any existing production install.
 ```
 
-> See [INSTALL.md](INSTALL.md) for the full internal install reference,
-> including optional GitHub artifact attestation verification.
+> See [INSTALL.md](INSTALL.md) for the full internal install reference.
 
 ---
 

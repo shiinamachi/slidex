@@ -32,7 +32,5 @@ Install slidex canary build from https://github.com/shiinamachi/slidex. Read INS
 | 4 | Verify the SHA-256 checksum, install the CLI, and register the bundled Codex plugin |
 | 5 | Run the install verification commands from `INSTALL.md` and report the result |
 
-Default installation does not require GitHub CLI or GitHub login. If `gh` is
-already installed and authenticated, or if the user explicitly asks for stronger
-release provenance verification, `INSTALL.md` includes an optional GitHub
-artifact attestation check.
+Default installation does not require GitHub CLI or GitHub login. Release
+package integrity is checked with SHA-256 checksums.

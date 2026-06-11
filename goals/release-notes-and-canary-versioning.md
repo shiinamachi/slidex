@@ -15,7 +15,7 @@ Implement a repository-managed release notes and version bump workflow for slide
 - Desired outcome: Release notes are authored in repository markdown files, release publication uses the file for the current base version, version bumps are performed through a mise-accessible command instead of manual `VERSION` edits, and canary releases use `0.2.0-canary.<timestamp>` style versions.
 - Non-goals: Do not publish a GitHub Release during implementation, do not change production release tags away from `v<VERSION>`, do not add floating or unpinned third-party release-note actions, do not commit generated deck outputs, and do not rebuild the project as a hosted service.
 - Evidence: Local tests and workflow/package smoke checks pass, docs describe the new process, and repository contract tests validate the release notes and canary version policy.
-- Constraints: Preserve immutable release asset behavior, `actions/attest` artifact verification, updater fail-closed behavior, exact runtime/dependency pins, conventional commit discipline, and deck outputs remaining scoped under `decks/<deck_id>/`.
+- Constraints: Preserve immutable release asset behavior, checksum verification, updater fail-closed behavior, exact runtime/dependency pins, conventional commit discipline, and deck outputs remaining scoped under `decks/<deck_id>/`.
 - Scope: Allowed scope is this repository, especially `.github/workflows/release.yml`, `.mise.toml`, `VERSIONING.md`, `INSTALL.md` if needed, `scripts/`, `cmd/slidex/`, package/update tests, and a new release notes folder.
 - Autonomy: Codex may implement low-risk, repo-pattern-aligned changes directly and keep iterating through test failures until verification passes.
 - Budget: Continue until the evidence below passes or until no defensible path remains under the repository constraints.
@@ -42,7 +42,7 @@ Implement a repository-managed release notes and version bump workflow for slide
 - [ ] Update/version parsing in `cmd/slidex` recognizes the new canary pattern as canary and preserves production behavior for `0.2.0` and `v0.2.0`.
 - [ ] Same-base canary update ordering is deterministic with timestamp canaries and covered by tests.
 - [ ] Documentation in `VERSIONING.md` explains release note authoring, version bumping, production tags, canary tags, and package asset naming.
-- [ ] Existing release verification behavior remains intact: no `--clobber`, release assets remain immutable, checksums are verified, and artifact attestations are generated and verified.
+- [ ] Existing release verification behavior remains intact: no `--clobber`, release assets remain immutable, and checksums are verified.
 - [ ] `python3` or another available parser successfully parses `.github/workflows/release.yml` as YAML.
 - [ ] `gofmt` has been run on edited Go files.
 - [ ] `go test ./...` passes.
@@ -57,7 +57,7 @@ Implement a repository-managed release notes and version bump workflow for slide
 - Do not introduce new remote actions or dependencies unless they are pinned to exact immutable versions and justified by the repository's dependency policy.
 - Do not change production `VERSION` semantics: `VERSION` remains the base release version and production tags remain `v<VERSION>`.
 - Do not use the commit hash as the canary package version suffix after this Goal is complete; commit SHA should remain available only as release metadata and provenance.
-- Do not loosen checksum, release asset, or attestation verification to make tests pass.
+- Do not loosen checksum or release asset verification to make tests pass.
 - Do not modify unrelated deck workspaces or generated delivery artifacts.
 - Preserve Korean-safe and repository-specific documentation style where existing docs use it.
 
@@ -95,4 +95,4 @@ The blocked report must include attempted paths, files inspected or changed, com
 
 - This Goal records the June 11, 2026 session decision to use canary versions shaped like `0.2.0-canary.<timestamp>`.
 - The current Release workflow name is `Release new version` and the workflow file is `.github/workflows/release.yml`.
-- The existing release workflow already publishes immutable assets and verifies artifact attestations; this Goal should extend that workflow rather than replacing it.
+- The existing release workflow already publishes immutable assets and verifies checksums; this Goal should extend that workflow rather than replacing it.

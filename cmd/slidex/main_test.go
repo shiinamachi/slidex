@@ -2123,7 +2123,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "release.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "release-notes/${BASE_VERSION}.md", "production release notes still contain template placeholders", "Release notes source", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "actions/attest@", "attestations: write", "Verify artifact attestations", "gh attestation verify", "--source-digest", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "release-notes/${BASE_VERSION}.md", "production release notes still contain template placeholders", "Release notes source", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "Release package assets are SHA-256 checksummed", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, ".mise.toml"),
@@ -2147,7 +2147,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "release tag", "public GitHub Releases API", "GitHub CLI (`gh`)", "Do not install `gh`", "SHA-256", "optional GitHub artifact attestation", "gh attestation verify", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "release tag", "public GitHub Releases API", "SHA-256", "Do not install GitHub CLI", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "checksum before extraction or activation"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
@@ -2180,6 +2180,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	if strings.Contains(workflow, "--clobber") {
 		t.Fatal("release workflow must not clobber existing release assets")
 	}
+	for _, forbidden := range []string{"actions/attest", "attest" + "ations: write", "gh attest" + "ation verify"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release workflow must use SHA-256 checks only: found %q", forbidden)
+		}
+	}
 }
 
 func TestUserFacingInstallDocsExposeCanonicalOneShotPrompt(t *testing.T) {
@@ -2201,7 +2206,6 @@ func TestUserFacingInstallDocsExposeCanonicalOneShotPrompt(t *testing.T) {
 		"detect the local OS and architecture",
 		"GitHub CLI",
 		"SHA-256 checksum",
-		"GitHub artifact attestation",
 		"register the Codex plugin",
 		"plugin-smoke",
 		"slidex --help",

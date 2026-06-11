@@ -163,7 +163,8 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 일반 사용자에게 보여줄 설치 안내는 한 줄짜리 Codex App one-shot prompt만 사용합니다.
 실제 release package 설치, checksum 검증, Codex plugin setup 절차는 Codex가
 저장소 안의 `INSTALL.md`를 읽고 수행합니다. 기본 설치는 GitHub CLI 설치나
-GitHub 로그인을 요구하지 않습니다.
+GitHub 로그인을 요구하지 않으며, release package 무결성은 SHA-256 checksum으로
+검증합니다.
 
 Production channel:
 
@@ -197,10 +198,8 @@ renamed safely:
 <pendingActivationCommand from update status>
 ```
 
-기본 `update apply`는 release update 경로의 GitHub CLI artifact attestation
-검증을 요구합니다. 초기 Codex App 설치는 `INSTALL.md`의 checksum 기반 기본
-설치 경로를 사용하며, `gh`가 이미 준비되어 있거나 사용자가 강화 검증을 요청한
-경우에만 선택적 attestation 검증을 수행합니다.
+`update apply`는 release archive와 checksum 파일의 SHA-256 검증만 수행합니다.
+GitHub CLI 로그인은 사용하지 않습니다.
 
 개발자 source build:
 
