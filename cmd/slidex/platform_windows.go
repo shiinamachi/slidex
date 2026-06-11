@@ -392,6 +392,34 @@ func windowsAccessMaskGrantsPrivateFileAccess(mask windows.ACCESS_MASK) bool {
 	return mask&privateFileAccess != 0
 }
 
+func secureFileLinkCount(path string, info os.FileInfo) (uint64, bool, error) {
+	if info == nil || !info.Mode().IsRegular() {
+		return 0, false, nil
+	}
+	pathPtr, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, false, err
+	}
+	handle, err := windows.CreateFile(
+		pathPtr,
+		windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	defer windows.CloseHandle(handle)
+	var data windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &data); err != nil {
+		return 0, false, err
+	}
+	return uint64(data.NumberOfLinks), true, nil
+}
+
 func replaceFile(src, dst string) error {
 	srcPtr, err := syscall.UTF16PtrFromString(src)
 	if err != nil {

@@ -4838,29 +4838,50 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	mode := info.Mode().Perm()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dst)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	if err := verifySecureOpenFile(dst, out); err != nil {
-		_ = out.Close()
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	if err := applyPlatformFileMode(dst, mode); err != nil {
-		_ = out.Close()
+	if err := applyPlatformFileMode(tmpPath, mode); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+	if _, err := io.Copy(tmp, in); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	if err := out.Close(); err != nil {
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := rejectSymlinkAncestors(dir); err != nil {
+		return err
+	}
+	if err := rejectSecureWriteTarget(dst); err != nil {
+		return err
+	}
+	if err := replaceFile(tmpPath, dst); err != nil {
 		return err
 	}
 	if err := os.Chmod(dst, mode); err != nil {
 		return err
 	}
-	return applyPlatformFileMode(dst, mode)
+	if err := applyPlatformFileMode(dst, mode); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func mustAbs(path string) string {

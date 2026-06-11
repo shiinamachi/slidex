@@ -6675,14 +6675,10 @@ func secureWriteFile(path string, raw []byte, mode os.FileMode) error {
 }
 
 func openSecureTruncateFile(path string, mode os.FileMode) (*os.File, error) {
-	dir := filepath.Dir(path)
-	if err := ensureSecureDir(dir); err != nil {
+	if err := secureWriteFile(path, nil, mode); err != nil {
 		return nil, err
 	}
-	if err := rejectSecureWriteTarget(path); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	f, err := os.OpenFile(path, os.O_WRONLY, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -6702,7 +6698,7 @@ func openSecureAppendFile(path string, mode os.FileMode) (*os.File, error) {
 	if err := ensureSecureDir(dir); err != nil {
 		return nil, err
 	}
-	if err := rejectSecureWriteTarget(path); err != nil {
+	if err := rejectSecureInPlaceWriteTarget(path); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, mode)
@@ -6764,6 +6760,30 @@ func rejectSecureWriteTarget(path string) error {
 	}
 	if isSymlinkOrReparsePoint(path, info) {
 		return fmt.Errorf("secure write target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	return nil
+}
+
+func rejectSecureInPlaceWriteTarget(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("secure write target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	links, ok, err := secureFileLinkCount(path, info)
+	if err != nil {
+		return err
+	}
+	if ok && links > 1 {
+		return fmt.Errorf("secure write target must not be hardlinked: %s", filepath.ToSlash(path))
 	}
 	return nil
 }

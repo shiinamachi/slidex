@@ -3891,6 +3891,90 @@ func TestCopyFileRejectsSymlinkEndpoints(t *testing.T) {
 	}
 }
 
+func TestCopyFileReplacesHardlinkedDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.txt")
+	dst := filepath.Join(dir, "dst.txt")
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(src, []byte("src\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, dst)
+	if err := copyFile(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+	if got := readFileOrEmpty(dst); got != "src\n" {
+		t.Fatalf("copy destination = %q, want source contents", got)
+	}
+}
+
+func TestOpenSecureTruncateFileReplacesHardlinkedTarget(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	target := filepath.Join(dir, "target.log")
+	if err := os.WriteFile(outside, []byte("outside log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, target)
+	f, err := openSecureTruncateFile(target, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("target log\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside log\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+	if got := readFileOrEmpty(target); got != "target log\n" {
+		t.Fatalf("truncate target = %q, want new target contents", got)
+	}
+}
+
+func TestOpenSecureAppendFileRejectsHardlinkedTarget(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	target := filepath.Join(dir, "target.log")
+	if err := os.WriteFile(outside, []byte("outside log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, target)
+	f, err := openSecureAppendFile(target, 0o600)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("expected hardlinked append target to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "hardlink") {
+		t.Fatalf("expected hardlink rejection, got %v", err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside log\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+}
+
+func hardlinkOrSkip(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.Link(oldname, newname); err != nil {
+		t.Skipf("hardlink unavailable on this platform or filesystem: %v", err)
+	}
+}
+
 func TestReadHashesRejectSymlinkTargets(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(target, []byte("outside\n"), 0o644); err != nil {
