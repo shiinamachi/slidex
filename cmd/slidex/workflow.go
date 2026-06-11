@@ -500,9 +500,9 @@ func workbenchDoctorSnapshot() map[string]any {
 		"newDeckStartupRequiredSurface":       "react_wizard_workbench",
 		"deckBootstrapMCPBehavior":            "deprecated_alias_for_workbench_start",
 		"wizardCompletionAction":              "Complete & generate saves brief/draft/manifest and starts slidex run --deck decks/<deck_id> --non-interactive",
-		"browserOpenMechanism":                "manual_url_by_default_with_optional_codex_app_browser_plugin_navigation",
-		"browserOpenPreferredAction":          "packaged MCP suppresses automatic browser navigation with SLIDEX_BROWSER_OPEN=0; open workbench.url manually when needed",
-		"browserOpenFallback":                 "pass browserOpen=true or run slidex workbench start --browser-open=true to emit the Browser plugin navigation intent",
+		"browserOpenMechanism":                "agent_explicit_browser_plugin_instruction_by_default",
+		"browserOpenPreferredAction":          "packaged MCP sets SLIDEX_BROWSER_OPEN=agent so the agent explicitly uses @Browser without emitting the legacy browserOpen intent",
+		"browserOpenFallback":                 "pass browserOpenMode=manual to return only the URL, or browserOpen=true to emit the legacy browserOpen intent",
 		"browserOpenSuppressionEnv":           workbenchBrowserOpenEnv,
 		"directBrowserOpenRequestAPI":         "not_found_in_codex_app_server_0.138.0",
 		"directBrowserOpenRequestMethods":     capability["directBrowserOpenRequestMethods"],
@@ -3931,7 +3931,7 @@ func mcpToolCallResult(result any) map[string]any {
 		raw = []byte(fmt.Sprint(result))
 	}
 	text := string(raw)
-	if instruction := mcpBrowserOpenInstruction(result); instruction != "" {
+	if instruction := mcpWorkbenchOpenInstruction(result); instruction != "" {
 		text = instruction + "\n\n" + text
 	}
 	return map[string]any{
@@ -3941,6 +3941,17 @@ func mcpToolCallResult(result any) map[string]any {
 		}},
 		"structuredContent": result,
 	}
+}
+
+func mcpWorkbenchOpenInstruction(result any) string {
+	obj, ok := result.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if instruction, _ := obj["agentBrowserInstruction"].(string); strings.TrimSpace(instruction) != "" {
+		return instruction
+	}
+	return mcpBrowserOpenInstruction(result)
 }
 
 func mcpBrowserOpenInstruction(result any) string {
@@ -3977,6 +3988,7 @@ func mcpTool(name, description string) map[string]any {
 			"constraints":        map[string]any{"type": "string"},
 			"outputExpectations": map[string]any{"type": "string"},
 			"browserOpen":        map[string]any{"type": "boolean"},
+			"browserOpenMode":    map[string]any{"type": "string", "enum": []string{"structured", "agent", "manual"}},
 			"includeLogs":        map[string]any{"type": "boolean"},
 			"chrome":             map[string]any{"type": "string"},
 			"chromeNoSandbox":    map[string]any{"type": "boolean"},

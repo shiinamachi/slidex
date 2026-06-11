@@ -21,8 +21,8 @@ restart or pending-activation instruction.
 Do not use `slidex-run`, `slidex init`, manual directory creation, or direct
 `out/final_deck.html` authoring for new deck creation. If an MCP caller selects
 `deck.bootstrap`, treat it as a deprecated alias for `workbench.start`; it must
-return the same React Wizard startup response, including browser-open
-suppression when configured.
+return the same React Wizard startup response, including `agentBrowserInstruction`
+when configured.
 
 Required final gates are current rendered PNGs, `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`, `qa_report.md`, `delivery_summary.md`, and `slidex package --deck decks/<deck_id>`.
 

@@ -1,6 +1,6 @@
 {
   "name": "slidex",
-  "version": "0.1.0+codex.20260611111827",
+  "version": "0.1.0+codex.20260611133449",
   "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
   "author": {
     "name": "shiinamachi"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "slidex",
     "shortDescription": "Create slidex decks through a required local React Wizard.",
-    "longDescription": "slidex starts a loopback React Wizard workbench from Codex for every new deck, returns a local workbench URL without automatic browser navigation by default, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages. Plugin startup checks and applies verified production/canary release updates before the wizard is used, and the CLI embeds the default deck template so installed binaries can bootstrap new workbenches without a workspace-local template folder.",
+    "longDescription": "slidex starts a loopback React Wizard workbench from Codex for every new deck, tells the agent to open the local workbench URL with @Browser by default, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages. Plugin startup checks and applies verified production/canary release updates before the wizard is used, and the CLI embeds the default deck template so installed binaries can bootstrap new workbenches without a workspace-local template folder.",
     "developerName": "shiinamachi",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +19,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Start a new slidex deck, seed the React wizard, and return the local workbench URL.",
-      "Create deck <deck_id>, return the React wizard URL, and generate after I complete it.",
+      "Start a new slidex deck, seed the React wizard, and open it with @Browser.",
+      "Create deck <deck_id>, open the React wizard with @Browser, and generate after I complete it.",
       "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
     ]
   },

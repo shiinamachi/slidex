@@ -20,12 +20,12 @@ The Go CLI remains the implementation source of truth.
    wizard opens. If the response reports `autoUpdate.blocksWorkbench: true`,
    stop this thread and follow the returned restart or pending-activation
    instruction.
-5. Use the returned `http://127.0.0.1:<port>/workbench/<session>` URL only when
-   the user is ready to open the React Wizard. Packaged Codex MCP startup sets
-   `SLIDEX_BROWSER_OPEN=0` so the response does not emit an automatic Browser
-   plugin navigation intent. Pass `browserOpen=true` or run
-   `slidex workbench start --browser-open=true` only when automatic navigation
-   is explicitly desired.
+5. Follow the returned `agentBrowserInstruction`. Packaged Codex MCP startup
+   sets `SLIDEX_BROWSER_OPEN=agent`, so the response tells the agent to use
+   `@Browser` to open the `http://127.0.0.1:<port>/workbench/<session>` URL in
+   the Codex App in-app browser without emitting the legacy structured
+   `browserOpen` intent. Pass `browserOpenMode=manual` only when no browser
+   should be opened.
 6. Complete the local React Wizard. It asks for title, audience, decision goal,
    source notes, key messages, output expectations, and optional
    claim/constraint details.
@@ -149,10 +149,12 @@ actions, not a plugin workbench browser-open request contract.
 
 Therefore slidex uses a Canvas-style local workbench: the plugin starts a
 loopback frontend server and returns a local URL. Packaged Codex MCP config
-sets `SLIDEX_BROWSER_OPEN=0` to suppress automatic Browser plugin navigation by
-default; callers can pass `browserOpen=true` when they want the structured
-`browserOpen` intent. It does not claim or depend on a proprietary Canvas mount
-lifecycle.
+sets `SLIDEX_BROWSER_OPEN=agent`, which returns an `agentBrowserInstruction`
+telling Codex to use `@Browser` for the Codex App in-app browser while
+suppressing the legacy structured `browserOpen` intent. Callers can pass
+`browserOpenMode=manual` to return only the URL or `browserOpen=true` when they
+want the structured `browserOpen` intent. It does not claim or depend on a
+proprietary Canvas mount lifecycle.
 
 Official references:
 

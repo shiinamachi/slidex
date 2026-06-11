@@ -1898,13 +1898,13 @@ func TestAppServerSkillSmokeSchemaRequiresSavedInputProof(t *testing.T) {
 
 func TestWorkbenchDoctorSnapshotRecordsBrowserCapabilityDecision(t *testing.T) {
 	snapshot := workbenchDoctorSnapshot()
-	if snapshot["browserOpenMechanism"] != "manual_url_by_default_with_optional_codex_app_browser_plugin_navigation" {
+	if snapshot["browserOpenMechanism"] != "agent_explicit_browser_plugin_instruction_by_default" {
 		t.Fatalf("unexpected browser open mechanism: %#v", snapshot)
 	}
-	if snapshot["browserOpenPreferredAction"] != "packaged MCP suppresses automatic browser navigation with SLIDEX_BROWSER_OPEN=0; open workbench.url manually when needed" {
+	if snapshot["browserOpenPreferredAction"] != "packaged MCP sets SLIDEX_BROWSER_OPEN=agent so the agent explicitly uses @Browser without emitting the legacy browserOpen intent" {
 		t.Fatalf("unexpected browser preferred action: %#v", snapshot)
 	}
-	if snapshot["browserOpenFallback"] != "pass browserOpen=true or run slidex workbench start --browser-open=true to emit the Browser plugin navigation intent" {
+	if snapshot["browserOpenFallback"] != "pass browserOpenMode=manual to return only the URL, or browserOpen=true to emit the legacy browserOpen intent" {
 		t.Fatalf("unexpected browser fallback: %#v", snapshot)
 	}
 	if snapshot["browserOpenSuppressionEnv"] != workbenchBrowserOpenEnv {
@@ -2369,8 +2369,8 @@ func TestPluginMCPConfigSuppressesBrowserOpenByDefault(t *testing.T) {
 	servers, _ := config["mcpServers"].(map[string]any)
 	server, _ := servers["slidex"].(map[string]any)
 	env, _ := server["env"].(map[string]any)
-	if env[workbenchBrowserOpenEnv] != "0" {
-		t.Fatalf("plugin MCP config should suppress browser open by default, got %#v", env)
+	if env[workbenchBrowserOpenEnv] != "agent" {
+		t.Fatalf("plugin MCP config should request agent Browser use by default, got %#v", env)
 	}
 }
 

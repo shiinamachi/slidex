@@ -1176,15 +1176,15 @@ func TestPublicWorkbenchStatusIncludesBrowserOpenIntent(t *testing.T) {
 	if browserOpen["directClientRequestAPI"] != "not_available_in_codex_app_server_0.138.0" {
 		t.Fatalf("browserOpen should not claim direct App Server browser-open support: %#v", browserOpen)
 	}
-	if !strings.Contains(fmt.Sprint(status["browserOpenStrategy"]), "Browser plugin") {
-		t.Fatalf("browserOpenStrategy should mention Browser plugin: %#v", status["browserOpenStrategy"])
+	if !strings.Contains(fmt.Sprint(status["browserOpenStrategy"]), "@Browser") {
+		t.Fatalf("browserOpenStrategy should mention @Browser: %#v", status["browserOpenStrategy"])
 	}
 }
 
 func TestPublicWorkbenchStatusCanSuppressBrowserOpenIntent(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
-	status := publicWorkbenchStatusWithBrowserOpen(manifest, false)
+	status := publicWorkbenchStatusWithBrowserOpenMode(manifest, workbenchBrowserOpenManual)
 	if _, ok := status["browserOpen"].(map[string]any); ok {
 		t.Fatalf("suppressed status should not include browserOpen intent: %#v", status)
 	}
@@ -1194,28 +1194,44 @@ func TestPublicWorkbenchStatusCanSuppressBrowserOpenIntent(t *testing.T) {
 	if status["manualOpenURL"] != manifest.URL {
 		t.Fatalf("suppressed status should keep manual URL, got %#v", status["manualOpenURL"])
 	}
-	instruction := workbenchOpenInstruction(manifest, false)
+	instruction := workbenchOpenInstruction(manifest, workbenchBrowserOpenManual)
 	if strings.Contains(instruction, "@Browser") || !strings.Contains(instruction, "Browser navigation intent is suppressed") {
 		t.Fatalf("suppressed instruction should avoid automatic browser guidance: %s", instruction)
 	}
 }
 
-func TestWorkbenchBrowserOpenEnabledByEnv(t *testing.T) {
+func TestPublicWorkbenchStatusCanRequestAgentBrowserInstruction(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	status := publicWorkbenchStatusWithBrowserOpenMode(manifest, workbenchBrowserOpenAgent)
+	if _, ok := status["browserOpen"].(map[string]any); ok {
+		t.Fatalf("agent mode should not include legacy browserOpen intent: %#v", status)
+	}
+	if status["browserOpenSuppressed"] != true || status["manualOpenURL"] != manifest.URL {
+		t.Fatalf("agent mode should suppress legacy intent and keep URL: %#v", status)
+	}
+	instruction, _ := status["agentBrowserInstruction"].(string)
+	if !strings.Contains(instruction, "Use @Browser to open "+manifest.URL) || !strings.Contains(instruction, "Do not use Chrome") {
+		t.Fatalf("agent mode should explicitly instruct @Browser and avoid Chrome: %s", instruction)
+	}
+}
+
+func TestWorkbenchBrowserOpenModeByEnv(t *testing.T) {
 	t.Setenv(workbenchBrowserOpenEnv, "")
-	if !workbenchBrowserOpenEnabledByEnv() {
-		t.Fatal("browser open should default to enabled")
+	if got := workbenchBrowserOpenModeByEnv(); got != workbenchBrowserOpenStructured {
+		t.Fatalf("browser open should default to structured, got %s", got)
 	}
 	t.Setenv(workbenchBrowserOpenEnv, "0")
-	if workbenchBrowserOpenEnabledByEnv() {
-		t.Fatal("SLIDEX_BROWSER_OPEN=0 should disable browser open intent")
+	if got := workbenchBrowserOpenModeByEnv(); got != workbenchBrowserOpenManual {
+		t.Fatalf("SLIDEX_BROWSER_OPEN=0 should select manual mode, got %s", got)
 	}
-	t.Setenv(workbenchBrowserOpenEnv, "false")
-	if workbenchBrowserOpenEnabledByEnv() {
-		t.Fatal("SLIDEX_BROWSER_OPEN=false should disable browser open intent")
+	t.Setenv(workbenchBrowserOpenEnv, "agent")
+	if got := workbenchBrowserOpenModeByEnv(); got != workbenchBrowserOpenAgent {
+		t.Fatalf("SLIDEX_BROWSER_OPEN=agent should select agent mode, got %s", got)
 	}
 	t.Setenv(workbenchBrowserOpenEnv, "unexpected")
-	if !workbenchBrowserOpenEnabledByEnv() {
-		t.Fatal("invalid SLIDEX_BROWSER_OPEN should preserve enabled default")
+	if got := workbenchBrowserOpenModeByEnv(); got != workbenchBrowserOpenStructured {
+		t.Fatalf("invalid SLIDEX_BROWSER_OPEN should preserve structured default, got %s", got)
 	}
 }
 
@@ -2077,6 +2093,46 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(content[0]["text"]), "Open in Codex App Browser now:") {
 		t.Fatalf("suppressed tools/call content should not include automatic open instruction: %#v", content[0]["text"])
+	}
+
+	result, err = handleMCPRequest(map[string]any{
+		"method": "tools/call",
+		"params": map[string]any{
+			"name": "deck.bootstrap",
+			"arguments": map[string]any{
+				"workspace":       workspace,
+				"deckId":          "mcp-envelope",
+				"browserOpenMode": "agent",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok = result.(map[string]any)
+	if !ok {
+		t.Fatalf("agent tools/call result = %#v, want object", result)
+	}
+	structured, ok = payload["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent tools/call result missing structuredContent: %#v", payload)
+	}
+	if _, ok := structured["browserOpen"].(map[string]any); ok {
+		t.Fatalf("agent deck.bootstrap should not return legacy browserOpen intent: %#v", structured)
+	}
+	if structured["browserOpenMode"] != string(workbenchBrowserOpenAgent) || structured["workbenchURL"] != manifest.URL {
+		t.Fatalf("agent deck.bootstrap should preserve URL and mode: %#v", structured)
+	}
+	content, ok = payload["content"].([]map[string]any)
+	if !ok || len(content) != 1 || content[0]["type"] != "text" {
+		t.Fatalf("agent tools/call content is not a text envelope: %#v", payload["content"])
+	}
+	text := fmt.Sprint(content[0]["text"])
+	if !strings.HasPrefix(text, "Use @Browser to open "+manifest.URL) {
+		t.Fatalf("agent tools/call content should start with @Browser instruction: %#v", text)
+	}
+	if strings.Contains(text, "Open in Codex App Browser now:") {
+		t.Fatalf("agent tools/call content should not include legacy browser-open instruction: %#v", text)
 	}
 }
 

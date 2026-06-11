@@ -7,7 +7,7 @@
         "--stdio"
       ],
       "env": {
-        "SLIDEX_BROWSER_OPEN": "0"
+        "SLIDEX_BROWSER_OPEN": "agent"
       }
     }
   }

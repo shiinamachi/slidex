@@ -46,6 +46,14 @@ const (
 
 var deckIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
+type workbenchBrowserOpenMode string
+
+const (
+	workbenchBrowserOpenStructured workbenchBrowserOpenMode = "structured"
+	workbenchBrowserOpenAgent      workbenchBrowserOpenMode = "agent"
+	workbenchBrowserOpenManual     workbenchBrowserOpenMode = "manual"
+)
+
 type deckBootstrapResult struct {
 	Workspace string `json:"workspace"`
 	DeckID    string `json:"deckId"`
@@ -291,10 +299,13 @@ func runWorkbenchStart(args []string) error {
 	requiredClaims := fs.String("required-claims", "", "claims that need evidence review to seed into the React wizard draft")
 	constraints := fs.String("constraints", "", "constraints and exclusions to seed into the React wizard draft")
 	outputExpectations := fs.String("output-expectations", "", "output expectations to seed into the React wizard draft")
-	browserOpen := fs.Bool("browser-open", workbenchBrowserOpenEnabledByEnv(), "emit Codex App Browser navigation intent; set false to suppress automatic browser opening")
+	defaultBrowserMode := workbenchBrowserOpenModeByEnv()
+	browserOpen := fs.Bool("browser-open", defaultBrowserMode == workbenchBrowserOpenStructured, "emit legacy browserOpen navigation intent; set false to suppress automatic browser opening")
+	browserOpenMode := fs.String("browser-open-mode", string(defaultBrowserMode), "browser opening mode: structured, agent, or manual")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	mode := browserOpenModeFromFlags(fs, *browserOpen, *browserOpenMode, defaultBrowserMode)
 	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
 	if autoUpdate.BlocksWorkbench {
 		return printJSON(map[string]any{
@@ -323,8 +334,8 @@ func runWorkbenchStart(args []string) error {
 		"toolName":                toolName,
 		"status":                  manifest.Status,
 		"deck":                    result,
-		"workbench":               publicWorkbenchStatusWithBrowserOpen(manifest, *browserOpen),
-		"openInstruction":         workbenchOpenInstruction(manifest, *browserOpen),
+		"workbench":               publicWorkbenchStatusWithBrowserOpenMode(manifest, mode),
+		"openInstruction":         workbenchOpenInstruction(manifest, mode),
 		"browserOpenStrategy":     manifest.BrowserOpenStrategy,
 		"autoUpdate":              autoUpdate,
 		"proprietaryCanvasAPI":    "not_used",
@@ -335,13 +346,23 @@ func runWorkbenchStart(args []string) error {
 		"supportedURLMechanism":   "Codex in-app browser can open local URLs by Browser plugin navigation, URL click, or manual navigation.",
 		"unsupportedURLMechanism": "No Codex 0.138.0 App Server client request method was found for plugin-owned automatic browser opening.",
 	}
-	if *browserOpen {
+	addWorkbenchBrowserOpenFields(response, manifest, mode)
+	return printJSON(response)
+}
+
+func addWorkbenchBrowserOpenFields(response map[string]any, manifest workbenchManifest, mode workbenchBrowserOpenMode) {
+	response["browserOpenMode"] = string(mode)
+	switch mode {
+	case workbenchBrowserOpenStructured:
 		response["browserOpen"] = workbenchBrowserOpenIntent(manifest)
-	} else {
+	case workbenchBrowserOpenAgent:
+		response["browserOpenSuppressed"] = true
+		response["workbenchURL"] = manifest.URL
+		response["agentBrowserInstruction"] = workbenchAgentBrowserInstruction(manifest)
+	default:
 		response["browserOpenSuppressed"] = true
 		response["workbenchURL"] = manifest.URL
 	}
-	return printJSON(response)
 }
 
 func runWorkbenchServe(args []string) error {
@@ -527,7 +548,7 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
-	browserOpen := boolArg(args, workbenchBrowserOpenEnabledByEnv(), "browserOpen", "browser_open")
+	mode := workbenchBrowserOpenModeArg(args, workbenchBrowserOpenModeByEnv())
 	autoUpdate := runWorkbenchAutoUpdatePreflight(context.Background())
 	if autoUpdate.BlocksWorkbench {
 		return map[string]any{
@@ -554,19 +575,14 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	}
 	response := map[string]any{
 		"deck":                 result,
-		"workbench":            publicWorkbenchStatusWithBrowserOpen(manifest, browserOpen),
+		"workbench":            publicWorkbenchStatusWithBrowserOpenMode(manifest, mode),
 		"startedNew":           startedNew,
 		"reusedExisting":       !startedNew,
-		"openInstruction":      workbenchOpenInstruction(manifest, browserOpen),
+		"openInstruction":      workbenchOpenInstruction(manifest, mode),
 		"autoUpdate":           autoUpdate,
 		"proprietaryCanvasAPI": "not_used",
 	}
-	if browserOpen {
-		response["browserOpen"] = workbenchBrowserOpenIntent(manifest)
-	} else {
-		response["browserOpenSuppressed"] = true
-		response["workbenchURL"] = manifest.URL
-	}
+	addWorkbenchBrowserOpenFields(response, manifest, mode)
 	return response, nil
 }
 
@@ -724,43 +740,77 @@ func stringArg(args map[string]any, keys ...string) string {
 	return ""
 }
 
-func boolArg(args map[string]any, fallback bool, keys ...string) bool {
-	for _, key := range keys {
+func workbenchBrowserOpenModeByEnv() workbenchBrowserOpenMode {
+	raw := strings.TrimSpace(os.Getenv(workbenchBrowserOpenEnv))
+	if raw == "" {
+		return workbenchBrowserOpenStructured
+	}
+	if mode, ok := parseWorkbenchBrowserOpenMode(raw); ok {
+		return mode
+	}
+	return workbenchBrowserOpenStructured
+}
+
+func browserOpenModeFromFlags(fs *flag.FlagSet, browserOpen bool, rawMode string, fallback workbenchBrowserOpenMode) workbenchBrowserOpenMode {
+	explicitBrowserOpen := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "browser-open" {
+			explicitBrowserOpen = true
+		}
+	})
+	if explicitBrowserOpen {
+		if browserOpen {
+			return workbenchBrowserOpenStructured
+		}
+		return workbenchBrowserOpenManual
+	}
+	if mode, ok := parseWorkbenchBrowserOpenMode(rawMode); ok {
+		return mode
+	}
+	return fallback
+}
+
+func workbenchBrowserOpenModeArg(args map[string]any, fallback workbenchBrowserOpenMode) workbenchBrowserOpenMode {
+	if value, ok := args["browserOpenMode"]; ok {
+		if mode, ok := parseWorkbenchBrowserOpenMode(fmt.Sprint(value)); ok {
+			return mode
+		}
+	}
+	if value, ok := args["browser_open_mode"]; ok {
+		if mode, ok := parseWorkbenchBrowserOpenMode(fmt.Sprint(value)); ok {
+			return mode
+		}
+	}
+	for _, key := range []string{"browserOpen", "browser_open"} {
 		value, ok := args[key]
 		if !ok {
 			continue
 		}
 		switch typed := value.(type) {
 		case bool:
-			return typed
+			if typed {
+				return workbenchBrowserOpenStructured
+			}
+			return workbenchBrowserOpenManual
 		case string:
-			if parsed, ok := parseWorkbenchBool(typed); ok {
-				return parsed
+			if mode, ok := parseWorkbenchBrowserOpenMode(typed); ok {
+				return mode
 			}
 		}
 	}
 	return fallback
 }
 
-func workbenchBrowserOpenEnabledByEnv() bool {
-	raw := strings.TrimSpace(os.Getenv(workbenchBrowserOpenEnv))
-	if raw == "" {
-		return true
-	}
-	if parsed, ok := parseWorkbenchBool(raw); ok {
-		return parsed
-	}
-	return true
-}
-
-func parseWorkbenchBool(raw string) (bool, bool) {
+func parseWorkbenchBrowserOpenMode(raw string) (workbenchBrowserOpenMode, bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true, true
-	case "0", "false", "f", "no", "n", "off":
-		return false, true
+	case "1", "true", "t", "yes", "y", "on", "structured", "intent", "browseropen", "browser_open":
+		return workbenchBrowserOpenStructured, true
+	case "agent", "@browser", "browser", "browser_plugin", "browser-plugin", "browser_plugin_instruction":
+		return workbenchBrowserOpenAgent, true
+	case "0", "false", "f", "no", "n", "off", "manual", "none", "suppress", "suppressed":
+		return workbenchBrowserOpenManual, true
 	default:
-		return false, false
+		return workbenchBrowserOpenStructured, false
 	}
 }
 
@@ -2366,7 +2416,7 @@ func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid
 		ReadinessPath:       "/readyz",
 		CreatedAt:           now,
 		UpdatedAt:           now,
-		BrowserOpenStrategy: "Manual URL by default for packaged Codex MCP; optional Browser plugin or @Browser navigation is available when browserOpen=true. No proprietary Canvas mount API is used.",
+		BrowserOpenStrategy: "Packaged Codex MCP returns agentBrowserInstruction by default so the agent explicitly uses @Browser; legacy browserOpen intent is optional. No proprietary Canvas mount API is used.",
 		Notes: []string{
 			"Server binds to 127.0.0.1 only.",
 			"Mutating routes require X-Slidex-Workbench-Token and same-origin validation.",
@@ -2913,10 +2963,17 @@ func validateWorkbenchBrowserEvidenceInput(input workbenchBrowserEvidenceInput, 
 }
 
 func publicWorkbenchStatus(manifest workbenchManifest) map[string]any {
-	return publicWorkbenchStatusWithBrowserOpen(manifest, true)
+	return publicWorkbenchStatusWithBrowserOpenMode(manifest, workbenchBrowserOpenStructured)
 }
 
 func publicWorkbenchStatusWithBrowserOpen(manifest workbenchManifest, browserOpen bool) map[string]any {
+	if browserOpen {
+		return publicWorkbenchStatusWithBrowserOpenMode(manifest, workbenchBrowserOpenStructured)
+	}
+	return publicWorkbenchStatusWithBrowserOpenMode(manifest, workbenchBrowserOpenManual)
+}
+
+func publicWorkbenchStatusWithBrowserOpenMode(manifest workbenchManifest, mode workbenchBrowserOpenMode) map[string]any {
 	update := updateStatusSnapshot()
 	status := map[string]any{
 		"status":              manifest.Status,
@@ -2943,9 +3000,15 @@ func publicWorkbenchStatusWithBrowserOpen(manifest workbenchManifest, browserOpe
 		"update":              update,
 		"statusBanners":       update["banners"],
 	}
-	if browserOpen {
+	status["browserOpenMode"] = string(mode)
+	switch mode {
+	case workbenchBrowserOpenStructured:
 		status["browserOpen"] = workbenchBrowserOpenIntent(manifest)
-	} else {
+	case workbenchBrowserOpenAgent:
+		status["browserOpenSuppressed"] = true
+		status["manualOpenURL"] = manifest.URL
+		status["agentBrowserInstruction"] = workbenchAgentBrowserInstruction(manifest)
+	default:
 		status["browserOpenSuppressed"] = true
 		status["manualOpenURL"] = manifest.URL
 	}
@@ -2960,14 +3023,24 @@ func publicWorkbenchStatusWithBrowserOpen(manifest workbenchManifest, browserOpe
 	return status
 }
 
-func workbenchOpenInstruction(manifest workbenchManifest, browserOpen bool) string {
+func workbenchOpenInstruction(manifest workbenchManifest, mode workbenchBrowserOpenMode) string {
 	if manifest.URL == "" {
 		return "Open the slidex workbench in the Codex App in-app browser after workbench.url is available."
 	}
-	if !browserOpen {
+	if mode == workbenchBrowserOpenAgent {
+		return workbenchAgentBrowserInstruction(manifest)
+	}
+	if mode == workbenchBrowserOpenManual {
 		return "Workbench is running at " + manifest.URL + ". Browser navigation intent is suppressed; open the URL manually only when you need the React Wizard."
 	}
 	return "Immediately open " + manifest.URL + " in the Codex App in-app browser using the Browser plugin or @Browser when available; if Browser use is unavailable, click the URL or navigate manually."
+}
+
+func workbenchAgentBrowserInstruction(manifest workbenchManifest) string {
+	if manifest.URL == "" {
+		return "Use @Browser to open the slidex workbench URL after workbench.url is available. Do not use Chrome or an external browser for this startup."
+	}
+	return "Use @Browser to open " + manifest.URL + " in the Codex App in-app browser. Do not use Chrome or an external browser for this startup."
 }
 
 func workbenchBrowserOpenIntent(manifest workbenchManifest) map[string]any {
