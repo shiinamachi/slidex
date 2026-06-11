@@ -4636,8 +4636,8 @@ func regularFileInfoForRead(path string) (os.FileInfo, error) {
 	if isSymlinkOrReparsePoint(path, info) {
 		return nil, fmt.Errorf("read target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
 	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("read target must be a file: %s", filepath.ToSlash(path))
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("read target must be a regular file: %s", filepath.ToSlash(path))
 	}
 	return info, nil
 }
@@ -4804,6 +4804,9 @@ func copyFile(src, dst string) error {
 	if isSymlinkOrReparsePoint(src, srcInfo) {
 		return fmt.Errorf("copy source must not be a symlink or reparse point: %s", filepath.ToSlash(src))
 	}
+	if !srcInfo.Mode().IsRegular() {
+		return fmt.Errorf("copy source must be a regular file: %s", filepath.ToSlash(src))
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -4815,6 +4818,9 @@ func copyFile(src, dst string) error {
 	}
 	if !os.SameFile(srcInfo, info) {
 		return fmt.Errorf("copy source changed while opening: %s", filepath.ToSlash(src))
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("copy source must be a regular file: %s", filepath.ToSlash(src))
 	}
 	if err := rejectSymlinkAncestors(filepath.Dir(dst)); err != nil {
 		return err

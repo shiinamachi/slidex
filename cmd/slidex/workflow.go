@@ -6819,7 +6819,7 @@ func rejectSecureInPlaceWriteTarget(path string) error {
 		return fmt.Errorf("secure write target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
 	}
 	if !info.Mode().IsRegular() {
-		return nil
+		return fmt.Errorf("secure write target must be a regular file: %s", filepath.ToSlash(path))
 	}
 	links, ok, err := secureFileLinkCount(path, info)
 	if err != nil {
