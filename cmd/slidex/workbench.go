@@ -1367,14 +1367,16 @@ func seedWorkbenchDraft(deckAbs string, manifest workbenchManifest, input workbe
 	if err != nil {
 		return manifest, err
 	}
-	manifest.Status = "draft"
-	manifest.DraftSavedAt = draft.UpdatedAt
-	manifest.DraftPath = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName))
-	manifest.UpdatedAt = draft.UpdatedAt
-	if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
+	updated, err := updateWorkbenchManifest(deckAbs, manifest, func(current *workbenchManifest) {
+		current.Status = "draft"
+		current.DraftSavedAt = draft.UpdatedAt
+		current.DraftPath = filepath.ToSlash(filepath.Join(deckAbs, "out", workbenchDraftName))
+		current.UpdatedAt = draft.UpdatedAt
+	})
+	if err != nil {
 		return manifest, err
 	}
-	return manifest, nil
+	return updated, nil
 }
 
 type workbenchPortRetryExhaustedError struct {

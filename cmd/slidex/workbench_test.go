@@ -810,6 +810,41 @@ func TestSeedWorkbenchDraftPersistsInitialRequest(t *testing.T) {
 	}
 }
 
+func TestSeedWorkbenchDraftPreservesFreshManifestFields(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	fresh := stale
+	fresh.Notes = []string{"fresh server note"}
+	fresh.GenerationStatus = "running"
+	if err := writeWorkbenchManifest(deck, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := seedWorkbenchDraft(deck, stale, workbenchSaveInput{
+		InitialRequest: "Create a launch review.",
+		Title:          "Launch review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "draft" || updated.DraftSavedAt == "" {
+		t.Fatalf("seeded manifest should record draft status: %#v", updated)
+	}
+	if len(updated.Notes) != 1 || updated.Notes[0] != "fresh server note" || updated.GenerationStatus != "running" {
+		t.Fatalf("seeded manifest clobbered fresh fields: %#v", updated)
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing")
+	}
+	if len(recorded.Notes) != 1 || recorded.Notes[0] != "fresh server note" || recorded.GenerationStatus != "running" {
+		t.Fatalf("recorded manifest clobbered fresh fields: %#v", recorded)
+	}
+}
+
 func TestWorkbenchHTMLRendersRestartRequiredBannerWithoutBlockingForm(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
