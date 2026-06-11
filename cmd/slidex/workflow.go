@@ -6852,10 +6852,8 @@ func isSensitiveJSONKey(key string) bool {
 	if normalized == "" {
 		return false
 	}
-	for _, fragment := range []string{"sha256", "hash", "redacted", "usage", "budget", "count", "window"} {
-		if strings.Contains(normalized, fragment) {
-			return false
-		}
+	if isSafeTokenMetadataKey(normalized) {
+		return false
 	}
 	switch normalized {
 	case "token", "accesstoken", "refreshtoken", "idtoken", "authtoken", "bearertoken", "capabilitytoken", "sessiontoken", "csrftoken", "shutdowntoken", "authorization", "authorizationheader", "password", "passwd":
@@ -6864,7 +6862,17 @@ func isSensitiveJSONKey(key string) bool {
 	return strings.Contains(normalized, "apikey") ||
 		strings.Contains(normalized, "secret") ||
 		strings.Contains(normalized, "cookie") ||
-		strings.HasSuffix(normalized, "password")
+		strings.Contains(normalized, "password") ||
+		strings.Contains(normalized, "token")
+}
+
+func isSafeTokenMetadataKey(normalized string) bool {
+	switch normalized {
+	case "tokensha256", "tokenhash", "tokenusage", "tokenbudget", "tokencount", "tokenwindow", "tokenredacted":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeJSONKey(key string) string {
