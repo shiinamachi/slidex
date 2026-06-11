@@ -1158,8 +1158,6 @@ func TestVerifyReleaseAttestationRunsRequiredGitHubChecks(t *testing.T) {
 	}
 	log := readFileOrEmpty(logPath)
 	wants := []string{
-		"release verify v0.2.0 --repo shiinamachi/slidex",
-		"release verify-asset v0.2.0 " + archivePath + " --repo shiinamachi/slidex",
 		"attestation verify " + archivePath + " --repo shiinamachi/slidex --cert-oidc-issuer https://token.actions.githubusercontent.com --cert-identity-regex",
 	}
 	last := -1

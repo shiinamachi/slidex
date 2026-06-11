@@ -2104,7 +2104,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "GitHub CLI (`gh`)", "SHA-256", "GitHub artifact attestation", "gh release verify", "gh attestation verify", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "GitHub CLI (`gh`)", "SHA-256", "GitHub artifact attestation", "gh attestation verify", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),

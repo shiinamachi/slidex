@@ -28,8 +28,8 @@ Store the chosen extension as `EXT` (`tar.gz` or `zip`).
 
 ## Step 2 — Resolve the latest release tag
 
-Verified release installs require GitHub CLI (`gh`) because release integrity and
-artifact attestations are verified with GitHub CLI commands before the package is
+Verified release installs require GitHub CLI (`gh`) because GitHub artifact
+attestations are verified with GitHub CLI commands before the package is
 trusted. If `gh` is unavailable or unauthenticated, stop and report that a
 verified release install cannot be completed.
 
@@ -140,11 +140,9 @@ Write-Host "SHA-256 verified."
 
 > **If the checksum does not match, stop immediately and report the failure.**
 
-Then verify GitHub release integrity and artifact attestation:
+Then verify the GitHub artifact attestation:
 
 ```bash
-gh release verify "$TAG" --repo shiinamachi/slidex
-gh release verify-asset "$TAG" "$PACKAGE_FILE" --repo shiinamachi/slidex
 gh attestation verify "$PACKAGE_FILE" \
   --repo shiinamachi/slidex \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
@@ -327,11 +325,10 @@ the verified bundle as one unit:
 slidex update apply --yes --json
 ```
 
-By default, `update apply` requires GitHub CLI release integrity and artifact
-attestation verification. It runs documented GitHub surfaces equivalent to
-`gh release verify`, `gh release verify-asset`, and `gh attestation verify` for
-the selected release asset. If this verification cannot be completed, the update
-fails before activation.
+By default, `update apply` requires GitHub CLI artifact attestation
+verification for the selected release asset. It runs documented GitHub surfaces
+equivalent to `gh attestation verify`. If this verification cannot be
+completed, the update fails before activation.
 
 For a manually downloaded archive, pass the local files explicitly:
 

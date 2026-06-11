@@ -74,7 +74,7 @@ files is a repository-health failure.
 `.slidex/install.json` when running from a release package. Source checkouts and
 `go install` development binaries report `local-development` and disable
 automatic release updates. `slidex update apply` validates the candidate bundle,
-requires release integrity and artifact attestation verification by default,
+requires artifact attestation verification by default,
 stages activation, preserves a backup or Windows pending handoff, and marks
 Codex plugin restart verification as required when bundled plugin content may
 have changed. `--attestation-policy allow-unverified` is an explicit manual
