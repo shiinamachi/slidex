@@ -8,6 +8,9 @@ The Go CLI remains the implementation source of truth.
 1. Install or enable the local `slidex` plugin.
 2. Invoke `@slidex` or `slidex-start` in a Codex App local/worktree thread.
 3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
+   New deck creation must go through this React Wizard path; do not fall back to
+   `slidex init`, manual directory creation, or direct `out/final_deck.html`
+   authoring.
    When the user invocation contains usable details, pass them as seed fields
    such as `--initial-request`, `--title`, `--audience`, `--decision-goal`,
    `--source-notes`, `--key-messages`, `--required-claims`, `--constraints`,
@@ -78,6 +81,11 @@ slidex workbench verify-evidence --deck-id <deck_id> --require-screenshot
 The workbench binds to `127.0.0.1`, uses session-scoped URLs, requires
 `X-Slidex-Workbench-Token` for writes, and records only token hashes in
 manifests.
+
+The CLI embeds the default `decks/_template`, so installed binaries can start a
+new workbench even when the active user workspace does not contain a template
+folder. The MCP `deck.bootstrap` tool is kept only as a deprecated alias and
+returns the same React Wizard browser-open intent as `workbench.start`.
 
 Because the plugin MCP configuration runs `slidex` from `PATH`, local source
 checkout plugin invocation tests should install the current repository binary:

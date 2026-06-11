@@ -213,7 +213,7 @@ func runInit(args []string) error {
 
 func parseInitArgs(args []string) (string, string, error) {
 	deckID := ""
-	fromTemplate := "decks/_template"
+	fromTemplate := defaultDeckTemplatePath
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -495,6 +495,9 @@ func workbenchDoctorSnapshot() map[string]any {
 		"status":                              "available",
 		"command":                             "slidex workbench start --deck-id <deck_id>",
 		"frontend":                            "local_react_wizard",
+		"defaultTemplate":                     "embedded_decks_template_with_filesystem_override",
+		"newDeckStartupRequiredSurface":       "react_wizard_workbench",
+		"deckBootstrapMCPBehavior":            "deprecated_alias_for_workbench_start",
 		"wizardCompletionAction":              "Complete & generate saves brief/draft/manifest and starts slidex run --deck decks/<deck_id> --non-interactive",
 		"browserOpenMechanism":                "codex_app_browser_plugin_navigation_preferred_with_url_click_or_manual_fallback",
 		"browserOpenPreferredAction":          "use @Browser or the Browser plugin to navigate to workbench.url immediately when available",
@@ -767,7 +770,7 @@ func doctorAppServerSkillSmokeEvidence(deckAbs string, manifest workbenchManifes
 		SkillFound:                      true,
 		PluginReadOK:                    true,
 		TurnSandboxPolicy:               "dangerFullAccess",
-		WorkbenchCommand:                appServerSkillSmokeWorkbenchCommand(workspace, manifest.DeckID, filepath.Join(workspace, "decks", "_template")),
+		WorkbenchCommand:                appServerSkillSmokeWorkbenchCommand(workspace, manifest.DeckID),
 		PromptSha256:                    strings.Repeat("d", 64),
 		EventCount:                      1,
 		DeckCreated:                     true,
@@ -3895,7 +3898,7 @@ func handleMCPRequest(req map[string]any) (any, error) {
 		return map[string]any{"protocolVersion": "2024-11-05", "serverInfo": map[string]any{"name": "slidex", "version": toolVersion}, "capabilities": map[string]any{"tools": map[string]any{}}}, nil
 	case "tools/list":
 		return map[string]any{"tools": []map[string]any{
-			mcpTool("deck.bootstrap", "Create a deck workspace under decks/<deck_id>"),
+			mcpTool("deck.bootstrap", "Deprecated alias for new deck startup; starts the React wizard workbench and returns a workbench URL"),
 			mcpTool("deck.inspect", "Inspect a deck workspace and expected files"),
 			mcpTool("workbench.start", "Start or reuse the loopback slidex React wizard workbench"),
 			mcpTool("workbench.status", "Report the loopback slidex workbench status"),

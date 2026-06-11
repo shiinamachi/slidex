@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"image/color"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,83 @@ func TestBootstrapDeckUsesRepoTemplateForExternalWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "decks", "external-template", "brief.md")); err != nil {
 		t.Fatalf("template brief was not copied from repo fallback: %v", err)
+	}
+}
+
+func TestBootstrapDeckUsesEmbeddedTemplateWhenDefaultTemplateMissing(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(t.TempDir())
+	result, err := bootstrapDeckWorkspace(workspace, "embedded-template", defaultDeckTemplatePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "created" {
+		t.Fatalf("status = %q, want created", result.Status)
+	}
+	brief := readFileOrEmpty(filepath.Join(workspace, "decks", "embedded-template", "brief.md"))
+	if !strings.Contains(brief, "# Business Document Brief") {
+		t.Fatalf("embedded template brief was not copied: %q", brief)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "decks", "_template")); !os.IsNotExist(err) {
+		t.Fatalf("test workspace should not need a filesystem template, stat err=%v", err)
+	}
+}
+
+func TestEmbeddedDefaultTemplateMatchesRepoTemplate(t *testing.T) {
+	root := repoRootForTest(t)
+	repoTemplate := filepath.Join(root, defaultDeckTemplatePath)
+	repoFiles := map[string]string{}
+	if err := filepath.WalkDir(repoTemplate, func(filePath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(repoTemplate, filePath)
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+		repoFiles[filepath.ToSlash(rel)] = string(raw)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	embeddedFiles := map[string]string{}
+	if err := fs.WalkDir(embeddedTemplateAssets, embeddedTemplateRoot, func(assetPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(filepath.FromSlash(embeddedTemplateRoot), filepath.FromSlash(assetPath))
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		raw, err := embeddedTemplateAssets.ReadFile(assetPath)
+		if err != nil {
+			return err
+		}
+		embeddedFiles[rel] = string(raw)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(embeddedFiles) != len(repoFiles) {
+		t.Fatalf("embedded template file count = %d, want %d; embedded=%v repo=%v", len(embeddedFiles), len(repoFiles), embeddedFiles, repoFiles)
+	}
+	for rel, want := range repoFiles {
+		if got, ok := embeddedFiles[rel]; !ok || got != want {
+			t.Fatalf("embedded template %s drifted from repo template", rel)
+		}
 	}
 }
 
@@ -1769,14 +1847,41 @@ func TestWorkbenchBrowserEvidenceRequiresCurrentSavedArtifacts(t *testing.T) {
 }
 
 func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
-	root := repoRootForTest(t)
 	workspace := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, "decks"), 0o755); err != nil {
+	deck := filepath.Join(workspace, "decks", "mcp-envelope")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyDir(filepath.Join(root, "decks", "_template"), filepath.Join(workspace, "decks", "_template")); err != nil {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
 		t.Fatal(err)
 	}
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", port, os.Getpid(), "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		_ = writeJSONResponse(w, map[string]any{
+			"status":    "ready",
+			"sessionId": manifest.SessionID,
+			"deckDir":   manifest.DeckDir,
+			"pid":       manifest.PID,
+		})
+	})
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
 	result, err := handleMCPRequest(map[string]any{
 		"method": "tools/call",
 		"params": map[string]any{
@@ -1794,11 +1899,15 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools/call result = %#v, want object", result)
 	}
-	if _, ok := payload["structuredContent"]; !ok {
+	structured, ok := payload["structuredContent"].(map[string]any)
+	if !ok {
 		t.Fatalf("tools/call result missing structuredContent: %#v", payload)
 	}
+	if _, ok := structured["browserOpen"].(map[string]any); !ok {
+		t.Fatalf("deck.bootstrap should return React wizard browserOpen intent: %#v", structured)
+	}
 	content, ok := payload["content"].([]map[string]any)
-	if !ok || len(content) != 1 || content[0]["type"] != "text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "mcp-envelope") {
+	if !ok || len(content) != 1 || content[0]["type"] != "text" || !strings.Contains(fmt.Sprint(content[0]["text"]), "Open in Codex App Browser now:") {
 		t.Fatalf("tools/call content is not a text envelope: %#v", payload["content"])
 	}
 }

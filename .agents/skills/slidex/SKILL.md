@@ -5,7 +5,13 @@ description: Use slidex for Codex Plugin workbench startup and deterministic HTM
 
 # slidex
 
-Use the repository CLI as the canonical implementation surface. For a new deck, the Codex Plugin front door is `slidex workbench start --deck-id <deck_id>`, which creates or selects `decks/<deck_id>/`, starts a `127.0.0.1` React wizard workbench server, and returns a local URL for the Codex App in-app browser.
+Use the repository CLI as the canonical implementation surface. For a new deck,
+the Codex Plugin front door is always `slidex workbench start --deck-id
+<deck_id>`, which creates or selects `decks/<deck_id>/`, starts a `127.0.0.1`
+React wizard workbench server, and returns a local URL for the Codex App
+in-app browser. The default `decks/_template` is embedded in the CLI binary, so
+missing workspace template files are not a reason to create deck folders
+manually.
 
 ## Workflow
 
@@ -29,6 +35,7 @@ Use the repository CLI as the canonical implementation surface. For a new deck, 
 - Windows, Linux, and macOS are supported targets. Let the CLI choose platform-native defaults, including App Server loopback fallback when Unix socket paths are too long; use `CHROME_BIN` or `--chrome` only when local browser discovery fails.
 - Material claims must be sourced, user-confirmed, or labeled as assumptions.
 - Keep deck materials scoped under the active `decks/<deck_id>/` workspace.
+- Do not use `slidex-run`, `slidex init`, manual directory creation, or direct `out/final_deck.html` authoring for new deck creation; route new deck startup through the React Wizard every time.
 - Prefer `slidex codex doctor` and `slidex codex schema refresh` for Codex CLI/App Server compatibility checks.
 - Treat `workbench.browserOpen.preferredAction=browser_plugin_navigation` as the startup intent: try Browser plugin navigation first, then fall back to URL click/manual navigation.
 - Do not claim a proprietary plugin-owned Canvas mount API exists; the supported Canvas-style path is a loopback React workbench URL opened in the Codex App browser/work surface.

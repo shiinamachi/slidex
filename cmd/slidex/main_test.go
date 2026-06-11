@@ -1746,12 +1746,12 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 		t.Fatal("missing skill should not be found")
 	}
 
-	command := appServerSkillSmokeWorkbenchCommandForOS("linux", "/tmp/slidex workspace", "demo", "/repo/decks/_template")
+	command := appServerSkillSmokeWorkbenchCommandForOS("linux", "/tmp/slidex workspace", "demo")
 	if !strings.Contains(command, "'/tmp/slidex workspace'") || !strings.Contains(command, "--deck-id demo") {
 		t.Fatalf("command was not shell quoted as expected: %s", command)
 	}
 	dangerousWindowsPath := `C:\Users\Me\slidex %workspace%!^&() O'Hare`
-	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", dangerousWindowsPath, "demo", `C:\repo\decks\_template`)
+	windowsCommand := appServerSkillSmokeWorkbenchCommandForOS("windows", dangerousWindowsPath, "demo")
 	if !strings.HasPrefix(windowsCommand, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ") {
 		t.Fatalf("windows command should force encoded PowerShell execution: %s", windowsCommand)
 	}
@@ -1759,7 +1759,7 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 		t.Fatalf("windows command should not expose shell-metacharacter path outside encoded payload: %s", windowsCommand)
 	}
 	windowsScript := decodeWindowsPowerShellCommandForTest(t, windowsCommand)
-	for _, want := range []string{"& 'slidex'", "'workbench'", "'start'", "'--workspace'", "'C:\\Users\\Me\\slidex %workspace%!^&() O''Hare'", "'--from-template'", "'C:\\repo\\decks\\_template'"} {
+	for _, want := range []string{"& 'slidex'", "'workbench'", "'start'", "'--workspace'", "'C:\\Users\\Me\\slidex %workspace%!^&() O''Hare'", "'--deck-id'", "'demo'"} {
 		if !strings.Contains(windowsScript, want) {
 			t.Fatalf("decoded windows command missing %q:\n%s", want, windowsScript)
 		}

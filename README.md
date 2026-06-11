@@ -208,12 +208,14 @@ slidex workbench start --deck-id customer-retention
 Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
 Codex App browser. Plugin startup emits a Browser-first `browserOpen` intent:
 Codex should use the Browser plugin / `@Browser` when available, with URL click
-or manual navigation as fallback. Saving writes `brief.md` and workbench
-artifacts to the deck's `out/` directory. Then run the normal workflow:
-
-```bash
-slidex run --deck decks/customer-retention
-```
+or manual navigation as fallback. New deck creation through the plugin must
+display this React Wizard first; do not fall back to `slidex init`, manual
+directory creation, or direct `out/final_deck.html` authoring. The CLI embeds
+the default `decks/_template`, so installed binaries can bootstrap the
+workbench even when the active workspace has no template folder. Selecting
+`Complete & generate` writes `brief.md` and workbench artifacts to the deck's
+`out/` directory, then starts `slidex run --deck decks/<deck_id>
+--non-interactive` in the background.
 
 ---
 

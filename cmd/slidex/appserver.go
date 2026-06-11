@@ -847,14 +847,10 @@ func appServerWorkbenchSkillSmoke(workspace, deckID string) (result appServerSki
 	if err := validateDeckID(deckID); err != nil {
 		return appServerSkillSmokeResult{}, err
 	}
-	if err := ensureSmokeWorkspaceTemplate(workspace); err != nil {
-		return appServerSkillSmokeResult{}, err
-	}
 	deckAbs := filepath.Join(workspace, "decks", deckID)
 	manifestPath := filepath.Join(deckAbs, "out", workbenchManifestName)
 	evidencePath := filepath.Join(deckAbs, "out", appServerSkillSmokeName)
-	repoTemplate := mustAbs(filepath.Join("decks", "_template"))
-	command := appServerSkillSmokeWorkbenchCommand(workspace, deckID, repoTemplate)
+	command := appServerSkillSmokeWorkbenchCommand(workspace, deckID)
 	prompt := appServerSkillSmokePrompt(workspace, deckID, command)
 	result = appServerSkillSmokeResult{
 		SchemaVersion:                   "slidex.appServerSkillSmoke.v1",
@@ -1210,16 +1206,16 @@ func saveAppServerSkillSmokeInput(deckAbs string, manifest workbenchManifest) (w
 	return result, nil
 }
 
-func appServerSkillSmokeWorkbenchCommand(workspace, deckID, fromTemplate string) string {
-	return appServerSkillSmokeWorkbenchCommandForOS(runtime.GOOS, workspace, deckID, fromTemplate)
+func appServerSkillSmokeWorkbenchCommand(workspace, deckID string) string {
+	return appServerSkillSmokeWorkbenchCommandForOS(runtime.GOOS, workspace, deckID)
 }
 
-func appServerSkillSmokeWorkbenchCommandForOS(goos, workspace, deckID, fromTemplate string) string {
+func appServerSkillSmokeWorkbenchCommandForOS(goos, workspace, deckID string) string {
 	if goos == "windows" {
-		return windowsPowerShellCommand("slidex", "workbench", "start", "--workspace", workspace, "--deck-id", deckID, "--from-template", fromTemplate)
+		return windowsPowerShellCommand("slidex", "workbench", "start", "--workspace", workspace, "--deck-id", deckID)
 	}
 	quote := shellQuote
-	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s --from-template %s", quote(workspace), quote(deckID), quote(fromTemplate))
+	return fmt.Sprintf("slidex workbench start --workspace %s --deck-id %s", quote(workspace), quote(deckID))
 }
 
 func shellQuote(s string) string {

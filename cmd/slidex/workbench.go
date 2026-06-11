@@ -259,7 +259,7 @@ func runWorkbenchStart(args []string) error {
 	workspace := fs.String("workspace", ".", "workspace root containing decks/")
 	deckID := fs.String("deck-id", "", "deck id to create or open")
 	deck := fs.String("deck", "", "existing deck workspace directory")
-	fromTemplate := fs.String("from-template", "decks/_template", "template deck directory")
+	fromTemplate := fs.String("from-template", defaultDeckTemplatePath, "template deck directory")
 	initialRequest := fs.String("initial-request", "", "original user request to seed into the React wizard draft")
 	title := fs.String("title", "", "deck title to seed into the React wizard draft")
 	audience := fs.String("audience", "", "audience to seed into the React wizard draft")
@@ -332,7 +332,7 @@ func runWorkbenchServe(args []string) error {
 	if *deck == "" || *sessionID == "" || *token == "" || *shutdownToken == "" || *port <= 0 {
 		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID --token-env ENV --shutdown-token-env ENV --port PORT")
 	}
-	deckAbs, err := resolveDeckDir(*workspace, "", *deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(*workspace, "", *deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func runWorkbenchSaveSmoke(args []string) error {
 	workspace := fs.String("workspace", ".", "workspace root containing decks/")
 	deckID := fs.String("deck-id", "workbench-save-smoke", "deck id to create or open")
 	deck := fs.String("deck", "", "existing deck workspace directory")
-	fromTemplate := fs.String("from-template", "decks/_template", "template deck directory")
+	fromTemplate := fs.String("from-template", defaultDeckTemplatePath, "template deck directory")
 	title := fs.String("title", "Workbench save smoke", "deck title to submit")
 	audience := fs.String("audience", "Codex App verification reviewer", "audience to submit")
 	decisionGoal := fs.String("decision-goal", "Verify the slidex workbench can persist initial deck creation input.", "decision goal to submit")
@@ -462,23 +462,21 @@ func runWorkbenchVerifyEvidence(args []string) error {
 }
 
 func callMCPDeckBootstrap(args map[string]any) (any, error) {
-	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	if deckID == "" {
 		deckID, _ = args["deck_id"].(string)
 	}
-	result, err := bootstrapDeckWorkspace(workspace, deckID, "decks/_template", true)
-	if err != nil {
-		return nil, err
+	if deckID != "" {
+		args["deckId"] = deckID
 	}
-	return result, nil
+	return callMCPWorkbenchStart(args)
 }
 
 func callMCPDeckInspect(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +487,7 @@ func callMCPWorkbenchStart(args map[string]any) (any, error) {
 	workspace, _ := args["workspace"].(string)
 	deckID, _ := args["deckId"].(string)
 	deck, _ := args["deck"].(string)
-	result, manifest, startedNew, err := startWorkbenchWithInput(workspace, deckID, deck, "decks/_template", workbenchSaveInput{
+	result, manifest, startedNew, err := startWorkbenchWithInput(workspace, deckID, deck, defaultDeckTemplatePath, workbenchSaveInput{
 		InitialRequest:     stringArg(args, "initialRequest", "initial_request"),
 		Title:              stringArg(args, "title"),
 		Audience:           stringArg(args, "audience"),
@@ -1687,8 +1685,18 @@ func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExistin
 		return deckBootstrapResult{}, err
 	}
 	templateAbs := resolveTemplateDir(root, fromTemplate)
-	if err := copyDir(templateAbs, deckAbs); err != nil {
-		return deckBootstrapResult{}, err
+	if pathExists(templateAbs) {
+		if err := copyDir(templateAbs, deckAbs); err != nil {
+			return deckBootstrapResult{}, err
+		}
+	} else if isDefaultTemplateRef(fromTemplate) {
+		if err := copyEmbeddedDefaultTemplate(deckAbs); err != nil {
+			return deckBootstrapResult{}, err
+		}
+	} else {
+		if err := copyDir(templateAbs, deckAbs); err != nil {
+			return deckBootstrapResult{}, err
+		}
 	}
 	return deckBootstrapResult{Workspace: filepath.ToSlash(root), DeckID: deckID, DeckDir: filepath.ToSlash(displayDeckPath(root, deckAbs)), Status: "created"}, nil
 }
@@ -1696,7 +1704,7 @@ func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExistin
 func resolveTemplateDir(root, fromTemplate string) string {
 	template := fromTemplate
 	if template == "" {
-		template = "decks/_template"
+		template = defaultDeckTemplatePath
 	}
 	if filepath.IsAbs(template) {
 		return filepath.Clean(template)
@@ -1705,7 +1713,7 @@ func resolveTemplateDir(root, fromTemplate string) string {
 	if pathExists(rootCandidate) {
 		return rootCandidate
 	}
-	if filepath.Clean(template) != filepath.Clean("decks/_template") {
+	if !isDefaultTemplateRef(template) {
 		return rootCandidate
 	}
 	if cwd, err := os.Getwd(); err == nil {
@@ -1911,7 +1919,7 @@ func isSymlinkOrReparsePoint(path string, info os.FileInfo) bool {
 }
 
 func workbenchStatus(workspace, deckID, deck string) (workbenchManifest, error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchManifest{}, err
 	}
@@ -1946,7 +1954,7 @@ func workbenchStatusForDeck(deckAbs string) workbenchManifest {
 }
 
 func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchManifest{}, err
 	}
@@ -2269,7 +2277,7 @@ func localPluginVersion() string {
 }
 
 func recordWorkbenchBrowserEvidence(workspace, deckID, deck string, input workbenchBrowserEvidenceInput) (workbenchBrowserEvidence, error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchBrowserEvidence{}, err
 	}
@@ -2409,7 +2417,7 @@ func inspectWorkbenchBrowserScreenshot(raw []byte) (dimension, bool, string, err
 }
 
 func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (result workbenchBrowserEvidenceVerification, err error) {
-	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, "decks/_template")
+	deckAbs, err := resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return workbenchBrowserEvidenceVerification{}, err
 	}

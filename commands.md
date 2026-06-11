@@ -35,6 +35,8 @@ Windows에서는 `127.0.0.1` loopback WebSocket을 기본 transport로 선택합
 ## Primary CLI Workflow
 
 새 deck creation을 Codex App에서 시작할 때는 plugin React workbench를 사용합니다.
+이 경로는 새 deck 생성의 필수 진입점입니다. `slidex init`, 수동 디렉터리 생성,
+`out/final_deck.html` 직접 작성으로 폴백하지 않습니다.
 
 ```bash
 mise exec -- slidex workbench start --deck-id customer-retention
@@ -51,6 +53,8 @@ Workbench는 로컬 React Wizard로 표시되며, 사용자가 `Complete & gener
 `generationLogPath`에 기록됩니다. Codex Plugin MCP는 PATH의 `slidex`를 실행하므로
 local plugin 검증 전 `mise exec -- go install ./cmd/slidex`로 설치 binary를 현재 소스와
 맞춥니다.
+기본 `decks/_template`은 CLI 바이너리에 내장되어 있어 사용자 workspace에 템플릿
+폴더가 없어도 `workbench start`가 새 deck workspace를 만들 수 있습니다.
 
 기본 실행은 `slidex run`을 사용합니다.
 
