@@ -1273,9 +1273,13 @@ func TestMCPWorkbenchStartAutoAppliesReleaseUpdateBeforeWizard(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	targetVersion := "0.2.0"
+	if channelFromPackageVersion(toolVersion) == updateChannelCanary {
+		targetVersion = "0.2.0-canary.20260611120000"
+	}
 	candidate := filepath.Join(parent, "candidate")
-	writeCandidateBundleForTest(t, candidate, "0.2.0")
-	server := updateReleaseServerForCandidateForTest(t, candidate, "0.2.0")
+	writeCandidateBundleForTest(t, candidate, targetVersion)
+	server := updateReleaseServerForCandidateForTest(t, candidate, targetVersion)
 	defer server.Close()
 	t.Setenv(updateInstallRootEnv, installRoot)
 	t.Setenv(updateInstallMetadataEnv, installMetadataPath(installRoot))
@@ -1303,8 +1307,8 @@ func TestMCPWorkbenchStartAutoAppliesReleaseUpdateBeforeWizard(t *testing.T) {
 	if !autoUpdate.BlocksWorkbench || autoUpdate.ContinueToWorkbench {
 		t.Fatalf("applied update should block the current workbench startup: %#v", autoUpdate)
 	}
-	if autoUpdate.TargetVersion != "0.2.0" {
-		t.Fatalf("auto update target = %#v, want 0.2.0", autoUpdate)
+	if autoUpdate.TargetVersion != targetVersion {
+		t.Fatalf("auto update target = %#v, want %s", autoUpdate, targetVersion)
 	}
 	if runtime.GOOS == "windows" {
 		if autoUpdate.Status != "pending_activation" || !autoUpdate.PendingActivation {
@@ -1314,8 +1318,8 @@ func TestMCPWorkbenchStartAutoAppliesReleaseUpdateBeforeWizard(t *testing.T) {
 		if autoUpdate.Status != "applied_restart_required" || !autoUpdate.RestartRequired {
 			t.Fatalf("auto update should require restart after apply: %#v", autoUpdate)
 		}
-		if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
-			t.Fatalf("install root VERSION after auto update = %q, want 0.2.0", got)
+		if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != targetVersion {
+			t.Fatalf("install root VERSION after auto update = %q, want %s", got, targetVersion)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "decks", "auto-update", "out", workbenchManifestName)); !os.IsNotExist(err) {
