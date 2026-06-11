@@ -660,6 +660,57 @@ func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 	}
 }
 
+func TestWorkbenchHTMLBootsLocalReactWizardAssets(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+	html := server.workbenchHTML()
+	for _, want := range []string{
+		"slidex React Wizard",
+		"const boot = ",
+		"/workbench/session-1/assets/react-18.3.1.production.min.js",
+		"/workbench/session-1/assets/react-dom-18.3.1.production.min.js",
+		"/workbench/session-1/assets/workbench-app.js",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("workbench HTML missing %q:\n%s", want, html)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/workbench/session-1/assets/workbench-app.js", nil)
+	rec := httptest.NewRecorder()
+	server.handleAsset(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ReactDOM.createRoot") {
+		t.Fatalf("workbench app asset did not serve React app: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSeedWorkbenchDraftPersistsInitialRequest(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	updated, err := seedWorkbenchDraft(deck, manifest, workbenchSaveInput{
+		InitialRequest: "Create a partner proposal deck for a June review.",
+		Title:          "Partner proposal",
+		Audience:       "Partnership committee",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "draft" || updated.DraftSavedAt == "" {
+		t.Fatalf("seeded manifest should record draft status: %#v", updated)
+	}
+	draft, ok := readWorkbenchDraft(deck)
+	if !ok {
+		t.Fatal("seeded draft missing")
+	}
+	if draft.Input.InitialRequest != "Create a partner proposal deck for a June review." {
+		t.Fatalf("seeded draft lost initial request: %#v", draft.Input)
+	}
+}
+
 func TestWorkbenchHTMLRendersRestartRequiredBannerWithoutBlockingForm(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
