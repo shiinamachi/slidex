@@ -32,7 +32,8 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 		return nil, "", err
 	}
 	probeNonce := newProbeNonce()
-	injected := injectDocumentBase(injectSlideEnumerationScript(string(raw), probeNonce), documentBaseHrefForHTMLPath(htmlPath))
+	probeHTML := stripExecutableHTMLForProbe(string(raw))
+	injected := injectDocumentBase(injectSlideEnumerationScript(probeHTML, probeNonce), documentBaseHrefForHTMLPath(htmlPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-dom-enum-*")
 	if err != nil {
 		return nil, "", err
@@ -396,6 +397,75 @@ func nodeTextContent(n *xhtml.Node) string {
 	}
 	walk(n)
 	return b.String()
+}
+
+func stripExecutableHTMLForProbe(src string) string {
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err != nil {
+		return src
+	}
+	stripExecutableNodesForProbe(doc)
+	var b strings.Builder
+	if err := xhtml.Render(&b, doc); err != nil {
+		return src
+	}
+	return b.String()
+}
+
+func stripExecutableNodesForProbe(node *xhtml.Node) {
+	if node == nil {
+		return
+	}
+	for child := node.FirstChild; child != nil; {
+		next := child.NextSibling
+		if isProbeExecutableElement(child) {
+			node.RemoveChild(child)
+			child = next
+			continue
+		}
+		scrubExecutableAttrsForProbe(child)
+		stripExecutableNodesForProbe(child)
+		child = next
+	}
+}
+
+func isProbeExecutableElement(node *xhtml.Node) bool {
+	if node == nil || node.Type != xhtml.ElementNode {
+		return false
+	}
+	switch strings.ToLower(node.Data) {
+	case "script", "iframe", "object", "embed":
+		return true
+	default:
+		return false
+	}
+}
+
+func scrubExecutableAttrsForProbe(node *xhtml.Node) {
+	if node == nil || node.Type != xhtml.ElementNode || len(node.Attr) == 0 {
+		return
+	}
+	filtered := node.Attr[:0]
+	for _, attr := range node.Attr {
+		key := strings.ToLower(attr.Key)
+		if strings.HasPrefix(key, "on") || key == "srcdoc" {
+			continue
+		}
+		if isExecutableURLAttrForProbe(key) && strings.HasPrefix(strings.ToLower(strings.TrimSpace(attr.Val)), "javascript:") {
+			continue
+		}
+		filtered = append(filtered, attr)
+	}
+	node.Attr = filtered
+}
+
+func isExecutableURLAttrForProbe(key string) bool {
+	switch key {
+	case "href", "src", "action", "formaction", "xlink:href":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractSlidesHTMLParser(src string) []slideInfo {

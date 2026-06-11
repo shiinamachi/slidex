@@ -71,6 +71,39 @@ func TestBuildSlideWrapperMarksOverflowReportWithNonce(t *testing.T) {
 	}
 }
 
+func TestStripExecutableHTMLForProbeRemovesActiveContent(t *testing.T) {
+	src := `<!doctype html><html><head>
+<script>window.evil = true;</script>
+<style>.slide{color:red}</style>
+</head><body onload="evil()">
+<section class="slide" onclick="evil()">
+  <a href=" javascript:evil()">bad link</a>
+  <img src="x" onerror="evil()">
+  <iframe srcdoc="<script>parent.evil()</script>"></iframe>
+  <object data="x"></object>
+  <embed src="x">
+  <p>Static copy</p>
+</section>
+</body></html>`
+	got := stripExecutableHTMLForProbe(src)
+	lower := strings.ToLower(got)
+	for _, forbidden := range []string{"<script", "onload", "onclick", "onerror", "javascript:", "srcdoc", "<iframe", "<object", "<embed"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("probe HTML still contains executable content %q:\n%s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, `.slide{color:red}`) || !strings.Contains(got, "Static copy") {
+		t.Fatalf("probe sanitizer removed static content:\n%s", got)
+	}
+	slides := extractSlides(got)
+	if len(slides) != 1 {
+		t.Fatalf("sanitized probe HTML should preserve one slide, got %d", len(slides))
+	}
+	if strings.Contains(strings.ToLower(slides[0].FullHTML), "<script") {
+		t.Fatalf("sanitized slide retained script HTML:\n%s", slides[0].FullHTML)
+	}
+}
+
 func TestRenderHTMLRejectsSymlinkSourceHTML(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.html")
 	if err := os.WriteFile(outside, []byte(`<!doctype html><html><body><section class="slide">outside</section></body></html>`), 0o644); err != nil {

@@ -2013,6 +2013,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err != nil {
 		return renderManifest{}, err
 	}
+	probeHTML := stripExecutableHTMLForProbe(string(raw))
 	chromePath, err := resolveChrome(cfg.ChromePath)
 	if err != nil {
 		return renderManifest{}, err
@@ -2022,7 +2023,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	}
 	slides, enumMethod, enumErr := extractSlidesWithChrome(chromePath, cfg.HTMLPath, cfg.Selector, cfg.ChromeNoSandbox)
 	if enumErr != nil || len(slides) == 0 {
-		parserSlides := extractSlides(string(raw))
+		parserSlides := extractSlides(probeHTML)
 		if len(parserSlides) == 0 {
 			if enumErr != nil {
 				return renderManifest{}, fmt.Errorf("no .slide elements found in HTML; chrome DOM enumeration failed: %w", enumErr)
@@ -2039,7 +2040,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		return renderManifest{}, err
 	}
 
-	head := renderDocumentHeadWithBase(string(raw), documentBaseHrefForHTMLPath(cfg.HTMLPath))
+	head := renderDocumentHeadWithBase(probeHTML, documentBaseHrefForHTMLPath(cfg.HTMLPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-render-*")
 	if err != nil {
 		return renderManifest{}, err
