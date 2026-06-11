@@ -8,7 +8,7 @@ pnpm at runtime.
 Regenerate them with:
 
 ```bash
-mise exec -- pnpm build
+mise exec -- pnpm --dir workbench build
 ```
 
 The build writes `slidex-workbench-build.json`, which records the generated

@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.5.3",
+  "engines": {
+    "node": "24.16.0",
+    "pnpm": "11.5.3"
+  },
   "scripts": {
     "build": "vinxi build && node scripts/copy-assets.mjs",
     "check": "tsc --noEmit"

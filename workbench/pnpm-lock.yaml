@@ -6,9 +6,7 @@ settings:
 
 importers:
 
-  .: {}
-
-  workbench:
+  .:
     dependencies:
       '@solidjs/router':
         specifier: 0.16.1

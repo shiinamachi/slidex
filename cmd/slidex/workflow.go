@@ -466,18 +466,25 @@ func doctorRuntimePinFindings(miseNodeVersion, misePnpmVersion string) []qaFindi
 	} else if !isExactVersion(misePnpmVersion) {
 		findings = append(findings, fail("doctor.pnpm_pin", "pnpm version must be exact", ".mise.toml"))
 	}
-	if _, err := os.Stat("package.json"); err == nil {
-		if _, err := os.Stat("pnpm-lock.yaml"); err != nil {
-			findings = append(findings, fail("doctor.pnpm_lock", "pnpm-lock.yaml is required for the Workbench monorepo", "pnpm-lock.yaml"))
-		}
-		findings = append(findings, validatePackageJSONPins("package.json", miseNodeVersion, misePnpmVersion, true)...)
-		workspace := readFileOrEmpty("pnpm-workspace.yaml")
-		if !strings.Contains(workspace, "allowBuilds:") || strings.Contains(workspace, "onlyBuiltDependencies") {
-			findings = append(findings, fail("doctor.pnpm_workspace", "pnpm v11 build-script approvals must use allowBuilds in pnpm-workspace.yaml", "pnpm-workspace.yaml"))
+	for _, rootJSFile := range []string{"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"} {
+		if _, err := os.Stat(rootJSFile); err == nil {
+			findings = append(findings, fail("doctor.root_js_workspace", "root JS workspace files are not supported; keep Workbench package metadata under workbench/", rootJSFile))
 		}
 	}
-	if _, err := os.Stat(filepath.Join("workbench", "package.json")); err == nil {
-		findings = append(findings, validatePackageJSONPins(filepath.Join("workbench", "package.json"), "", "", false)...)
+	workbenchPackage := filepath.Join("workbench", "package.json")
+	if _, err := os.Stat(workbenchPackage); err == nil {
+		workbenchLock := filepath.Join("workbench", "pnpm-lock.yaml")
+		if _, err := os.Stat(workbenchLock); err != nil {
+			findings = append(findings, fail("doctor.pnpm_lock", "workbench/pnpm-lock.yaml is required for the Workbench package", workbenchLock))
+		}
+		workbenchWorkspace := filepath.Join("workbench", "pnpm-workspace.yaml")
+		workspace := readFileOrEmpty(workbenchWorkspace)
+		if !strings.Contains(workspace, "allowBuilds:") ||
+			!strings.Contains(workspace, "'@parcel/watcher': true") ||
+			!strings.Contains(workspace, "esbuild: true") {
+			findings = append(findings, fail("doctor.pnpm_workspace", "Workbench pnpm build-script approvals must stay in workbench/pnpm-workspace.yaml", workbenchWorkspace))
+		}
+		findings = append(findings, validatePackageJSONPins(workbenchPackage, miseNodeVersion, misePnpmVersion, true)...)
 	}
 	return findings
 }
@@ -874,7 +881,7 @@ func doctorWorkbenchAssetFindings() []qaFinding {
 		if err != nil {
 			findings = append(findings, fail("doctor.workbench_asset_freshness", err.Error(), "workbench"))
 		} else if sourceHash != manifest.SourceSHA256 {
-			findings = append(findings, fail("doctor.workbench_asset_freshness", "generated Workbench assets are stale; run mise exec -- pnpm build", "cmd/slidex/workbench_assets/slidex-workbench-build.json"))
+			findings = append(findings, fail("doctor.workbench_asset_freshness", "generated Workbench assets are stale; run mise exec -- pnpm --dir workbench build", "cmd/slidex/workbench_assets/slidex-workbench-build.json"))
 		}
 	}
 	return findings

@@ -15,7 +15,6 @@
 /dist/
 
 # JavaScript workspace dependencies and SolidStart intermediate output.
-/node_modules/
 /workbench/node_modules/
 /workbench/.output/
 /workbench/.vinxi/

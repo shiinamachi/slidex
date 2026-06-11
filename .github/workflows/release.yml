@@ -113,11 +113,11 @@ jobs:
           cache: true
           github_token: ${{ github.token }}
       - name: Install frontend dependencies
-        run: mise exec -- pnpm install --frozen-lockfile
+        run: mise exec -- pnpm --dir workbench install --frozen-lockfile
       - name: Check Workbench frontend
-        run: mise exec -- pnpm check
+        run: mise exec -- pnpm --dir workbench check
       - name: Build Workbench frontend
-        run: mise exec -- pnpm build
+        run: mise exec -- pnpm --dir workbench build
       - name: Show Go version
         run: go version
       - name: Check render dependencies
@@ -240,11 +240,11 @@ jobs:
           cache: true
           github_token: ${{ github.token }}
       - name: Install frontend dependencies
-        run: mise exec -- pnpm install --frozen-lockfile
+        run: mise exec -- pnpm --dir workbench install --frozen-lockfile
       - name: Check Workbench frontend
-        run: mise exec -- pnpm check
+        run: mise exec -- pnpm --dir workbench check
       - name: Build Workbench frontend
-        run: mise exec -- pnpm build
+        run: mise exec -- pnpm --dir workbench build
       - name: Ensure release tag
         env:
           COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
@@ -339,7 +339,7 @@ jobs:
                   except KeyError:
                       raise SystemExit(f"{path}: missing {metadata_name}")
 
-          def assert_no_node_runtime(path):
+          def assert_no_node_runtime_or_source(path):
               if path.name.endswith(".tar.gz"):
                   with tarfile.open(path, "r:gz") as archive:
                       names = archive.getnames()
@@ -350,9 +350,11 @@ jobs:
                   parts = name.split("/")
                   if "node_modules" in parts:
                       raise SystemExit(f"{path}: release package must not include Node runtime dependencies: {name}")
+                  if len(parts) >= 2 and parts[1] in {"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "workbench"}:
+                      raise SystemExit(f"{path}: release package must not include Workbench development metadata or source: {name}")
 
           for archive in archives:
-              assert_no_node_runtime(archive)
+              assert_no_node_runtime_or_source(archive)
               root, goos, goarch = parse_target(archive.name)
               data = read_metadata(archive, root)
               expected = {

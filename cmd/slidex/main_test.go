@@ -2142,23 +2142,23 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "release.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "RELEASE_TIMESTAMP", "scripts/write-release-notes-body.sh", "jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925", "mise exec -- pnpm install --frozen-lockfile", "mise exec -- pnpm check", "mise exec -- pnpm build", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "node_modules", "update status --json", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "RELEASE_TIMESTAMP", "scripts/write-release-notes-body.sh", "jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925", "mise exec -- pnpm --dir workbench install --frozen-lockfile", "mise exec -- pnpm --dir workbench check", "mise exec -- pnpm --dir workbench build", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "node_modules", "update status --json", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, ".mise.toml"),
 			want: []string{"go = \"1.26.3\"", "node = \"24.16.0\"", "\"npm:pnpm\" = \"11.5.3\"", "[tasks.\"version:bump\"]", "scripts/bump-version.sh", "[tasks.\"release-notes:canary\"]", "scripts/create-canary-release-note.sh"},
 		},
 		{
-			path: filepath.Join(root, "package.json"),
-			want: []string{"\"packageManager\": \"pnpm@11.5.3\"", "\"node\": \"24.16.0\"", "\"pnpm\": \"11.5.3\"", "\"build\": \"pnpm --filter @shiinamachi/slidex-workbench build\"", "\"check\": \"pnpm --filter @shiinamachi/slidex-workbench check\""},
-		},
-		{
-			path: filepath.Join(root, "pnpm-workspace.yaml"),
-			want: []string{"packages:", "- \"workbench\"", "allowBuilds:", "\"@parcel/watcher\": true", "\"esbuild\": true"},
-		},
-		{
 			path: filepath.Join(root, "workbench", "package.json"),
-			want: []string{"\"@solidjs/start\": \"1.3.2\"", "\"solid-js\": \"1.9.13\"", "\"vinxi\": \"0.5.11\"", "\"typescript\": \"6.0.3\"", "\"build\": \"vinxi build && node scripts/copy-assets.mjs\""},
+			want: []string{"\"packageManager\": \"pnpm@11.5.3\"", "\"node\": \"24.16.0\"", "\"pnpm\": \"11.5.3\"", "\"@solidjs/start\": \"1.3.2\"", "\"solid-js\": \"1.9.13\"", "\"vinxi\": \"0.5.11\"", "\"typescript\": \"6.0.3\"", "\"build\": \"vinxi build && node scripts/copy-assets.mjs\""},
+		},
+		{
+			path: filepath.Join(root, "workbench", "pnpm-lock.yaml"),
+			want: []string{"lockfileVersion: '9.0'", "importers:", "specifier: 1.3.2", "specifier: 6.0.3"},
+		},
+		{
+			path: filepath.Join(root, "workbench", "pnpm-workspace.yaml"),
+			want: []string{"allowBuilds:", "'@parcel/watcher': true", "esbuild: true"},
 		},
 		{
 			path: filepath.Join(root, "workbench", "app.config.ts"),
@@ -2170,7 +2170,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
-			want: []string{"SLIDEX_TARGETS", "SLIDEX_BUILD_CHANNEL", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".slidex/install.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
+			want: []string{"SLIDEX_TARGETS", "SLIDEX_BUILD_CHANNEL", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", ".slidex/install.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "bump-version.sh"),
@@ -2215,6 +2215,17 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s does not contain %q", filepath.ToSlash(check.path), want)
 			}
+		}
+	}
+	for _, path := range []string{"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"} {
+		if _, err := os.Stat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Fatalf("root JS workspace file should not exist: %s (err=%v)", path, err)
+		}
+	}
+	packageScript := readFileOrEmpty(filepath.Join(root, "scripts", "package-release.sh"))
+	for _, forbidden := range []string{`"package.json"`, `"pnpm-lock.yaml"`, `"pnpm-workspace.yaml"`, `"workbench"`} {
+		if strings.Contains(packageScript, forbidden) {
+			t.Fatalf("release package runtime paths must not include Workbench development file %s", forbidden)
 		}
 	}
 	info, err := os.Stat(filepath.Join(root, "scripts", "package-release.sh"))
