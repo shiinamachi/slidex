@@ -1,28 +1,24 @@
 {
-  "name": "slidex",
-  "version": "0.1.0+codex.20260610114022",
-  "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
-  "author": {
-    "name": "shiinamachi"
-  },
-  "license": "MIT",
-  "skills": "./skills/",
-  "interface": {
-    "displayName": "Slidex",
-    "shortDescription": "Create slidex decks and open the local workbench.",
-    "longDescription": "Slidex starts a loopback deck-creation workbench from Codex, bootstraps deck-local workspaces, and keeps the CLI as the source of truth for later HTML/PDF render, QA, and package stages.",
-    "developerName": "shiinamachi",
-    "category": "Productivity",
-    "capabilities": [
-      "Interactive",
-      "Read",
-      "Write"
-    ],
-    "defaultPrompt": [
-      "Start a new slidex deck in this workspace and open the slidex workbench.",
-      "Create a slidex deck called <deck_id> and save the initial brief from the workbench.",
-      "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
-    ]
-  },
-  "mcpServers": "./.mcp.json"
+    "name": "slidex",
+    "version": "0.1.0+codex.20260610114022",
+    "description": "Codex plugin front door for slidex deck creation and HTML/PDF document workflows.",
+    "author": {
+        "name": "shiinamachi"
+    },
+    "license": "MIT",
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "slidex",
+        "shortDescription": "Create slidex decks and open the local workbench.",
+        "longDescription": "slidex starts a loopback deck-creation workbench from Codex, bootstraps deck-local workspaces, and keeps the CLI as the source of truth for later HTML/PDF render, QA, and package stages.",
+        "developerName": "shiinamachi",
+        "category": "Productivity",
+        "capabilities": ["Interactive", "Read", "Write"],
+        "defaultPrompt": [
+            "Start a new slidex deck in this workspace and open the slidex workbench.",
+            "Create a slidex deck called <deck_id> and save the initial brief from the workbench.",
+            "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
+        ]
+    },
+    "mcpServers": "./.mcp.json"
 }
