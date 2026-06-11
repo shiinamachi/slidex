@@ -108,22 +108,37 @@ func injectDocumentBase(src, baseHref string) string {
 	if err != nil {
 		return src
 	}
-	head := ensureDocumentHead(doc)
-	removeElementNodes(doc, "base")
-	base := &xhtml.Node{
-		Type:     xhtml.ElementNode,
-		DataAtom: atom.Base,
-		Data:     "base",
-		Attr:     []xhtml.Attribute{{Key: "href", Val: baseHref}},
-	}
-	if head.FirstChild != nil {
-		head.InsertBefore(base, head.FirstChild)
-	} else {
-		head.AppendChild(base)
-	}
+	normalizeDocumentBase(doc, baseHref)
 	var b strings.Builder
 	if err := xhtml.Render(&b, doc); err != nil {
 		return src
+	}
+	return b.String()
+}
+
+func renderDocumentHeadWithBase(src, baseHref string) string {
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err != nil {
+		if baseHref == "" {
+			return `<meta charset="utf-8">`
+		}
+		return injectHeadBase(`<meta charset="utf-8">`, baseHref)
+	}
+	head := normalizeDocumentBase(doc, baseHref)
+	var b strings.Builder
+	for child := head.FirstChild; child != nil; child = child.NextSibling {
+		if err := xhtml.Render(&b, child); err != nil {
+			if baseHref == "" {
+				return `<meta charset="utf-8">`
+			}
+			return injectHeadBase(`<meta charset="utf-8">`, baseHref)
+		}
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		if baseHref == "" {
+			return `<meta charset="utf-8">`
+		}
+		return injectHeadBase(`<meta charset="utf-8">`, baseHref)
 	}
 	return b.String()
 }
@@ -210,6 +225,26 @@ func removeStringRanges(src string, ranges []stringRange) string {
 		src = src[:start] + src[end:]
 	}
 	return src
+}
+
+func normalizeDocumentBase(doc *xhtml.Node, baseHref string) *xhtml.Node {
+	head := ensureDocumentHead(doc)
+	removeElementNodes(doc, "base")
+	if baseHref == "" {
+		return head
+	}
+	base := &xhtml.Node{
+		Type:     xhtml.ElementNode,
+		DataAtom: atom.Base,
+		Data:     "base",
+		Attr:     []xhtml.Attribute{{Key: "href", Val: baseHref}},
+	}
+	if head.FirstChild != nil {
+		head.InsertBefore(base, head.FirstChild)
+	} else {
+		head.AppendChild(base)
+	}
+	return head
 }
 
 func ensureDocumentHead(doc *xhtml.Node) *xhtml.Node {

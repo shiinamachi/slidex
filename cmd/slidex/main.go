@@ -2039,7 +2039,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		return renderManifest{}, err
 	}
 
-	head := injectHeadBase(extractHead(string(raw)), documentBaseHrefForHTMLPath(cfg.HTMLPath))
+	head := renderDocumentHeadWithBase(string(raw), documentBaseHrefForHTMLPath(cfg.HTMLPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-render-*")
 	if err != nil {
 		return renderManifest{}, err
@@ -2214,15 +2214,6 @@ func stripTags(s string) string {
 
 func normalizeText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
-}
-
-func extractHead(src string) string {
-	re := regexp.MustCompile(`(?is)<head\b[^>]*>(.*?)</head>`)
-	m := re.FindStringSubmatch(src)
-	if len(m) > 1 {
-		return m[1]
-	}
-	return `<meta charset="utf-8">`
 }
 
 func buildSlideWrapper(head, slideHTML string, width, height int, fontPreset string) string {

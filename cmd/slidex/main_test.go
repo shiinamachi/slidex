@@ -4177,6 +4177,45 @@ func TestInjectDocumentBaseIgnoresCommentedHeadBoundary(t *testing.T) {
 	requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
 }
 
+func TestRenderDocumentHeadWithBaseIgnoresCommentedFakeHead(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	src := `<!-- <head><style id="fake">body{background:red}</style></head> --><html><head><style id="real">body{background:green}</style></head><body></body></html>`
+	got := renderDocumentHeadWithBase(src, baseHref)
+	requireCanonicalBaseFirstInParsedHead(t, wrapHeadFragmentForTest(got), baseHref)
+	if countHeadElementsByIDForTest(t, got, "style", "fake") != 0 {
+		t.Fatalf("commented fake head style became active:\n%s", got)
+	}
+	if countHeadElementsByIDForTest(t, got, "style", "real") != 1 {
+		t.Fatalf("real head style missing:\n%s", got)
+	}
+}
+
+func TestRenderDocumentHeadWithBaseKeepsScriptFakeHeadInert(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	src := `<script>const fake = "<head><style id='fake'>body{background:red}</style></head>";</script><html><head><style id="real">body{background:green}</style></head><body></body></html>`
+	got := renderDocumentHeadWithBase(src, baseHref)
+	requireCanonicalBaseFirstInParsedHead(t, wrapHeadFragmentForTest(got), baseHref)
+	if countHeadElementsByIDForTest(t, got, "style", "fake") != 0 {
+		t.Fatalf("script-contained fake head style became active:\n%s", got)
+	}
+	if countHeadElementsByIDForTest(t, got, "style", "real") != 1 {
+		t.Fatalf("real head style missing:\n%s", got)
+	}
+}
+
+func TestRenderDocumentHeadWithBasePreservesImplicitHeadContent(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	src := `<!doctype html><html><base href="https://evil.example/"><link rel="stylesheet" href="deck.css"><body></body></html>`
+	got := renderDocumentHeadWithBase(src, baseHref)
+	requireCanonicalBaseFirstInParsedHead(t, wrapHeadFragmentForTest(got), baseHref)
+	if strings.Contains(got, "https://evil.example/") {
+		t.Fatalf("untrusted base survived:\n%s", got)
+	}
+	if countHeadElementsByIDForTest(t, got, "link", "") != 1 || !strings.Contains(got, `href="deck.css"`) {
+		t.Fatalf("implicit head stylesheet missing:\n%s", got)
+	}
+}
+
 func requireCanonicalBaseFirstInParsedHead(t *testing.T, src, baseHref string) {
 	t.Helper()
 	doc, err := xhtml.Parse(strings.NewReader(src))
@@ -4240,6 +4279,38 @@ func attrValueForTest(node *xhtml.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func wrapHeadFragmentForTest(head string) string {
+	return `<!doctype html><html><head>` + head + `</head><body></body></html>`
+}
+
+func countHeadElementsByIDForTest(t *testing.T, head, tag, id string) int {
+	t.Helper()
+	doc, err := xhtml.Parse(strings.NewReader(wrapHeadFragmentForTest(head)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headNode := findFirstElementForTest(doc, "head")
+	if headNode == nil {
+		t.Fatalf("head missing after parsing fragment:\n%s", head)
+	}
+	count := 0
+	var walk func(*xhtml.Node)
+	walk = func(n *xhtml.Node) {
+		if n.Type == xhtml.ElementNode && strings.EqualFold(n.Data, tag) {
+			if id == "" || attrValueForTest(n, "id") == id {
+				count++
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	for child := headNode.FirstChild; child != nil; child = child.NextSibling {
+		walk(child)
+	}
+	return count
 }
 
 func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
