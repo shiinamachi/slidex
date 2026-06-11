@@ -951,11 +951,47 @@ func verifyArchiveCandidateSHA256(archivePath, checksumsPath string) error {
 }
 
 func extractArchiveCandidate(archivePath, targetVersion, installRoot string) (string, error) {
-	stageParent := filepath.Join(installRoot, ".slidex", "staged", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
-	if err := os.MkdirAll(stageParent, 0o755); err != nil {
+	stageParent, err := updateInternalStageDir(installRoot, "staged", targetVersion)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureSecureDir(stageParent); err != nil {
 		return "", err
 	}
 	return extractReleaseArchive(archivePath, stageParent)
+}
+
+func updateInternalStageDir(installRoot, kind, targetVersion string) (string, error) {
+	versionSegment, err := safeUpdateTargetVersionSegment(targetVersion)
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(installRoot, ".slidex", kind)
+	stage := filepath.Join(root, versionSegment+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	if !pathWithin(root, stage) {
+		return "", fmt.Errorf("update staging path escapes %s: %s", filepath.ToSlash(root), filepath.ToSlash(stage))
+	}
+	return stage, nil
+}
+
+func safeUpdateTargetVersionSegment(targetVersion string) (string, error) {
+	version := strings.TrimSpace(targetVersion)
+	if version == "" {
+		return "", errors.New("target version is required")
+	}
+	if channelFromPackageVersion(version) == "" {
+		return "", fmt.Errorf("target version must be a stable or canary package version, got %q", targetVersion)
+	}
+	if filepath.IsAbs(version) ||
+		filepath.VolumeName(version) != "" ||
+		strings.ContainsAny(version, `/\`) ||
+		version == "." ||
+		version == ".." ||
+		filepath.Clean(version) != version ||
+		filepath.Base(version) != version {
+		return "", fmt.Errorf("target version must be a safe path segment, got %q", targetVersion)
+	}
+	return version, nil
 }
 
 func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL string) (candidateRoot, targetVersion, targetTag string, err error) {
@@ -1027,7 +1063,10 @@ func stageDownloadedReleaseArchive(installRoot, targetVersion string, archive up
 	if _, err := verifyReleaseAssetSHA256(archive.Name, archivePayload, string(checksumPayload), archive.Digest); err != nil {
 		return "", "", err
 	}
-	stageParent = filepath.Join(installRoot, ".slidex", "downloads", targetVersion+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	stageParent, err = updateInternalStageDir(installRoot, "downloads", targetVersion)
+	if err != nil {
+		return "", "", err
+	}
 	if err := ensureSecureDir(stageParent); err != nil {
 		return "", "", err
 	}
@@ -1338,6 +1377,10 @@ func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion s
 }
 
 func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (string, error) {
+	versionSegment, err := safeUpdateTargetVersionSegment(targetVersion)
+	if err != nil {
+		return "", err
+	}
 	binary := "slidex"
 	if runtime.GOOS == "windows" {
 		binary = "slidex.exe"
@@ -1348,7 +1391,7 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
-	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
+	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
 	activatorRoot := filepath.Join(parent, "."+base+".activator-"+stamp)
 	_ = os.RemoveAll(activatorRoot)
 	if err := os.MkdirAll(activatorRoot, 0o755); err != nil {
@@ -1505,9 +1548,13 @@ func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion s
 }
 
 func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind string) (string, error) {
+	versionSegment, err := safeUpdateTargetVersionSegment(targetVersion)
+	if err != nil {
+		return "", err
+	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
-	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
+	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
 	stagedRoot := filepath.Join(parent, "."+base+"."+kind+"-"+stamp)
 	_ = os.RemoveAll(stagedRoot)
 	if err := copyDir(candidateRoot, stagedRoot); err != nil {
@@ -1517,9 +1564,13 @@ func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind
 }
 
 func activateStagedInstallRoot(installRoot, stagedRoot, targetVersion string) (backupRoot string, err error) {
+	versionSegment, err := safeUpdateTargetVersionSegment(targetVersion)
+	if err != nil {
+		return "", err
+	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
-	stamp := targetVersion + "-" + time.Now().UTC().Format("20060102T150405Z")
+	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
 	backupRoot = filepath.Join(parent, "."+base+".backup-"+stamp)
 	if err := os.Rename(installRoot, backupRoot); err != nil {
 		return backupRoot, err

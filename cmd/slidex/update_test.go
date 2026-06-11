@@ -1035,6 +1035,50 @@ func TestRunUpdateApplyRequiresMatchingChecksumBeforeActivation(t *testing.T) {
 	}
 }
 
+func TestRunUpdateApplyRejectsUnsafeArchiveTargetVersionBeforeExtraction(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksumPath := filepath.Join(parent, contract.ChecksumName)
+	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--archive", archivePath, "--checksums", checksumPath, "--target-version", "../../../escaped-stage", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "target version") {
+		t.Fatalf("expected unsafe target version failure, got %v", err)
+	}
+	if candidateExtractedUnderForTest(t, filepath.Join(installRoot, ".slidex", "staged")) {
+		t.Fatal("archive should not be extracted for an unsafe target version")
+	}
+	escaped, err := filepath.Glob(filepath.Join(parent, "escaped-stage*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(escaped) > 0 {
+		t.Fatalf("unsafe target version created escaped staging paths: %v", escaped)
+	}
+}
+
 func TestRunUpdateApplyArchiveChecksumFailureJSONReportsFailureContract(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")
