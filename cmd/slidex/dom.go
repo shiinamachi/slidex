@@ -2,13 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+	"time"
 
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -29,7 +31,8 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if err != nil {
 		return nil, "", err
 	}
-	injected := injectDocumentBase(injectSlideEnumerationScript(string(raw)), documentBaseHrefForHTMLPath(htmlPath))
+	probeNonce := newProbeNonce()
+	injected := injectDocumentBase(injectSlideEnumerationScript(string(raw), probeNonce), documentBaseHrefForHTMLPath(htmlPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-dom-enum-*")
 	if err != nil {
 		return nil, "", err
@@ -50,15 +53,13 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 		fileURLFromPath(tmpHTML),
 	)
 	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
-	re := regexp.MustCompile(`(?is)<script id="slidex-slide-enumeration" type="application/json">(.*?)</script>`)
-	m := re.FindStringSubmatch(string(out))
-	if err != nil && !(isChromeCommandTimeout(err) && len(m) >= 2) {
+	payload, found := extractProbeJSONScript(string(out), "slidex-slide-enumeration", probeNonce)
+	if err != nil && !(isChromeCommandTimeout(err) && found) {
 		return nil, "", fmt.Errorf("chrome DOM enumeration failed: %w\n%s", err, string(out))
 	}
-	if len(m) < 2 {
+	if !found {
 		return nil, "", errorsNew("slide enumeration data missing from dumped DOM")
 	}
-	payload := strings.TrimSpace(xhtml.UnescapeString(m[1]))
 	var enumerated []chromeEnumeratedSlide
 	if err := json.Unmarshal([]byte(payload), &enumerated); err != nil {
 		return nil, "", err
@@ -294,8 +295,8 @@ func isElementNamed(node *xhtml.Node, name string) bool {
 	return node != nil && node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, name)
 }
 
-func injectSlideEnumerationScript(src string) string {
-	script := `<script>
+func injectSlideEnumerationScript(src, probeNonce string) string {
+	script := fmt.Sprintf(`<script>
 (function() {
   function textOf(el) { return (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(); }
   function headlineOf(el) {
@@ -313,6 +314,7 @@ func injectSlideEnumerationScript(src string) string {
     const report = document.createElement('script');
     report.id = 'slidex-slide-enumeration';
     report.type = 'application/json';
+    report.setAttribute('data-slidex-probe', %s);
     report.textContent = JSON.stringify(slides);
     document.body.appendChild(report);
   }
@@ -322,12 +324,78 @@ func injectSlideEnumerationScript(src string) string {
     emit();
   }
 })();
-</script>`
+</script>`, jsStringLiteral(probeNonce))
 	lower := strings.ToLower(src)
 	if idx := strings.LastIndex(lower, "</body>"); idx >= 0 {
 		return src[:idx] + script + src[idx:]
 	}
 	return src + script
+}
+
+func newProbeNonce() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err == nil {
+		return hex.EncodeToString(buf[:])
+	}
+	return sha256Bytes([]byte(fmt.Sprintf("probe-%d-%d", os.Getpid(), time.Now().UnixNano())))[:32]
+}
+
+func jsStringLiteral(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
+}
+
+func extractProbeJSONScript(src, id, probeNonce string) (string, bool) {
+	if id == "" || probeNonce == "" {
+		return "", false
+	}
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err != nil {
+		return "", false
+	}
+	var payload string
+	var found bool
+	var walk func(*xhtml.Node)
+	walk = func(n *xhtml.Node) {
+		if n == nil || found {
+			return
+		}
+		if isElementNamed(n, "script") &&
+			nodeAttr(n, "id") == id &&
+			strings.EqualFold(nodeAttr(n, "type"), "application/json") &&
+			nodeAttr(n, "data-slidex-probe") == probeNonce {
+			payload = strings.TrimSpace(xhtml.UnescapeString(nodeTextContent(n)))
+			found = true
+			return
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return payload, found
+}
+
+func nodeTextContent(n *xhtml.Node) string {
+	var b strings.Builder
+	var walk func(*xhtml.Node)
+	walk = func(cur *xhtml.Node) {
+		if cur == nil {
+			return
+		}
+		if cur.Type == xhtml.TextNode {
+			b.WriteString(cur.Data)
+			return
+		}
+		for child := cur.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(n)
+	return b.String()
 }
 
 func extractSlidesHTMLParser(src string) []slideInfo {

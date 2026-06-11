@@ -45,6 +45,32 @@ func TestExtractSlidesUsesHTMLParserForNestedSections(t *testing.T) {
 	}
 }
 
+func TestExtractProbeJSONScriptRequiresMatchingNonce(t *testing.T) {
+	src := `<!doctype html><html><body>
+<script id="slidex-slide-enumeration" type="application/json">[{"id":"fake"}]</script>
+<script id="slidex-slide-enumeration" type="application/json" data-slidex-probe="real-nonce">[{&quot;id&quot;:&quot;real&quot;}]</script>
+</body></html>`
+
+	payload, found := extractProbeJSONScript(src, "slidex-slide-enumeration", "real-nonce")
+	if !found {
+		t.Fatal("expected matching probe report to be found")
+	}
+	if payload != `[{"id":"real"}]` {
+		t.Fatalf("unexpected payload: %s", payload)
+	}
+
+	if _, found := extractProbeJSONScript(src, "slidex-slide-enumeration", "missing-nonce"); found {
+		t.Fatal("probe report with missing nonce should not be found")
+	}
+}
+
+func TestBuildSlideWrapperMarksOverflowReportWithNonce(t *testing.T) {
+	wrapper := buildSlideWrapper("", `<section class="slide"><p>ok</p></section>`, 1600, 900, "pretendard", "overflow-nonce")
+	if !strings.Contains(wrapper, `report.setAttribute('data-slidex-probe', "overflow-nonce");`) {
+		t.Fatalf("overflow probe nonce was not embedded in wrapper:\n%s", wrapper)
+	}
+}
+
 func TestParseInitArgsAcceptsFromTemplateAroundDeckID(t *testing.T) {
 	for _, args := range [][]string{
 		{"demo", "--from-template", "custom_template"},

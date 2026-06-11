@@ -2077,12 +2077,13 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("slide %d lacked data-slide-id; assigned %s", i+1, slide.ID))
 		}
 		manifest.OrderedSlideIDs = append(manifest.OrderedSlideIDs, slide.ID)
-		wrapper := buildSlideWrapper(head, slide.FullHTML, cfg.Width, cfg.Height, cfg.FontPreset)
+		overflowProbeNonce := newProbeNonce()
+		wrapper := buildSlideWrapper(head, slide.FullHTML, cfg.Width, cfg.Height, cfg.FontPreset, overflowProbeNonce)
 		wrapperPath := filepath.Join(tmpDir, renderWrapperFilename(i, slide.ID))
 		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o644); err != nil {
 			return manifest, err
 		}
-		overflowIssues, err := checkOverflowWithChrome(chromePath, wrapperPath, cfg.ChromeNoSandbox)
+		overflowIssues, err := checkOverflowWithChrome(chromePath, wrapperPath, cfg.ChromeNoSandbox, overflowProbeNonce)
 		if err != nil {
 			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("overflow check could not run for %s: %v", slide.ID, err))
 		}
@@ -2216,7 +2217,7 @@ func normalizeText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func buildSlideWrapper(head, slideHTML string, width, height int, fontPreset string) string {
+func buildSlideWrapper(head, slideHTML string, width, height int, fontPreset, overflowProbeNonce string) string {
 	fontFamily := fontFamilyForPreset(fontPreset)
 	return fmt.Sprintf(`<!doctype html>
 <html lang="ko">
@@ -2261,6 +2262,7 @@ async function slidexReady() {
   const report = document.createElement('script');
   report.id = 'slidex-overflow-data';
   report.type = 'application/json';
+  report.setAttribute('data-slidex-probe', %s);
   report.textContent = JSON.stringify(issues);
   document.body.appendChild(report);
 }
@@ -2268,7 +2270,7 @@ document.addEventListener('DOMContentLoaded', () => { slidexReady(); });
 </script>
 </head>
 <body><div class="deck">%s</div></body>
-</html>`, head, width, height, fontFamily, width, height, width, height, width, height, width, height, width, height, slideHTML)
+</html>`, head, width, height, fontFamily, width, height, width, height, width, height, width, height, width, height, jsStringLiteral(overflowProbeNonce), slideHTML)
 }
 
 func renderWrapperFilename(index int, slideID string) string {
@@ -2624,7 +2626,7 @@ func screenshotFileExists(pngPath string) bool {
 	return err == nil && info.Size() > 0
 }
 
-func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) ([]string, error) {
+func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool, probeNonce string) ([]string, error) {
 	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
 	if err != nil {
 		return nil, err
@@ -2636,16 +2638,15 @@ func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool) 
 		fileURLFromPath(htmlPath),
 	)
 	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
-	re := regexp.MustCompile(`(?is)<script id="slidex-overflow-data" type="application/json">(.*?)</script>`)
-	m := re.FindStringSubmatch(string(out))
-	if err != nil && !(isChromeCommandTimeout(err) && len(m) >= 2) {
+	payload, found := extractProbeJSONScript(string(out), "slidex-overflow-data", probeNonce)
+	if err != nil && !(isChromeCommandTimeout(err) && found) {
 		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
 	}
-	if len(m) < 2 {
+	if !found {
 		return nil, errors.New("overflow report missing from dumped DOM")
 	}
 	var rawIssues []map[string]any
-	if err := json.Unmarshal([]byte(m[1]), &rawIssues); err != nil {
+	if err := json.Unmarshal([]byte(payload), &rawIssues); err != nil {
 		return nil, err
 	}
 	issues := make([]string, 0, len(rawIssues))
