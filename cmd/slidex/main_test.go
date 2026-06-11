@@ -5015,6 +5015,81 @@ func TestCodexExecArgsIncludeSchemaForFreshAndResume(t *testing.T) {
 	}
 }
 
+func TestRunCodexExecStructuredRejectsSymlinkedSessionFile(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	runDir := filepath.Join(deck, "out", "agent_runs")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "private-session.txt")
+	if err := os.WriteFile(outside, []byte("PRIVATE_SESSION\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(runDir, "codex_exec_last_session.txt")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	_, _, err := runCodexExecStructured(deck, "resolve_workspace", "{}", filepath.Join("schemas", "app_stage_result.strict.schema.json"), true, "last", nil)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlinked session file rejection, got %v", err)
+	}
+}
+
+func TestRunCodexExecStructuredRejectsSymlinkedLastMessage(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	runDir := filepath.Join(deck, "out", "agent_runs")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside-last.json")
+	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lastMessage := filepath.Join(runDir, "resolve_workspace_codex_exec_fresh.last.json")
+	if err := os.Symlink(outside, lastMessage); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	_, _, err := runCodexExecStructured(deck, "resolve_workspace", "{}", filepath.Join("schemas", "app_stage_result.strict.schema.json"), false, "", nil)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlinked last-message rejection, got %v", err)
+	}
+}
+
+func TestPrepareCodexOutputMessagePathRejectsHardlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside-last.json")
+	target := filepath.Join(dir, "last.json")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, target)
+	err := prepareCodexOutputMessagePath(target)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "hardlink") {
+		t.Fatalf("expected hardlinked last-message rejection, got %v", err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+}
+
+func TestRunCodexExecVisualReviewRejectsSymlinkedLastMessage(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	reviewDir := filepath.Join(deck, "out", "visual_reviews")
+	if err := os.MkdirAll(reviewDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside-review.json")
+	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(reviewDir, "codex_visual_review.last.json")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	_, err := runCodexExecVisualReview(deck, renderManifest{})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlinked visual review last-message rejection, got %v", err)
+	}
+}
+
 func TestAppServerFinalMessageExtractionAcceptsActualCompletedTurnID(t *testing.T) {
 	events := []map[string]any{
 		{

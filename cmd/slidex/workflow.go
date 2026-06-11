@@ -35,6 +35,8 @@ const (
 	stateSchemaVersion   = "slidex.state.v1"
 	threadsSchemaVersion = "slidex.codexThreads.v1"
 	maxDeckTextReadBytes = 2 * 1024 * 1024
+	maxCodexSessionBytes = 512
+	maxCodexMessageBytes = 8 * 1024 * 1024
 )
 
 var (
@@ -5772,10 +5774,17 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 	lastMessage := filepath.Join(runDir, runBase+".last.json")
 	eventLog := filepath.Join(runDir, runBase+".jsonl")
 	sessionPath := filepath.Join(runDir, "codex_exec_last_session.txt")
+	if err := prepareCodexOutputMessagePath(lastMessage); err != nil {
+		return "", nil, err
+	}
 	requestedResumeTarget := resumeTarget
 	effectiveResumeTarget := resumeTarget
 	if resume && (effectiveResumeTarget == "" || effectiveResumeTarget == "last") {
-		if local := strings.TrimSpace(readFileOrEmpty(sessionPath)); local != "" {
+		local, err := readCodexExecSessionID(sessionPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if local != "" {
 			effectiveResumeTarget = local
 		}
 	}
@@ -5812,7 +5821,7 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 		_ = secureWriteJSON(path, run)
 		return path, nil, fmt.Errorf("codex exec %s failed: %w\n%s", mode, err, string(out))
 	}
-	raw, err := os.ReadFile(lastMessage)
+	raw, err := readRegularFileLimited(lastMessage, maxCodexMessageBytes)
 	if err != nil {
 		run["status"] = "fail"
 		run["error"] = err.Error()
@@ -5842,6 +5851,74 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 		return "", nil, err
 	}
 	return path, payload, nil
+}
+
+func prepareCodexOutputMessagePath(path string) error {
+	if err := ensureSecureDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if err := rejectSecureInPlaceWriteTarget(path); err != nil {
+		return err
+	}
+	return secureWriteFile(path, nil, 0o600)
+}
+
+func readCodexExecSessionID(path string) (string, error) {
+	raw, err := readRegularFileLimited(path, maxCodexSessionBytes)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	session := strings.TrimSpace(string(raw))
+	if session == "" {
+		return "", nil
+	}
+	if !validCodexExecSessionID(session) {
+		return "", fmt.Errorf("codex exec session id contains unsupported characters: %s", filepath.ToSlash(path))
+	}
+	return session, nil
+}
+
+func validCodexExecSessionID(value string) bool {
+	if len(value) > maxCodexSessionBytes {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		switch r {
+		case '-', '_', '.', ':':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func readRegularFileLimited(path string, maxBytes int64) ([]byte, error) {
+	f, info, err := openRegularFileForRead(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("read target must be a regular file: %s", filepath.ToSlash(path))
+	}
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("read target exceeds %d bytes: %s", maxBytes, filepath.ToSlash(path))
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("read target exceeds %d bytes: %s", maxBytes, filepath.ToSlash(path))
+	}
+	return raw, nil
 }
 
 func extractCodexExecThreadID(raw []byte) string {
@@ -7171,6 +7248,9 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	if err := ensureSecureDir(filepath.Dir(lastMessage)); err != nil {
 		return nil, err
 	}
+	if err := prepareCodexOutputMessagePath(lastMessage); err != nil {
+		return nil, err
+	}
 	expected := map[string]any{"schemaVersion": "slidex.reviewFindings.v1", "stage": "visual_qa", "round": 1, "mode": "codex_subagent", "status": "pass", "imageEvidence": visualReviewEvidence(deckAbs, manifest), "artifactHashes": structuredReviewArtifactHashes(deckAbs), "findings": []map[string]any{}}
 	expectedRaw, _ := json.MarshalIndent(expected, "", "  ")
 	prompt := "Review the attached rendered slide images for visual QA. Return JSON only matching schemas/app_review_findings.strict.schema.json. Return the Baseline JSON exactly if no visible issue is present.\nBaseline JSON:\n" + string(expectedRaw)
@@ -7186,7 +7266,7 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	if err != nil {
 		return nil, fmt.Errorf("codex exec visual QA failed: %w\n%s", err, string(out))
 	}
-	raw, err := os.ReadFile(lastMessage)
+	raw, err := readRegularFileLimited(lastMessage, maxCodexMessageBytes)
 	if err != nil {
 		return nil, err
 	}
