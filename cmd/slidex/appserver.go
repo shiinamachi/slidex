@@ -1437,16 +1437,44 @@ func postRestartPluginVerificationStatus(result appServerPluginSmokeResult, inst
 	if !filepath.IsAbs(pluginPath) || !filepath.IsAbs(skillPath) {
 		return "not_verified"
 	}
-	if !pathWithin(pluginRoot, pluginPath) || !pathWithin(pluginRoot, skillPath) {
+	if !pathWithin(pluginRoot, pluginPath) {
 		return "drift"
 	}
-	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
-		return "drift"
+	if status := postRestartSkillPathStatus(pluginRoot, skillPath, result.PluginVersion); status != "verified" {
+		return status
 	}
 	if status := postRestartPluginMetadataStatus(pluginRoot, result.PluginVersion); status != "verified" {
 		return status
 	}
 	return "verified"
+}
+
+func postRestartSkillPathStatus(pluginRoot, skillPath, visiblePluginVersion string) string {
+	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
+		return "drift"
+	}
+	if pathWithin(pluginRoot, skillPath) {
+		return "verified"
+	}
+	cacheRoot := codexPluginRootForSkillPath(skillPath)
+	if cacheRoot == "" {
+		return "drift"
+	}
+	return postRestartPluginMetadataStatus(cacheRoot, visiblePluginVersion)
+}
+
+func codexPluginRootForSkillPath(skillPath string) string {
+	dir := filepath.Clean(filepath.Dir(skillPath))
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".codex-plugin", "plugin.json")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func postRestartPluginMetadataStatus(pluginRoot, visiblePluginVersion string) string {

@@ -27,7 +27,7 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0", allowUnverifiedAttestationForTest())
+	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}

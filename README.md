@@ -14,16 +14,29 @@ sharing.
 
 ## ⚡ Install with Codex App
 
-Paste the following prompt into a **Codex App** chat. Codex will automatically
-install the CLI, register the plugin, and verify the setup:
+Choose one release channel, then paste the matching prompt into a **Codex App**
+chat. Codex will automatically install the CLI, register the plugin, and verify
+the setup. The default install does not require GitHub CLI or GitHub login.
+
+### Production build
+
+Use this for the latest stable release:
 
 ```text
-Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, confirm GitHub CLI is available for release integrity and attestation verification, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum and GitHub artifact attestation, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, restart Codex, start a new Codex thread, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm the CLI. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. Run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" to confirm bundled plugin skills match the install. If update status reports restartRequired, restart Codex, start a new thread, rerun "slidex codex app-server plugin-smoke --json", and then rerun "slidex update verify --json" before treating bundled skills as active. Report each step's result.
+Install slidex production build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the production channel install instructions.
 ```
 
-> See [CODEX_INSTALL_PROMPT.md](CODEX_INSTALL_PROMPT.md) for details on what
-> this prompt does, or [INSTALL.md](INSTALL.md) for the full internal install
-> reference.
+### Canary build (Pre-Release)
+
+Canary builds are in-development pre-release builds and may be unstable. Use
+this channel only when you need unreleased fixes or want to test upcoming
+changes:
+
+```text
+Install slidex canary build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the canary channel install instructions; keep canary separate from any existing production install.
+```
+
+> See [INSTALL.md](INSTALL.md) for the full internal install reference.
 
 ---
 

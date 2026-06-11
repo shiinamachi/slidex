@@ -12,8 +12,7 @@
     "status",
     "restartRequired",
     "pluginVerificationStatus",
-    "nextVerificationCommand",
-    "attestation"
+    "nextVerificationCommand"
   ],
   "additionalProperties": false,
   "properties": {
@@ -73,30 +72,6 @@
     "nextVerificationCommand": {
       "type": "string",
       "minLength": 1
-    },
-    "attestation": {
-      "type": "object",
-      "required": ["policy", "status"],
-      "additionalProperties": false,
-      "properties": {
-        "policy": {
-          "type": "string",
-          "enum": ["require", "allow-unverified"]
-        },
-        "status": {
-          "type": "string",
-          "enum": ["not_applicable", "skipped", "verified", "fail"]
-        },
-        "command": {
-          "type": "string"
-        },
-        "output": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        }
-      }
     },
     "candidateValidation": {
       "type": "array",

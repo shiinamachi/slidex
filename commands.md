@@ -162,10 +162,20 @@ goal API를 동기화하는 CLI wrapper입니다. 자동화나 CI에서는 `slid
 
 일반 사용자에게 보여줄 설치 안내는 한 줄짜리 Codex App one-shot prompt만 사용합니다.
 실제 release package 설치, checksum 검증, Codex plugin setup 절차는 Codex가
-저장소 안의 `INSTALL.md`를 읽고 수행합니다.
+저장소 안의 `INSTALL.md`를 읽고 수행합니다. 기본 설치는 GitHub CLI 설치나
+GitHub 로그인을 요구하지 않으며, release package 무결성은 SHA-256 checksum으로
+검증합니다.
+
+Production channel:
 
 ```text
-Install slidex from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, confirm GitHub CLI is available for release integrity and attestation verification, download the matching release package from the latest GitHub Release tag, verify the SHA-256 checksum and GitHub artifact attestation, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, restart Codex, start a new Codex thread, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm the CLI. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. Run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" to confirm bundled plugin skills match the install. If update status reports restartRequired, restart Codex, start a new thread, rerun "slidex codex app-server plugin-smoke --json", and then rerun "slidex update verify --json" before treating bundled skills as active. Report each step's result.
+Install slidex production build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the production channel install instructions.
+```
+
+Canary channel:
+
+```text
+Install slidex canary build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the canary channel install instructions; keep canary separate from any existing production install.
 ```
 
 Release package update:
@@ -188,9 +198,8 @@ renamed safely:
 <pendingActivationCommand from update status>
 ```
 
-기본 `update apply`는 GitHub CLI release integrity와 artifact attestation 검증을
-요구합니다. `--attestation-policy allow-unverified`는 명시적인 수동 보안 판단이
-있을 때만 사용합니다.
+`update apply`는 release archive와 checksum 파일의 SHA-256 검증만 수행합니다.
+GitHub CLI 로그인은 사용하지 않습니다.
 
 개발자 source build:
 

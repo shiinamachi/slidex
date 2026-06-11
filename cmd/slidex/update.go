@@ -37,16 +37,12 @@ const (
 	updateStateSchemaVersion     = "slidex.updateState.v1"
 	pendingUpdateSchemaVersion   = "slidex.pendingUpdate.v1"
 	updateGitHubReleasesAPI      = "https://api.github.com/repos/shiinamachi/slidex/releases"
-	updateGitHubRepo             = "shiinamachi/slidex"
 
 	installMetadataSchemaFile   = "slidex_install_metadata.schema.json"
 	updateStateSchemaFile       = "slidex_update_state.schema.json"
 	pendingUpdateSchemaFile     = "slidex_pending_update.schema.json"
 	updateStatusSchemaFile      = "slidex_update_status.schema.json"
 	updateApplyResultSchemaFile = "slidex_update_apply_result.schema.json"
-
-	attestationPolicyRequire         = "require"
-	attestationPolicyAllowUnverified = "allow-unverified"
 
 	updateInstallRootEnv     = "SLIDEX_INSTALL_ROOT"
 	updateInstallMetadataEnv = "SLIDEX_INSTALL_METADATA"
@@ -126,30 +122,21 @@ type updateStatus struct {
 }
 
 type updateApplyResult struct {
-	ToolName                 string                  `json:"toolName"`
-	CurrentVersion           string                  `json:"currentVersion"`
-	TargetVersion            string                  `json:"targetVersion"`
-	TargetTag                string                  `json:"targetTag,omitempty"`
-	Channel                  string                  `json:"channel"`
-	InstallRoot              string                  `json:"installRoot"`
-	Status                   string                  `json:"status"`
-	StagedRoot               string                  `json:"stagedRoot,omitempty"`
-	BackupRoot               string                  `json:"backupRoot,omitempty"`
-	PendingUpdatePath        string                  `json:"pendingUpdatePath,omitempty"`
-	RestartRequired          bool                    `json:"restartRequired"`
-	PluginVerificationStatus string                  `json:"pluginVerificationStatus"`
-	NextVerificationCommand  string                  `json:"nextVerificationCommand"`
-	Attestation              attestationVerification `json:"attestation"`
-	CandidateValidation      []qaFinding             `json:"candidateValidation,omitempty"`
-	Error                    string                  `json:"error,omitempty"`
-}
-
-type attestationVerification struct {
-	Policy  string `json:"policy"`
-	Status  string `json:"status"`
-	Command string `json:"command,omitempty"`
-	Output  string `json:"output,omitempty"`
-	Error   string `json:"error,omitempty"`
+	ToolName                 string      `json:"toolName"`
+	CurrentVersion           string      `json:"currentVersion"`
+	TargetVersion            string      `json:"targetVersion"`
+	TargetTag                string      `json:"targetTag,omitempty"`
+	Channel                  string      `json:"channel"`
+	InstallRoot              string      `json:"installRoot"`
+	Status                   string      `json:"status"`
+	StagedRoot               string      `json:"stagedRoot,omitempty"`
+	BackupRoot               string      `json:"backupRoot,omitempty"`
+	PendingUpdatePath        string      `json:"pendingUpdatePath,omitempty"`
+	RestartRequired          bool        `json:"restartRequired"`
+	PluginVerificationStatus string      `json:"pluginVerificationStatus"`
+	NextVerificationCommand  string      `json:"nextVerificationCommand"`
+	CandidateValidation      []qaFinding `json:"candidateValidation,omitempty"`
+	Error                    string      `json:"error,omitempty"`
 }
 
 type pendingUpdate struct {
@@ -305,16 +292,12 @@ func runUpdateApply(args []string) error {
 	targetVersion := fs.String("target-version", "", "expected target version")
 	targetTag := fs.String("target-tag", "", "target release tag")
 	apiURL := fs.String("api-url", updateGitHubReleasesAPI, "GitHub releases API URL")
-	attestationPolicy := fs.String("attestation-policy", attestationPolicyRequire, "attestation policy: require or allow-unverified")
 	yes := fs.Bool("yes", false, "activate the staged update")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return exitCodeError(2, "usage: slidex update apply --yes [--json] [--install-root DIR] [--metadata FILE] [--api-url URL] [--attestation-policy require|allow-unverified] [--target-version VERSION --candidate DIR | --target-version VERSION --archive FILE --checksums FILE --target-tag TAG]")
-	}
-	if err := validateAttestationPolicy(*attestationPolicy); err != nil {
-		return err
+		return exitCodeError(2, "usage: slidex update apply --yes [--json] [--install-root DIR] [--metadata FILE] [--api-url URL] [--target-version VERSION --candidate DIR | --target-version VERSION --archive FILE --checksums FILE [--target-tag TAG]]")
 	}
 	if !*yes {
 		return exitCodeError(2, "slidex update apply requires --yes before replacing the install root")
@@ -328,23 +311,11 @@ func runUpdateApply(args []string) error {
 	}
 	if !status.UpdatesEnabled {
 		err := exitCodeError(4, "updates are disabled for channel %s: %s", status.Channel, firstNonEmpty(status.Guidance, status.Reason))
-		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}, err)
-	}
-	if *candidate != "" && *attestationPolicy != attestationPolicyAllowUnverified {
-		err := exitCodeError(2, "--candidate bypasses release archive attestation and requires --attestation-policy allow-unverified")
-		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}, err)
+		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 	}
 	candidateRoot := *candidate
-	attestation := attestationVerification{Policy: *attestationPolicy, Status: "not_applicable"}
-	if *candidate != "" {
-		attestation = attestationVerification{
-			Policy: *attestationPolicy,
-			Status: "skipped",
-			Output: "candidate bundle provided directly; release attestation explicitly bypassed by --attestation-policy allow-unverified",
-		}
-	}
 	if *candidate == "" && *archive == "" {
-		downloadedRoot, downloadedVersion, downloadedTag, downloadedAttestation, err := downloadAndStageReleaseCandidate(context.Background(), status, *apiURL, *attestationPolicy)
+		downloadedRoot, downloadedVersion, downloadedTag, err := downloadAndStageReleaseCandidate(context.Background(), status, *apiURL)
 		if err != nil {
 			if *targetVersion == "" {
 				*targetVersion = downloadedVersion
@@ -352,10 +323,9 @@ func runUpdateApply(args []string) error {
 			if *targetTag == "" {
 				*targetTag = downloadedTag
 			}
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, downloadedAttestation, err)
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
 		candidateRoot = downloadedRoot
-		attestation = downloadedAttestation
 		if *targetVersion == "" {
 			*targetVersion = downloadedVersion
 		}
@@ -365,35 +335,31 @@ func runUpdateApply(args []string) error {
 	} else if *archive != "" {
 		if *checksums == "" {
 			err := exitCodeError(2, "--checksums is required with --archive")
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
 		if *targetVersion == "" {
 			err := exitCodeError(2, "--target-version is required with --archive")
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
-		}
-		if *targetTag == "" && *attestationPolicy == attestationPolicyRequire {
-			err := exitCodeError(2, "--target-tag is required with --archive when attestation verification is required")
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
 		if err := verifyArchiveCandidateSHA256(*archive, *checksums); err != nil {
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
-		}
-		archiveAttestation, err := verifyReleaseAttestation(*archive, *targetTag, *attestationPolicy)
-		if err != nil {
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, archiveAttestation, err)
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
 		extracted, err := extractArchiveCandidate(*archive, *targetVersion, status.InstallRoot)
 		if err != nil {
-			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, archiveAttestation, err)
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
-		attestation = archiveAttestation
 		candidateRoot = extracted
 	}
 	if *targetVersion == "" {
 		err := exitCodeError(2, "--target-version is required with --candidate")
-		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, attestation, err)
+		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 	}
-	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag, attestation)
+	if *targetTag == "" && strings.TrimSpace(candidateRoot) != "" {
+		if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil {
+			*targetTag = metadata.Tag
+		}
+	}
+	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag)
 	if *jsonOut {
 		if printErr := printJSON(result); printErr != nil && err == nil {
 			err = printErr
@@ -497,21 +463,18 @@ func runUpdateActivatePending(args []string) error {
 	return nil
 }
 
-func maybePrintUpdateApplyFailure(jsonOut bool, status updateStatus, targetVersion, targetTag string, attestation attestationVerification, err error) error {
+func maybePrintUpdateApplyFailure(jsonOut bool, status updateStatus, targetVersion, targetTag string, err error) error {
 	if !jsonOut {
 		return err
 	}
-	result := updateApplyFailureResult(status, targetVersion, targetTag, attestation, err)
+	result := updateApplyFailureResult(status, targetVersion, targetTag, err)
 	if printErr := printJSON(result); printErr != nil {
 		return printErr
 	}
 	return err
 }
 
-func updateApplyFailureResult(status updateStatus, targetVersion, targetTag string, attestation attestationVerification, err error) updateApplyResult {
-	if attestation.Status == "" {
-		attestation.Status = "not_applicable"
-	}
+func updateApplyFailureResult(status updateStatus, targetVersion, targetTag string, err error) updateApplyResult {
 	return updateApplyResult{
 		ToolName:                 toolName,
 		CurrentVersion:           status.CurrentVersion,
@@ -523,7 +486,6 @@ func updateApplyFailureResult(status updateStatus, targetVersion, targetTag stri
 		RestartRequired:          status.RestartRequired,
 		PluginVerificationStatus: status.PluginVerificationStatus,
 		NextVerificationCommand:  firstNonEmpty(status.NextVerificationCommand, "slidex update verify --json"),
-		Attestation:              attestation,
 		Error:                    err.Error(),
 	}
 }
@@ -858,7 +820,6 @@ func doctorUpdateSchemaFindings() []qaFinding {
 		RestartRequired:          true,
 		PluginVerificationStatus: "restart_required",
 		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
-		Attestation:              attestationVerification{Policy: attestationPolicyRequire, Status: "verified", Command: "gh attestation verify"},
 	}
 	samples := []struct {
 		schema  string
@@ -901,13 +862,17 @@ func markPluginVerified(installRoot, pluginVersion, pluginPath, skillPath string
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
+	currentVersion, currentTag := updateStatePackageIdentity(installRoot)
 	state, _, _ := readUpdateState(installRoot)
 	if state == nil {
 		state = &updateState{}
 	}
-	state.CurrentVersion = toolVersion
+	state.CurrentVersion = firstNonEmpty(currentVersion, toolVersion)
 	if state.TargetVersion == "" {
-		state.TargetVersion = pluginVersionBase(pluginVersion)
+		state.TargetVersion = state.CurrentVersion
+	}
+	if state.TargetTag == "" {
+		state.TargetTag = currentTag
 	}
 	state.RestartRequired = false
 	state.RestartReason = ""
@@ -924,13 +889,17 @@ func markPluginDrift(installRoot, pluginVersion, skillPath string) error {
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
+	currentVersion, currentTag := updateStatePackageIdentity(installRoot)
 	state, _, _ := readUpdateState(installRoot)
 	if state == nil {
 		state = &updateState{}
 	}
-	state.CurrentVersion = toolVersion
+	state.CurrentVersion = firstNonEmpty(currentVersion, toolVersion)
 	if state.TargetVersion == "" {
-		state.TargetVersion = pluginVersionBase(pluginVersion)
+		state.TargetVersion = state.CurrentVersion
+	}
+	if state.TargetTag == "" {
+		state.TargetTag = currentTag
 	}
 	state.RestartRequired = true
 	state.RestartReason = "Codex plugin verification found a visible plugin or skill path that does not match this install root"
@@ -938,6 +907,14 @@ func markPluginDrift(installRoot, pluginVersion, skillPath string) error {
 	state.VerificationCommand = "slidex codex app-server plugin-smoke --json"
 	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeUpdateState(installRoot, *state)
+}
+
+func updateStatePackageIdentity(installRoot string) (version, tag string) {
+	metadata, err := readInstallMetadata(installMetadataPath(installRoot))
+	if err != nil || metadata == nil {
+		return "", ""
+	}
+	return strings.TrimSpace(metadata.Version), strings.TrimSpace(metadata.Tag)
 }
 
 func verifyArchiveCandidateSHA256(archivePath, checksumsPath string) error {
@@ -963,44 +940,40 @@ func extractArchiveCandidate(archivePath, targetVersion, installRoot string) (st
 	return extractReleaseArchive(archivePath, stageParent)
 }
 
-func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL, attestationPolicy string) (candidateRoot, targetVersion, targetTag string, attestation attestationVerification, err error) {
+func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL string) (candidateRoot, targetVersion, targetTag string, err error) {
 	releases, err := fetchUpdateReleases(ctx, apiURL)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
+		return "", "", "", err
 	}
 	release, err := selectUpdateReleaseForStatus(status, releases)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
+		return "", "", "", err
 	}
 	contract, err := releaseAssetContractFor(release.TagName, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
+		return "", "", "", err
 	}
 	archive, checksum, err := release.requiredAssets(contract)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
+		return "", "", "", err
 	}
 	archivePayload, err := downloadUpdateAsset(ctx, archive)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
+		return "", "", "", err
 	}
 	checksumPayload, err := downloadUpdateAsset(ctx, checksum)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
+		return "", "", "", err
 	}
 	stageParent, archivePath, err := stageDownloadedReleaseArchive(status.InstallRoot, contract.Version, archive, archivePayload, checksum, checksumPayload)
 	if err != nil {
-		return "", "", "", attestationVerification{}, err
-	}
-	attestation, err = verifyReleaseAttestation(archivePath, release.TagName, attestationPolicy)
-	if err != nil {
-		return "", "", "", attestation, err
+		return "", "", "", err
 	}
 	candidateRoot, err = extractDownloadedReleaseArchive(stageParent, archivePath)
 	if err != nil {
-		return "", "", "", attestation, err
+		return "", "", "", err
 	}
-	return candidateRoot, contract.Version, release.TagName, attestation, nil
+	return candidateRoot, contract.Version, release.TagName, nil
 }
 
 func downloadUpdateAsset(ctx context.Context, asset updateAsset) ([]byte, error) {
@@ -1171,82 +1144,6 @@ func writeStreamFile(path string, r io.Reader, mode os.FileMode) error {
 	return closeErr
 }
 
-func validateAttestationPolicy(policy string) error {
-	switch policy {
-	case attestationPolicyRequire, attestationPolicyAllowUnverified:
-		return nil
-	default:
-		return exitCodeError(2, "--attestation-policy must be require or allow-unverified, got %q", policy)
-	}
-}
-
-func verifyReleaseAttestation(archivePath, targetTag, policy string) (attestationVerification, error) {
-	result := attestationVerification{Policy: policy}
-	switch policy {
-	case attestationPolicyAllowUnverified:
-		result.Status = "skipped"
-		result.Output = "attestation verification explicitly bypassed by --attestation-policy allow-unverified"
-		return result, nil
-	case attestationPolicyRequire:
-		if targetTag == "" {
-			result.Status = "fail"
-			result.Error = "--target-tag is required when attestation verification is required"
-			return result, errors.New(result.Error)
-		}
-		gh, err := exec.LookPath("gh")
-		if err != nil {
-			result.Status = "fail"
-			result.Error = "GitHub CLI gh is required for release attestation verification"
-			return result, errors.New(result.Error)
-		}
-		commands := [][]string{
-			{gh, "release", "verify", targetTag, "--repo", updateGitHubRepo},
-			{gh, "release", "verify-asset", targetTag, archivePath, "--repo", updateGitHubRepo},
-			{gh, "attestation", "verify", archivePath, "--repo", updateGitHubRepo, "--cert-oidc-issuer", "https://token.actions.githubusercontent.com", "--cert-identity-regex", "^https://github.com/shiinamachi/slidex/.github/workflows/release.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$"},
-		}
-		var outputs []string
-		var commandStrings []string
-		for _, args := range commands {
-			commandStrings = append(commandStrings, shellQuoteCommand(args))
-			out, err := runVerificationCommand(args, 45*time.Second)
-			outputs = append(outputs, strings.TrimSpace(out))
-			if err != nil {
-				result.Status = "fail"
-				result.Command = strings.Join(commandStrings, " && ")
-				result.Output = truncateForJSON(strings.Join(outputs, "\n"), 6000)
-				result.Error = err.Error()
-				return result, fmt.Errorf("release attestation verification failed: %w", err)
-			}
-		}
-		result.Status = "verified"
-		result.Command = strings.Join(commandStrings, " && ")
-		result.Output = truncateForJSON(strings.Join(outputs, "\n"), 6000)
-		return result, nil
-	default:
-		err := validateAttestationPolicy(policy)
-		result.Status = "fail"
-		result.Error = err.Error()
-		return result, err
-	}
-}
-
-func runVerificationCommand(args []string, timeout time.Duration) (string, error) {
-	if len(args) == 0 {
-		return "", errors.New("empty verification command")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		return string(out), ctx.Err()
-	}
-	if err != nil {
-		return string(out), fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
-}
-
 func shellQuoteCommand(args []string) string {
 	quoted := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -1288,7 +1185,7 @@ func singleExtractedRoot(dest string) string {
 	return filepath.Join(dest, entries[0].Name())
 }
 
-func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, targetTag string, attestation attestationVerification) (updateApplyResult, error) {
+func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, targetTag string) (updateApplyResult, error) {
 	result := updateApplyResult{
 		ToolName:                 toolName,
 		CurrentVersion:           status.CurrentVersion,
@@ -1299,7 +1196,6 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		Status:                   "candidate-invalid",
 		PluginVerificationStatus: status.PluginVerificationStatus,
 		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
-		Attestation:              attestation,
 	}
 	result.CandidateValidation = validateCandidateBundle(candidateRoot, targetVersion)
 	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, targetVersion, filepath.Join(candidateRoot, ".slidex", "install.json"))...)
@@ -1464,7 +1360,6 @@ func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
 		Status:                   "pending-not-found",
 		PluginVerificationStatus: status.PluginVerificationStatus,
 		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
-		Attestation:              attestationVerification{Status: "not_applicable"},
 	}
 	pending := status.PendingUpdate
 	if pending == nil {
@@ -1617,9 +1512,6 @@ func printUpdateApplyResult(result updateApplyResult) {
 	}
 	if result.PendingUpdatePath != "" {
 		fmt.Printf("pending update: %s\n", result.PendingUpdatePath)
-	}
-	if result.Attestation.Policy != "" {
-		fmt.Printf("attestation: %s (%s)\n", result.Attestation.Status, result.Attestation.Policy)
 	}
 	if result.PluginVerificationStatus != "" {
 		fmt.Printf("plugin status: %s\n", result.PluginVerificationStatus)
@@ -1844,11 +1736,11 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 	if !filepath.IsAbs(skillPath) {
 		return fmt.Errorf("%s: verifiedStartSkillPath must be absolute, got %q", path, state.VerifiedStartSkillPath)
 	}
-	if !pathWithin(pluginRoot, skillPath) {
-		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
-	}
 	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
 		return fmt.Errorf("%s: verifiedStartSkillPath must end with skills/slidex-start/SKILL.md, got %s", path, filepath.ToSlash(skillPath))
+	}
+	if status := postRestartSkillPathStatus(pluginRoot, skillPath, state.VerifiedPluginVersion); status != "verified" {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s or a matching Codex plugin cache, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
 	}
 	return nil
 }

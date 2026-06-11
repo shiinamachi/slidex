@@ -22,9 +22,9 @@ including workbench UI status banners and post-restart plugin verification.
 Between iterations, use evidence from failing tests, release metadata, doctor
 findings, and Codex plugin state to choose the next smallest defensible change.
 If release metadata, Codex plugin behavior, platform file replacement, or
-attestation verification cannot be proven under current constraints, stop with
-the attempted paths, evidence gathered, blocker, and the decision or external
-state needed.
+checksum verification cannot be proven under current constraints, stop with the
+attempted paths, evidence gathered, blocker, and the decision or external state
+needed.
 
 ## Interview Summary
 
@@ -55,7 +55,7 @@ state needed.
 - Blocked condition: stop if GitHub release metadata cannot identify assets
   deterministically, Codex plugin reinstall behavior cannot be verified through
   documented commands/App Server surfaces, Windows replacement semantics require
-  a user decision, or signing/attestation policy needs a product decision.
+  a user decision, or checksum verification policy needs a product decision.
 - Reporting: final report should summarize implemented command surface,
   channel behavior, verification commands and outputs, restart workflow, files
   changed, residual risks, and any manual Codex App verification still required.
@@ -74,9 +74,8 @@ state needed.
   Codex App or CLI session restart before new bundled skills are reliably loaded.
 - Existing legacy marketplace selectors such as `slidex-local` may be reported
   as drift, but cleanup requires explicit opt-in outside the default updater.
-- GitHub release asset SHA-256 verification is mandatory. Immutable release and
-  attestation verification should be implemented or gated by an explicit policy
-  decision before unattended updates are considered complete.
+- GitHub release asset SHA-256 verification is mandatory before unattended
+  updates are considered complete.
 
 ## Design Contract
 
@@ -179,11 +178,8 @@ state needed.
   https://docs.github.com/en/rest/releases/assets
 - GitHub release assets expose immutable SHA-256 digests.
   https://github.blog/changelog/2025-06-03-releases-now-expose-digests-for-release-assets/
-- GitHub immutable releases protect published tags/assets and generate release
-  attestations.
+- GitHub immutable releases protect published tags/assets.
   https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases
-- GitHub CLI can verify artifact attestations and enforce signer identity.
-  https://cli.github.com/manual/gh_attestation_verify
 - Current slidex release packaging already bundles CLI, runtime templates,
   schemas, plugin package, marketplace, and protocol bundle together:
   `scripts/package-release.sh`, `INSTALL.md`, `VERSIONING.md`.
@@ -198,5 +194,5 @@ When the Goal completes, report:
   workflow.
 - Verification commands run and key pass/fail evidence.
 - Files changed and any generated artifacts intentionally left uncommitted.
-- Residual risks, especially signing/attestation or platform-specific replacement
+- Residual risks, especially checksum evidence or platform-specific replacement
   limitations.
