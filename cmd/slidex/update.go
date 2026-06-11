@@ -1202,7 +1202,7 @@ func verifyReleaseAttestation(archivePath, targetTag, policy string) (attestatio
 		commands := [][]string{
 			{gh, "release", "verify", targetTag, "--repo", updateGitHubRepo},
 			{gh, "release", "verify-asset", targetTag, archivePath, "--repo", updateGitHubRepo},
-			{gh, "attestation", "verify", archivePath, "--repo", updateGitHubRepo, "--cert-oidc-issuer", "https://token.actions.githubusercontent.com", "--cert-identity-regex", "^https://github.com/shiinamachi/slidex/.github/workflows/cross-platform.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$"},
+			{gh, "attestation", "verify", archivePath, "--repo", updateGitHubRepo, "--cert-oidc-issuer", "https://token.actions.githubusercontent.com", "--cert-identity-regex", "^https://github.com/shiinamachi/slidex/.github/workflows/release.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$"},
 		}
 		var outputs []string
 		var commandStrings []string

@@ -148,7 +148,7 @@ gh release verify-asset "$TAG" "$PACKAGE_FILE" --repo shiinamachi/slidex
 gh attestation verify "$PACKAGE_FILE" \
   --repo shiinamachi/slidex \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
-  --cert-identity-regex '^https://github.com/shiinamachi/slidex/.github/workflows/cross-platform.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$'
+  --cert-identity-regex '^https://github.com/shiinamachi/slidex/.github/workflows/release.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$'
 ```
 
 > **If `gh` is not installed, authentication is unavailable, or any attestation

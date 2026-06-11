@@ -371,7 +371,7 @@ jobs:
           SOURCE_REF: ${{ needs.release-metadata.outputs.source_ref }}
         run: |
           set -euo pipefail
-          signer_workflow="${GH_REPO}/.github/workflows/cross-platform.yml"
+          signer_workflow="${GH_REPO}/.github/workflows/release.yml"
           source_ref="refs/heads/${SOURCE_REF}"
           verify_attestation() {
             local asset="$1"
