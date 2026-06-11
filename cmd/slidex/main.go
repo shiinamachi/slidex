@@ -2589,31 +2589,68 @@ func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, 
 }
 
 func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
-	if err := prepareRenderedSlidesDir(filepath.Dir(pngPath)); err != nil {
+	dir := filepath.Dir(pngPath)
+	if err := prepareRenderedSlidesDir(dir); err != nil {
 		return err
 	}
-	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
+	if err := rejectSecureWriteTarget(pngPath); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(pngPath)+".tmp-*.png")
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	tmpPath := tmp.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := applyPlatformFileMode(tmpPath, 0o644); err != nil {
+		return err
+	}
+	args, chromeCleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
+	if err != nil {
+		return err
+	}
+	defer chromeCleanup()
 	args = append(args,
 		fmt.Sprintf("--window-size=%d,%d", width, height),
 		"--force-device-scale-factor=1",
 		"--virtual-time-budget=3000",
-		"--screenshot="+pngPath,
+		"--screenshot="+tmpPath,
 		targetURL,
 	)
 	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
 	if err != nil {
-		if isChromeCommandTimeout(err) && screenshotFileExists(pngPath) {
-			return nil
+		if !(isChromeCommandTimeout(err) && screenshotFileExists(tmpPath)) {
+			return fmt.Errorf("chrome screenshot failed: %w\n%s", err, string(out))
 		}
-		return fmt.Errorf("chrome screenshot failed: %w\n%s", err, string(out))
 	}
-	if !screenshotFileExists(pngPath) {
+	if !screenshotFileExists(tmpPath) {
 		return fmt.Errorf("chrome did not create screenshot: %s", pngPath)
 	}
+	if err := rejectSymlinkAncestors(dir); err != nil {
+		return err
+	}
+	if err := rejectSecureWriteTarget(pngPath); err != nil {
+		return err
+	}
+	if err := replaceFile(tmpPath, pngPath); err != nil {
+		return err
+	}
+	if err := applyPlatformFileMode(pngPath, 0o644); err != nil {
+		return err
+	}
+	cleanupTemp = false
 	return nil
 }
 

@@ -4114,6 +4114,26 @@ func TestHTMLFreshnessFindingsFailClosedOnHashErrors(t *testing.T) {
 	}
 }
 
+func TestCaptureURLScreenshotRejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "slide.png")
+	if err := os.Symlink(outside, target); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	err := captureURLScreenshot("missing-chrome", "about:blank", target, 16, 9, false)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlink screenshot target rejection before Chrome launch, got %v", err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside\n" {
+		t.Fatalf("outside symlink target was modified: %q", got)
+	}
+}
+
 func TestInspectDeckWarnsAndSkipsSymlinkEntries(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	assetDir := filepath.Join(deck, "assets")
