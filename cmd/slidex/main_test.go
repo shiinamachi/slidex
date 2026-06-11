@@ -74,6 +74,10 @@ func TestBuildSlideWrapperMarksOverflowReportWithNonce(t *testing.T) {
 func TestStripExecutableHTMLForProbeRemovesActiveContent(t *testing.T) {
 	src := `<!doctype html><html><head>
 <script>window.evil = true;</script>
+<meta http-equiv="refresh" content="0;url=https://example.com">
+<link rel="import" href="https://example.com/import.html">
+<link rel="modulepreload" href="evil.js">
+<link rel="preload" as="script" href="evil.js">
 <style>.slide{color:red}</style>
 </head><body onload="evil()">
 <section class="slide" onclick="evil()">
@@ -87,7 +91,7 @@ func TestStripExecutableHTMLForProbeRemovesActiveContent(t *testing.T) {
 </body></html>`
 	got := stripExecutableHTMLForProbe(src)
 	lower := strings.ToLower(got)
-	for _, forbidden := range []string{"<script", "onload", "onclick", "onerror", "javascript:", "srcdoc", "<iframe", "<object", "<embed"} {
+	for _, forbidden := range []string{"<script", "onload", "onclick", "onerror", "javascript:", "srcdoc", "<iframe", "<object", "<embed", "http-equiv", "rel=\"import\"", "modulepreload", "evil.js"} {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("probe HTML still contains executable content %q:\n%s", forbidden, got)
 		}

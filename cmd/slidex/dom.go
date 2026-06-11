@@ -436,6 +436,16 @@ func isProbeExecutableElement(node *xhtml.Node) bool {
 	switch strings.ToLower(node.Data) {
 	case "script", "iframe", "object", "embed":
 		return true
+	case "meta":
+		return strings.EqualFold(nodeAttr(node, "http-equiv"), "refresh")
+	case "link":
+		relTokens := strings.Fields(strings.ToLower(nodeAttr(node, "rel")))
+		for _, rel := range relTokens {
+			if rel == "import" || rel == "modulepreload" || (rel == "preload" && strings.EqualFold(nodeAttr(node, "as"), "script")) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
