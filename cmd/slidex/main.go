@@ -3656,14 +3656,20 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 	specBackupPath := ""
 	notesBackupPath := ""
 	var tx *fileSnapshotTransaction
-	rollbackSync := func(cause error) (map[string]any, error) {
+	rollbackSyncChanges := func() error {
 		if tx == nil {
-			return nil, cause
+			return nil
 		}
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return nil, fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
+			return rollbackErr
 		}
 		tx = nil
+		return nil
+	}
+	rollbackSync := func(cause error) (map[string]any, error) {
+		if rollbackErr := rollbackSyncChanges(); rollbackErr != nil {
+			return nil, fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
+		}
 		return nil, cause
 	}
 	var acceptedChanges []string
@@ -3698,7 +3704,6 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		if err := appendNotes(notesPath, "HTML edit sync", changes); err != nil {
 			return rollbackSync(err)
 		}
-		derivativeUpdated = append(derivativeUpdated, "deck_spec.json", "notes.md")
 	}
 
 	renderStatus := "not_needed"
@@ -3726,26 +3731,27 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 				qaStatus = qa.Status
 			}
 			if qaStatus == "pass" || qaStatus == "pass_with_risks" {
-				acceptedChanges = changes
-				derivativeUpdated = append(derivativeUpdated, "qa_report.md", "final_deck.generated_baseline.html")
 				if err := copyFile(htmlPath, baselinePath); err != nil {
-					return rollbackSync(err)
+					qaErr = strings.TrimSpace(qaErr + "; failed to update generated baseline: " + err.Error())
+					correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because the baseline update failed.")
+				} else {
+					acceptedChanges = changes
+					derivativeUpdated = append(derivativeUpdated, "deck_spec.json", "notes.md", "qa_report.md", "final_deck.generated_baseline.html")
+					baseRaw, _ = os.ReadFile(baselinePath)
+					newBaselineHash = sha256Bytes(baseRaw)
 				}
-				baseRaw, _ = os.ReadFile(baselinePath)
-				newBaselineHash = sha256Bytes(baseRaw)
 			} else {
 				correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because render or QA did not pass.")
-				if tx != nil {
-					if err := tx.Rollback(); err != nil {
-						return nil, err
-					}
-					tx = nil
-				}
 			}
 		}
 	}
 	if len(acceptedChanges) == 0 && changeDetected && len(correctedOrRejected) == 0 {
 		correctedOrRejected = append(correctedOrRejected, "HTML edits require review because render or QA did not complete.")
+	}
+	if changeDetected && len(acceptedChanges) == 0 {
+		if err := rollbackSyncChanges(); err != nil {
+			return nil, err
+		}
 	}
 	if containsMeaningChange(changes) {
 		derivativeStale = append(derivativeStale, "brief.md: HTML text changed; confirm whether brief facts, audience, objective, or desired outcome changed.")
@@ -3753,7 +3759,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		derivativeStale = append(derivativeStale, "source_inventory.md: asset, dependency, or evidence references may need refresh.")
 		derivativeStale = append(derivativeStale, "delivery_summary.md: final delivery summary must be regenerated after accepted edits.")
 	}
-	if changeDetected {
+	if changeDetected && len(acceptedChanges) > 0 {
 		if err := appendSyncFindingsToQAReport(filepath.Join(outDir, "qa_report.md"), derivativeStale, acceptedChanges, correctedOrRejected); err != nil {
 			qaErr = strings.TrimSpace(qaErr + "; failed to append sync findings to QA report: " + err.Error())
 		} else if len(derivativeStale) > 0 {
@@ -3781,7 +3787,10 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		"qaError":              qaErr,
 	}
 	if err := writeSyncReport(syncPath, report); err != nil {
-		return rollbackSync(err)
+		if tx != nil {
+			return rollbackSync(err)
+		}
+		return nil, err
 	}
 	if tx != nil {
 		tx.Commit()

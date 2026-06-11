@@ -3613,6 +3613,53 @@ func TestFileSnapshotTransactionRollbackRestoresFiles(t *testing.T) {
 	}
 }
 
+func TestSyncHTMLEditsRollsBackMetadataOnRenderConfigFailure(t *testing.T) {
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baselineHTML := `<!doctype html><html><body><section class="slide" id="slide_01"><h1>Old headline</h1><p>Old body</p></section></body></html>`
+	currentHTML := `<!doctype html><html><body><section class="slide" id="slide_01"><h1>New headline</h1><p>New body</p></section></body></html>`
+	specRaw := `{"slides":[{"id":"intro","htmlId":"slide_01","headline":"Old headline","bodyContent":["Old body"]}]}`
+	notesRaw := "original notes\n"
+	qaRaw := "original qa report\n"
+	files := map[string]string{
+		filepath.Join(outDir, "final_deck.html"):                    currentHTML,
+		filepath.Join(outDir, "final_deck.generated_baseline.html"): baselineHTML,
+		filepath.Join(outDir, "deck_spec.json"):                     specRaw,
+		filepath.Join(outDir, "notes.md"):                           notesRaw,
+		filepath.Join(outDir, "qa_report.md"):                       qaRaw,
+	}
+	for path, raw := range files {
+		if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := syncHTMLEdits(deck, 0, 1080, "pretendard", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report["renderStatus"] != "failed" {
+		t.Fatalf("renderStatus = %v, want failed", report["renderStatus"])
+	}
+	for path, want := range map[string]string{
+		filepath.Join(outDir, "deck_spec.json"):                     specRaw,
+		filepath.Join(outDir, "notes.md"):                           notesRaw,
+		filepath.Join(outDir, "final_deck.generated_baseline.html"): baselineHTML,
+		filepath.Join(outDir, "qa_report.md"):                       qaRaw,
+	} {
+		if got := readFileOrEmpty(path); got != want {
+			t.Fatalf("%s was not rolled back:\n got %q\nwant %q", filepath.Base(path), got, want)
+		}
+	}
+	syncReport := readFileOrEmpty(filepath.Join(outDir, "html_edit_sync.md"))
+	if !strings.Contains(syncReport, "Render status: `failed`") || !strings.Contains(syncReport, "render or QA did not complete") {
+		t.Fatalf("sync report should retain render failure after rollback:\n%s", syncReport)
+	}
+}
+
 func TestUpdateSpecFromHTMLPreservesLogicalID(t *testing.T) {
 	specPath := filepath.Join(t.TempDir(), "deck_spec.json")
 	spec := map[string]any{
