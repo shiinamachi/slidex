@@ -18,18 +18,24 @@ Codex Plugin. The root `VERSION` file is the single canonical version file.
 
 ## Bump Procedure
 
-1. Update only `VERSION`.
-2. Run `go run ./cmd/slidex sync-version-metadata` to regenerate duplicated
-   plugin metadata from that file. The command preserves the existing
-   `+codex.<cachebuster>` suffix in `plugin.json`.
+1. Run `mise run version:bump patch`, `mise run version:bump minor`,
+   `mise run version:bump major`, or `mise run version:bump <version>`.
+   The task updates `VERSION`, runs
+   `go run ./cmd/slidex sync-version-metadata`, and creates
+   `release-notes/<VERSION>.md` from `release-notes/_template.md`.
+2. Fill in the new release note before publishing. Production releases fail if
+   the matching `release-notes/<VERSION>.md` file is missing or still contains
+   template placeholders. Canary releases use the same base-version note as
+   draft release context and append build metadata in the GitHub Release body.
 3. Refresh only the plugin manifest build metadata cachebuster after plugin
    metadata changes. Do not increment the base version just to force Codex to
    reinstall a local plugin.
 4. Production release tags must be `v<VERSION>`. Canary release tags are
-   `v<VERSION>-<short-commit-sha>`. Release asset names always use the package
-   version without the leading tag `v`, for example
+   `v<VERSION>-canary.<YYYYMMDDHHMMSS>`, where the timestamp is the selected
+   source commit time normalized to UTC. Release asset names always use the
+   package version without the leading tag `v`, for example
    `slidex_0.1.0_linux_amd64.tar.gz` or
-   `slidex_0.1.0-e9c033e_linux_amd64.tar.gz`.
+   `slidex_0.1.0-canary.20260611032635_linux_amd64.tar.gz`.
    `scripts/package-release.sh` rejects release package names whose version
    does not match the CLI version or that canary pattern, except `dev-*` and
    `ci-*` smoke packages.
@@ -56,7 +62,7 @@ go run ./cmd/slidex validate-spec --spec examples/sample_deck_spec.json
 go run ./cmd/slidex doctor --json
 go run ./cmd/slidex update status --json
 SLIDEX_RELEASE_VERSION="v$(cat VERSION)" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
-SLIDEX_RELEASE_VERSION="$(cat VERSION)-$(git rev-parse --short=7 HEAD)" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
+SLIDEX_RELEASE_VERSION="$(cat VERSION)-canary.20260611032635" SLIDEX_TARGETS=linux/amd64 SLIDEX_DIST_DIR="$(mktemp -d)" ./scripts/package-release.sh
 ```
 
 `slidex doctor` validates `VERSION`, the embedded CLI version,

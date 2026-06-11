@@ -2080,11 +2080,27 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}{
 		{
 			path: filepath.Join(root, ".github", "workflows", "release.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "actions/attest@", "attestations: write", "Verify artifact attestations", "gh attestation verify", "--source-digest", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-canary.${release_timestamp}\"", "release_timestamp", "release-notes/${BASE_VERSION}.md", "production release notes still contain template placeholders", "Release notes source", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "actions/attest@", "attestations: write", "Verify artifact attestations", "gh attestation verify", "--source-digest", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
+		},
+		{
+			path: filepath.Join(root, ".mise.toml"),
+			want: []string{"go = \"1.26.3\"", "[tasks.\"version:bump\"]", "scripts/bump-version.sh"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
 			want: []string{"SLIDEX_TARGETS", "SLIDEX_BUILD_CHANNEL", "decks/_template", "schemas", "plugins/slidex", ".agents/plugins/marketplace.json", ".slidex/install.json", "LICENSE", "VERSIONING.md", "\"VERSION\"", "go run ./cmd/slidex version", "canary_pattern", "checksums.txt"},
+		},
+		{
+			path: filepath.Join(root, "scripts", "bump-version.sh"),
+			want: []string{"patch|minor|major|<version>", "release-notes/_template.md", "release-notes/${next}.md", "go run ./cmd/slidex sync-version-metadata"},
+		},
+		{
+			path: filepath.Join(root, "release-notes", "_template.md"),
+			want: []string{"# slidex {{VERSION}}", "## Highlights", "## Verification Notes"},
+		},
+		{
+			path: filepath.Join(root, "release-notes", toolVersion+".md"),
+			want: []string{"# slidex " + toolVersion, "## Highlights", "## Verification Notes"},
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),

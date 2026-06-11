@@ -54,7 +54,7 @@ const (
 
 var (
 	stablePackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	canaryPackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{7,40}$`)
+	canaryPackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{14}$`)
 	gitCommitPattern            = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 )
 
@@ -2058,7 +2058,6 @@ func selectUpdateReleaseForCurrent(channel, currentVersion string, releases []up
 func selectCanaryUpdateRelease(currentVersion string, releases []updateRelease) (updateRelease, error) {
 	currentBase := releaseBaseVersion(currentVersion)
 	var candidates []updateRelease
-	currentFound := false
 	for _, release := range releases {
 		if release.Draft || !release.Prerelease || channelFromPackageVersion(release.Version) != updateChannelCanary {
 			continue
@@ -2070,10 +2069,9 @@ func selectCanaryUpdateRelease(currentVersion string, releases []updateRelease) 
 		if cmp < 0 {
 			continue
 		}
-		if cmp == 0 && release.Version == currentVersion {
-			currentFound = true
+		if canaryReleaseIsNotOlder(release.Version, currentVersion) {
+			candidates = append(candidates, release)
 		}
-		candidates = append(candidates, release)
 	}
 	if len(candidates) == 0 {
 		return updateRelease{}, fmt.Errorf("no matching %s release found", updateChannelCanary)
@@ -2082,12 +2080,9 @@ func selectCanaryUpdateRelease(currentVersion string, releases []updateRelease) 
 	if err != nil {
 		return updateRelease{}, err
 	}
-	cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(release.Version), currentBase)
+	_, ok := compareReleaseBaseVersions(releaseBaseVersion(release.Version), currentBase)
 	if !ok {
 		return updateRelease{}, fmt.Errorf("no matching %s release found", updateChannelCanary)
-	}
-	if cmp == 0 && !currentFound {
-		return updateRelease{}, fmt.Errorf("current canary release %s was not found in release metadata; refusing to infer same-base canary ordering", currentVersion)
 	}
 	return release, nil
 }
@@ -2105,7 +2100,15 @@ func canaryReleaseIsNotOlder(candidateVersion, currentVersion string) bool {
 		return true
 	}
 	cmp, ok := compareReleaseBaseVersions(releaseBaseVersion(candidateVersion), releaseBaseVersion(currentVersion))
-	return ok && cmp >= 0
+	if !ok || cmp < 0 {
+		return false
+	}
+	if cmp > 0 || candidateVersion == currentVersion {
+		return true
+	}
+	candidateTimestamp, candidateOK := canaryVersionTimestamp(candidateVersion)
+	currentTimestamp, currentOK := canaryVersionTimestamp(currentVersion)
+	return candidateOK && currentOK && candidateTimestamp >= currentTimestamp
 }
 
 func compareReleaseBaseVersions(left, right string) (int, bool) {
@@ -2153,6 +2156,11 @@ func compareUpdateReleaseRecency(left, right updateRelease) (int, bool) {
 	if left.Version == right.Version {
 		return 0, true
 	}
+	leftCanaryTimestamp, leftCanaryOK := canaryVersionTimestamp(left.Version)
+	rightCanaryTimestamp, rightCanaryOK := canaryVersionTimestamp(right.Version)
+	if leftCanaryOK && rightCanaryOK {
+		return strings.Compare(leftCanaryTimestamp, rightCanaryTimestamp), true
+	}
 	leftTime, leftOK := releaseMetadataTime(left)
 	rightTime, rightOK := releaseMetadataTime(right)
 	if !leftOK || !rightOK {
@@ -2178,6 +2186,15 @@ func releaseMetadataTime(release updateRelease) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+func canaryVersionTimestamp(version string) (string, bool) {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if !canaryPackageVersionPattern.MatchString(version) {
+		return "", false
+	}
+	_, timestamp, ok := strings.Cut(version, "-canary.")
+	return timestamp, ok && len(timestamp) == 14
 }
 
 func parseReleaseBaseVersionParts(version string) ([3]int, bool) {

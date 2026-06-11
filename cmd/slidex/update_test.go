@@ -34,11 +34,11 @@ func TestReleaseAssetContractStripsTagVFromAssetNames(t *testing.T) {
 	if contract.ChecksumName != "slidex_0.1.0_checksums.txt" {
 		t.Fatalf("checksum name = %q", contract.ChecksumName)
 	}
-	win, err := releaseAssetContractFor("v0.1.0-e9c033e", "windows", "arm64")
+	win, err := releaseAssetContractFor("v0.1.0-canary.20260610090000", "windows", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if win.ArchiveName != "slidex_0.1.0-e9c033e_windows_arm64.zip" {
+	if win.ArchiveName != "slidex_0.1.0-canary.20260610090000_windows_arm64.zip" {
 		t.Fatalf("windows archive name = %q", win.ArchiveName)
 	}
 }
@@ -50,7 +50,8 @@ func TestChannelFromPackageVersionOnlyAcceptsStableAndCanary(t *testing.T) {
 	}{
 		{"0.1.0", updateChannelProduction},
 		{"v0.1.0", updateChannelProduction},
-		{"0.1.0-e9c033e", updateChannelCanary},
+		{"0.1.0-canary.20260610090000", updateChannelCanary},
+		{"0.1.0-e9c033e", updateChannelLocalDevelopment},
 		{"0.1.0-beta.1", updateChannelLocalDevelopment},
 		{"dev-local", updateChannelLocalDevelopment},
 	}
@@ -74,7 +75,7 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	}
 
 	canaryMeta := filepath.Join(temp, "canary.json")
-	writeInstallMetadataForTest(t, canaryMeta, releaseInstallMetadataForTest(t, toolVersion+"-abcdef0"))
+	writeInstallMetadataForTest(t, canaryMeta, releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610010000"))
 	status, err = currentUpdateStatus(filepath.Join(temp, "canary-root"), canaryMeta)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +83,7 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	if status.Channel != updateChannelCanary || !status.UpdatesEnabled {
 		t.Fatalf("canary status = %#v", status)
 	}
-	if status.CurrentVersion != toolVersion+"-abcdef0" {
+	if status.CurrentVersion != toolVersion+"-canary.20260610010000" {
 		t.Fatalf("canary current version should come from package metadata, got %q", status.CurrentVersion)
 	}
 
@@ -133,7 +134,7 @@ func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T
 func TestUpdateStatusDisablesInconsistentReleaseMetadata(t *testing.T) {
 	temp := t.TempDir()
 	metadataPath := filepath.Join(temp, "install.json")
-	metadata := releaseInstallMetadataForTest(t, toolVersion+"-abcdef0")
+	metadata := releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610010000")
 	metadata.Channel = updateChannelProduction
 	writeInstallMetadataForTest(t, metadataPath, metadata)
 
@@ -361,9 +362,9 @@ func TestUpdateCheckIncompleteReleaseMetadataDoesNotFetchReleaseAPI(t *testing.T
 
 func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
-	  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":true,"assets":[
-	    {"name":"slidex_0.2.0-abcdef0_linux_amd64.tar.gz","browser_download_url":"https://example.invalid/canary.tgz","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-	    {"name":"slidex_0.2.0-abcdef0_checksums.txt","browser_download_url":"https://example.invalid/canary.txt"}
+	  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":true,"assets":[
+	    {"name":"slidex_0.2.0-canary.20260610010000_linux_amd64.tar.gz","browser_download_url":"https://example.invalid/canary.tgz","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	    {"name":"slidex_0.2.0-canary.20260610010000_checksums.txt","browser_download_url":"https://example.invalid/canary.txt"}
 	  ]},
 	  {"tag_name":"v0.1.0","draft":false,"prerelease":false,"assets":[
 	    {"name":"slidex_0.1.0_linux_amd64.tar.gz","browser_download_url":"https://example.invalid/stable.tgz","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
@@ -384,7 +385,7 @@ func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if canary.TagName != "v0.2.0-abcdef0" {
+	if canary.TagName != "v0.2.0-canary.20260610010000" {
 		t.Fatalf("canary selected %s", canary.TagName)
 	}
 	contract, err := releaseAssetContractFor(canary.TagName, "linux", "amd64")
@@ -395,7 +396,7 @@ func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if archive.Name != "slidex_0.2.0-abcdef0_linux_amd64.tar.gz" || checksum.Name != "slidex_0.2.0-abcdef0_checksums.txt" {
+	if archive.Name != "slidex_0.2.0-canary.20260610010000_linux_amd64.tar.gz" || checksum.Name != "slidex_0.2.0-canary.20260610010000_checksums.txt" {
 		t.Fatalf("required assets = %q / %q", archive.Name, checksum.Name)
 	}
 }
@@ -430,65 +431,73 @@ func TestUpdateDiscoverySelectsNewestProductionReleaseWithoutAPISorting(t *testi
 	}
 }
 
-func TestUpdateDiscoveryOrdersSameBaseCanaryOnlyWhenCurrentReleaseIsKnown(t *testing.T) {
+func TestUpdateDiscoveryOrdersSameBaseCanaryByTimestamp(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
-	  {"tag_name":"v0.2.0-aaaaaaa","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
-	  {"tag_name":"v0.2.0-bbbbbbb","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]}
+	  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.2.0-canary.20260610020000","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]}
 	]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-aaaaaaa", releases)
+	next, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-canary.20260610010000", releases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Version != "0.2.0-bbbbbbb" {
+	if next.Version != "0.2.0-canary.20260610020000" {
 		t.Fatalf("next canary = %s", next.Version)
 	}
-	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-ccccccc", releases); err == nil || !strings.Contains(err.Error(), "refusing to infer same-base canary ordering") {
-		t.Fatalf("expected unknown same-base canary ordering to fail closed, got %v", err)
+	next, err = selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-canary.20260610015000", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Version != "0.2.0-canary.20260610020000" {
+		t.Fatalf("inferred next canary = %s", next.Version)
 	}
 }
 
 func TestUpdateDiscoverySelectsNewestCanaryReleaseWithoutAPISorting(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
-	  {"tag_name":"v0.2.0-1111111","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
-	  {"tag_name":"v0.2.0-2222222","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]},
-	  {"tag_name":"v0.1.0-fffffff","draft":false,"prerelease":true,"published_at":"2026-01-01T00:00:00Z","assets":[]}
+	  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.2.0-canary.20260610020000","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.1.0-canary.20260609010000","draft":false,"prerelease":true,"published_at":"2026-01-01T00:00:00Z","assets":[]}
 	]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	release, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.1.0-fffffff", releases)
+	release, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.1.0-canary.20260609010000", releases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if release.Version != "0.2.0-2222222" {
+	if release.Version != "0.2.0-canary.20260610020000" {
 		t.Fatalf("canary selected %s", release.Version)
 	}
 }
 
-func TestUpdateDiscoveryFailsClosedWhenSameBaseCanaryOrderingIsMissing(t *testing.T) {
+func TestUpdateDiscoveryOrdersTimestampCanaryWithoutReleaseMetadata(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
-	  {"tag_name":"v0.2.0-aaaaaaa","draft":false,"prerelease":true,"assets":[]},
-	  {"tag_name":"v0.2.0-bbbbbbb","draft":false,"prerelease":true,"assets":[]}
+	  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":true,"assets":[]},
+	  {"tag_name":"v0.2.0-canary.20260610020000","draft":false,"prerelease":true,"assets":[]}
 	]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-aaaaaaa", releases); err == nil || !strings.Contains(err.Error(), "release metadata does not determine ordering") {
-		t.Fatalf("expected missing same-base canary metadata to fail closed, got %v", err)
+	release, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.2.0-canary.20260610010000", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Version != "0.2.0-canary.20260610020000" {
+		t.Fatalf("canary selected %s", release.Version)
 	}
 }
 
 func TestUpdateDiscoveryRequiresCanaryPrereleaseFlag(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
-	  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":false,"assets":[]}
+	  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":false,"assets":[]}
 	]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.1.0-aaaaaaa", releases); err == nil || !strings.Contains(err.Error(), "no matching canary release") {
+	if _, err := selectUpdateReleaseForCurrent(updateChannelCanary, "0.1.0-canary.20260609010000", releases); err == nil || !strings.Contains(err.Error(), "no matching canary release") {
 		t.Fatalf("expected non-prerelease canary tag to be rejected, got %v", err)
 	}
 }
@@ -548,8 +557,8 @@ func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 		t.Fatalf("candidate should validate: %#v", findings)
 	}
 	canaryRoot := t.TempDir()
-	writeCandidateBundleForTest(t, canaryRoot, "0.2.0-abcdef0")
-	findings = validateCandidateBundle(canaryRoot, "0.2.0-abcdef0")
+	writeCandidateBundleForTest(t, canaryRoot, "0.2.0-canary.20260610010000")
+	findings = validateCandidateBundle(canaryRoot, "0.2.0-canary.20260610010000")
 	if hasFailures(findings) {
 		t.Fatalf("canary candidate should validate with base runtime versions: %#v", findings)
 	}
@@ -655,7 +664,7 @@ func TestValidateCandidateBundleRejectsInstallMetadataAdditionalProperties(t *te
 
 func TestValidateCandidateBundleRequiresMetadataChannelToMatchTargetVersion(t *testing.T) {
 	root := t.TempDir()
-	writeCandidateBundleForTest(t, root, "0.2.0-abcdef0")
+	writeCandidateBundleForTest(t, root, "0.2.0-canary.20260610010000")
 	metadataPath := filepath.Join(root, ".slidex", "install.json")
 	metadata, err := readInstallMetadata(metadataPath)
 	if err != nil {
@@ -664,7 +673,7 @@ func TestValidateCandidateBundleRequiresMetadataChannelToMatchTargetVersion(t *t
 	metadata.Channel = updateChannelProduction
 	writeInstallMetadataForTest(t, metadataPath, *metadata)
 
-	findings := validateCandidateBundle(root, "0.2.0-abcdef0")
+	findings := validateCandidateBundle(root, "0.2.0-canary.20260610010000")
 	if !findingCheckPresent(findings, "update.candidate_install_metadata") {
 		t.Fatalf("candidate metadata channel mismatch should fail: %#v", findings)
 	}
@@ -729,9 +738,9 @@ func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := filepath.Join(parent, "candidate")
-	writeCandidateBundleForTest(t, candidate, "0.2.0-abcdef0")
+	writeCandidateBundleForTest(t, candidate, "0.2.0-canary.20260610010000")
 
-	result, err := applyCandidateBundle(status, candidate, "0.2.0-abcdef0", "v0.2.0-abcdef0", allowUnverifiedAttestationForTest())
+	result, err := applyCandidateBundle(status, candidate, "0.2.0-canary.20260610010000", "v0.2.0-canary.20260610010000", allowUnverifiedAttestationForTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +752,7 @@ func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(canaryRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(canaryRoot), releaseInstallMetadataForTest(t, toolVersion+"-aaaaaaa"))
+	writeInstallMetadataForTest(t, installMetadataPath(canaryRoot), releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610000000"))
 	canaryStatus, err := currentUpdateStatus(canaryRoot, installMetadataPath(canaryRoot))
 	if err != nil {
 		t.Fatal(err)
@@ -1496,7 +1505,7 @@ func TestActivatePendingUpdateRejectsTargetVersionChannelSwitch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion+"-aaaaaaa"))
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610000000"))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
 	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
@@ -1718,7 +1727,7 @@ func TestUpdateCheckHumanAndJSONReportAvailableRelease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `[
-		  {"tag_name":"v0.2.0-abcdef0","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]},
+		  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":true,"published_at":"2026-02-02T00:00:00Z","assets":[]},
 		  {"tag_name":"v0.2.0","draft":false,"prerelease":false,"published_at":"2026-02-01T00:00:00Z","assets":[
 		    {"name":%q,"browser_download_url":"https://example.invalid/archive","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		    {"name":%q,"browser_download_url":"https://example.invalid/checksums"}
@@ -1996,7 +2005,7 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 		t.Fatalf("checksum name should use asset version without v: %v", err)
 	}
 
-	canaryVersion := toolVersion + "-abcdef0"
+	canaryVersion := toolVersion + "-canary.20260610010000"
 	canaryDist := t.TempDir()
 	cmd = exec.Command("bash", filepath.Join(root, "scripts", "package-release.sh"))
 	cmd.Dir = root
