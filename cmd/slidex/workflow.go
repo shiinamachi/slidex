@@ -1509,6 +1509,9 @@ func runVisualReviewRecord(args []string) error {
 	if !ok {
 		return fmt.Errorf("render manifest is missing or invalid: %s", manifestPath)
 	}
+	if findings := renderManifestCanonicalArtifactFindings(manifest, deckAbs, manifestPath, canonicalRenderManifestPNGPaths(outDir)); len(findings) > 0 {
+		return fmt.Errorf("render manifest artifact paths are not canonical: %s", findings[0].Message)
+	}
 	if len(manifest.PNGFiles) == 0 {
 		return fmt.Errorf("render manifest has no rendered PNG evidence: %s", manifestPath)
 	}

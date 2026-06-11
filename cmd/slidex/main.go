@@ -3473,12 +3473,16 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	expected := dimension{}
 	var manifest renderManifest
 	manifestLoaded := false
+	manifestArtifactPathsOK := false
 	if raw, err := os.ReadFile(manifestPath); err == nil {
 		if decoded, err := decodeRenderManifest(raw, manifestPath); err != nil {
 			result.Findings = append(result.Findings, fail("manifest.parse", err.Error(), manifestPath))
 		} else {
 			manifest = decoded
 			manifestLoaded = true
+			artifactPathFindings := renderManifestCanonicalArtifactFindings(manifest, deckAbs, manifestPath, pngs)
+			result.Findings = append(result.Findings, artifactPathFindings...)
+			manifestArtifactPathsOK = len(artifactPathFindings) == 0
 			expected = manifest.ExpectedDimensions
 			result.Findings = append(result.Findings, renderManifestHTMLFreshnessFindings(htmlPath, manifest.SourceHTML.SHA256)...)
 			result.RenderMethod = manifest.RenderMethod
@@ -3525,20 +3529,23 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	} else {
 		result.Findings = append(result.Findings, fail("pdf.read", err.Error(), pdfPath))
 	}
-	if manifestLoaded {
+	if manifestLoaded && manifestArtifactPathsOK {
 		result.Findings = append(result.Findings, editorialRenderFindings(htmlSlides, pngs, manifest, result.PDFPageCount, manifestPath, renderedDir, pdfPath)...)
 	}
 	result.Findings = append(result.Findings, verifyHTMLEditSync(filepath.Join(outDir, "final_deck.html"), filepath.Join(outDir, "final_deck.generated_baseline.html"))...)
 
 	result.DeterministicStatus = statusFromFindings(result.Findings)
 	result.Status = result.DeterministicStatus
-	if err := writeVisualReviewImageSet(filepath.Join(outDir, "visual_reviews", "image_set.json"), manifest); err != nil {
+	if manifestLoaded && !manifestArtifactPathsOK {
+		result.VisualStatus = "fail"
+	} else if err := writeVisualReviewImageSet(filepath.Join(outDir, "visual_reviews", "image_set.json"), manifest); err != nil {
 		result.Findings = append(result.Findings, fail("visual_review.image_set", err.Error(), filepath.Join(outDir, "visual_reviews", "image_set.json")))
 		result.VisualStatus = "fail"
+	} else {
+		visualStatus, visualFindings := visualRunner(deckAbs, manifest, visualReview)
+		result.VisualStatus = firstNonEmpty(result.VisualStatus, visualStatus)
+		result.Findings = append(result.Findings, visualFindings...)
 	}
-	visualStatus, visualFindings := visualRunner(deckAbs, manifest, visualReview)
-	result.VisualStatus = firstNonEmpty(result.VisualStatus, visualStatus)
-	result.Findings = append(result.Findings, visualFindings...)
 	result.Status = combinedQAStatus(result.DeterministicStatus, result.VisualStatus, result.Findings)
 	if writeReport {
 		reportPath := filepath.Join(outDir, "qa_report.md")
@@ -4428,6 +4435,9 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		if err != nil {
 			findings = append(findings, fail("package.manifest_parse", err.Error(), manifestPath))
 		} else {
+			artifactPathFindings := renderManifestCanonicalArtifactFindings(manifest, deckAbs, manifestPath, pngs)
+			findings = append(findings, artifactPathFindings...)
+			manifestArtifactPathsOK := len(artifactPathFindings) == 0
 			findings = append(findings, packageManifestHTMLFreshnessFindings(htmlPath, manifestPath, manifest.SourceHTML.SHA256)...)
 			if !hasExactVersionToken(manifest.ChromeVersion) {
 				findings = append(findings, fail("package.runtime_chrome_version", "manifest must record an exact Chrome/Chromium version", manifestPath))
@@ -4443,38 +4453,40 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			if len(manifest.PNGFiles) != len(pngs) {
 				findings = append(findings, fail("package.png_count", fmt.Sprintf("manifest PNG count %d does not match files %d", len(manifest.PNGFiles), len(pngs)), manifestPath))
 			}
-			for _, img := range manifest.PNGFiles {
-				if hash, err := sha256File(img.Path); err != nil {
-					findings = append(findings, fail("package.png_hash", "manifest PNG file missing: "+err.Error(), img.Path))
-				} else if hash != img.SHA256 {
-					findings = append(findings, fail("package.png_hash", "PNG hash does not match manifest", img.Path))
+			if manifestArtifactPathsOK {
+				for _, img := range manifest.PNGFiles {
+					if hash, err := sha256File(img.Path); err != nil {
+						findings = append(findings, fail("package.png_hash", "manifest PNG file missing: "+err.Error(), img.Path))
+					} else if hash != img.SHA256 {
+						findings = append(findings, fail("package.png_hash", "PNG hash does not match manifest", img.Path))
+					}
+					if dim, blank, err := validatePNG(img.Path, manifest.ExpectedDimensions.Width, manifest.ExpectedDimensions.Height); err != nil {
+						findings = append(findings, fail("package.png_valid", err.Error(), img.Path))
+					} else if blank {
+						findings = append(findings, fail("package.png_blank", "rendered PNG appears blank", img.Path))
+					} else if dim.Width != img.Dimensions.Width || dim.Height != img.Dimensions.Height {
+						findings = append(findings, fail("package.png_dimensions", "PNG dimensions differ from manifest", img.Path))
+					}
 				}
-				if dim, blank, err := validatePNG(img.Path, manifest.ExpectedDimensions.Width, manifest.ExpectedDimensions.Height); err != nil {
-					findings = append(findings, fail("package.png_valid", err.Error(), img.Path))
-				} else if blank {
-					findings = append(findings, fail("package.png_blank", "rendered PNG appears blank", img.Path))
-				} else if dim.Width != img.Dimensions.Width || dim.Height != img.Dimensions.Height {
-					findings = append(findings, fail("package.png_dimensions", "PNG dimensions differ from manifest", img.Path))
+				if hash, err := sha256File(manifest.PDF.Path); err != nil {
+					findings = append(findings, fail("package.pdf_hash", "manifest PDF missing: "+err.Error(), manifest.PDF.Path))
+				} else if hash != manifest.PDF.SHA256 {
+					findings = append(findings, fail("package.pdf_hash", "PDF hash does not match manifest", manifest.PDF.Path))
+				}
+				if pages, err := countPDFPages(manifest.PDF.Path); err != nil {
+					findings = append(findings, fail("package.pdf_pages", err.Error(), manifest.PDF.Path))
+				} else if pages != manifest.PDFPageCount || pages != len(manifest.PNGFiles) {
+					findings = append(findings, fail("package.pdf_pages", fmt.Sprintf("PDF pages=%d manifestPages=%d pngs=%d", pages, manifest.PDFPageCount, len(manifest.PNGFiles)), manifest.PDF.Path))
+				}
+				findings = append(findings, verifyPDFPNGVisualParity(manifest.PDF.Path, manifest.PNGFiles)...)
+				if hash, err := sha256File(manifest.QAMontage.Path); err != nil {
+					findings = append(findings, fail("package.montage_hash", "manifest montage missing: "+err.Error(), manifest.QAMontage.Path))
+				} else if hash != manifest.QAMontage.SHA256 {
+					findings = append(findings, fail("package.montage_hash", "QA montage hash does not match manifest", manifest.QAMontage.Path))
 				}
 			}
-			if hash, err := sha256File(manifest.PDF.Path); err != nil {
-				findings = append(findings, fail("package.pdf_hash", "manifest PDF missing: "+err.Error(), manifest.PDF.Path))
-			} else if hash != manifest.PDF.SHA256 {
-				findings = append(findings, fail("package.pdf_hash", "PDF hash does not match manifest", manifest.PDF.Path))
-			}
-			if pages, err := countPDFPages(manifest.PDF.Path); err != nil {
-				findings = append(findings, fail("package.pdf_pages", err.Error(), manifest.PDF.Path))
-			} else if pages != manifest.PDFPageCount || pages != len(manifest.PNGFiles) {
-				findings = append(findings, fail("package.pdf_pages", fmt.Sprintf("PDF pages=%d manifestPages=%d pngs=%d", pages, manifest.PDFPageCount, len(manifest.PNGFiles)), manifest.PDF.Path))
-			}
-			findings = append(findings, verifyPDFPNGVisualParity(manifest.PDF.Path, manifest.PNGFiles)...)
 			if manifest.PDFPageSizePoints.Width <= 0 || manifest.PDFPageSizePoints.Height <= 0 {
 				findings = append(findings, fail("package.pdf_page_size", "manifest PDF page size is missing", manifestPath))
-			}
-			if hash, err := sha256File(manifest.QAMontage.Path); err != nil {
-				findings = append(findings, fail("package.montage_hash", "manifest montage missing: "+err.Error(), manifest.QAMontage.Path))
-			} else if hash != manifest.QAMontage.SHA256 {
-				findings = append(findings, fail("package.montage_hash", "QA montage hash does not match manifest", manifest.QAMontage.Path))
 			}
 			if manifest.ChromeSandbox == "disabled" {
 				findings = append(findings, qaFinding{Severity: "warn", Check: "package.chrome_sandbox", Message: "Chrome sandbox was disabled: " + manifest.ChromeNoSandboxReason, Path: manifestPath})
@@ -4492,14 +4504,16 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 				findings = append(findings, summaryFindings...)
 			}
 			findings = append(findings, verifyDeliverySummaryPolicy(deliverySummaryPath)...)
-			findings = append(findings, verifyVisualReviewImageSet(visualImageSetPath, manifest)...)
-			if !visualReviewArtifactFresh(visualReviewPath, manifest) {
-				findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
-			}
-			findings = append(findings, verifyVisualReviewEvidence(visualReviewPath, deckAbs, manifest)...)
-			reviewStages := structuredReviewStages()
-			for i, structuredReviewPath := range structuredReviewPaths {
-				findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, reviewStages[i], manifest, deckAbs, htmlPath, qaReportPath, deliverySummaryPath)...)
+			if manifestArtifactPathsOK {
+				findings = append(findings, verifyVisualReviewImageSet(visualImageSetPath, manifest)...)
+				if !visualReviewArtifactFresh(visualReviewPath, manifest) {
+					findings = append(findings, fail("package.visual_review_freshness", "visual review result is missing, stale, or not pass", visualReviewPath))
+				}
+				findings = append(findings, verifyVisualReviewEvidence(visualReviewPath, deckAbs, manifest)...)
+				reviewStages := structuredReviewStages()
+				for i, structuredReviewPath := range structuredReviewPaths {
+					findings = append(findings, verifyStructuredReviewGate(structuredReviewPath, reviewStages[i], manifest, deckAbs, htmlPath, qaReportPath, deliverySummaryPath)...)
+				}
 			}
 		}
 	}
@@ -4830,6 +4844,73 @@ func decodeRenderManifest(raw []byte, manifestPath string) (renderManifest, erro
 		return renderManifest{}, err
 	}
 	return resolveRenderManifestPaths(manifestPath, manifest), nil
+}
+
+func renderManifestCanonicalArtifactFindings(manifest renderManifest, deckAbs, manifestPath string, pngs []string) []qaFinding {
+	outDir := filepath.Join(mustAbs(deckAbs), "out")
+	expected := []struct {
+		label string
+		got   string
+		want  string
+	}{
+		{label: "sourceHtml", got: manifest.SourceHTML.Path, want: filepath.Join(outDir, "final_deck.html")},
+		{label: "pdf", got: manifest.PDF.Path, want: filepath.Join(outDir, "final_deck.pdf")},
+		{label: "qaMontage", got: manifest.QAMontage.Path, want: filepath.Join(outDir, "qa_montage.png")},
+	}
+	findings := make([]qaFinding, 0)
+	for _, artifact := range expected {
+		if !canonicalPathEqual(artifact.got, artifact.want) {
+			findings = append(findings, fail(
+				"manifest.artifact_paths",
+				fmt.Sprintf("render manifest %s path must be %s, got %s", artifact.label, filepath.ToSlash(artifact.want), filepath.ToSlash(artifact.got)),
+				manifestPath,
+			))
+		}
+	}
+	if len(manifest.PNGFiles) != len(pngs) {
+		findings = append(findings, fail(
+			"manifest.artifact_paths",
+			fmt.Sprintf("render manifest PNG path count %d does not match rendered slide files %d", len(manifest.PNGFiles), len(pngs)),
+			manifestPath,
+		))
+	}
+	limit := len(manifest.PNGFiles)
+	if len(pngs) < limit {
+		limit = len(pngs)
+	}
+	for i := 0; i < limit; i++ {
+		if canonicalPathEqual(manifest.PNGFiles[i].Path, pngs[i]) {
+			continue
+		}
+		findings = append(findings, fail(
+			"manifest.artifact_paths",
+			fmt.Sprintf("render manifest pngFiles[%d] path must be %s, got %s", i, filepath.ToSlash(pngs[i]), filepath.ToSlash(manifest.PNGFiles[i].Path)),
+			manifestPath,
+		))
+	}
+	return findings
+}
+
+func canonicalRenderManifestPNGPaths(outDir string) []string {
+	pngs, _ := filepath.Glob(filepath.Join(outDir, "rendered_slides", "slide_*.png"))
+	sort.Strings(pngs)
+	return pngs
+}
+
+func canonicalPathEqual(a, b string) bool {
+	cleanA := canonicalAbsPath(a)
+	cleanB := canonicalAbsPath(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(cleanA, cleanB)
+	}
+	return cleanA == cleanB
+}
+
+func canonicalAbsPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	return filepath.Clean(mustAbs(path))
 }
 
 func renderManifestImagePaths(base string, images []renderedImage) []string {

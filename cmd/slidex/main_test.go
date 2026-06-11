@@ -412,6 +412,29 @@ func TestDeterministicRenderQAPackageE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var externalPathManifest renderManifest
+	if err := json.Unmarshal([]byte(originalManifest), &externalPathManifest); err != nil {
+		t.Fatal(err)
+	}
+	outsidePNG := filepath.Join(t.TempDir(), "outside.png")
+	writeSolidPNGForTest(t, outsidePNG, color.RGBA{R: 200, G: 50, B: 25, A: 255})
+	externalPathManifest.PNGFiles[0].Path = outsidePNG
+	externalPathManifest.PNGFiles[0].SHA256 = mustSHA256(outsidePNG)
+	if err := secureWriteJSON(manifestPath, externalPathManifest); err != nil {
+		t.Fatal(err)
+	}
+	externalPathPkg, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalPathFindings, _ := externalPathPkg["findings"].([]qaFinding)
+	if externalPathPkg["status"] != "fail" || !hasFindingCheck(externalPathFindings, "manifest.artifact_paths") {
+		t.Fatalf("package should reject non-canonical render manifest artifact paths, got %#v", externalPathPkg)
+	}
+	if err := secureWriteFile(manifestPath, []byte(originalManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	var visualPayload map[string]any
 	if err := json.Unmarshal([]byte(readFileOrEmpty(visualReviewPath)), &visualPayload); err != nil {
 		t.Fatal(err)
@@ -610,6 +633,8 @@ func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {
 	}
 	manifest := renderManifest{
 		SourceHTML:         artifact{Path: htmlPath, SHA256: mustSHA256(htmlPath)},
+		PDF:                artifact{Path: filepath.Join(outDir, "final_deck.pdf")},
+		QAMontage:          artifact{Path: filepath.Join(outDir, "qa_montage.png")},
 		ExpectedDimensions: dimension{Width: 2, Height: 2},
 		PNGFiles: []renderedImage{{
 			SlideID:    "slide_01",
@@ -647,6 +672,53 @@ func TestRunVisualReviewRecordWritesFreshManualEvidence(t *testing.T) {
 	}
 	if !strings.Contains(readFileOrEmpty(reviewPath), "montage and PDF inspected") {
 		t.Fatalf("manual notes were not recorded: %s", readFileOrEmpty(reviewPath))
+	}
+}
+
+func TestRunVisualReviewRecordRejectsNonCanonicalManifestImages(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	pngPath := filepath.Join(outDir, "rendered_slides", "slide_01.png")
+	if err := os.MkdirAll(filepath.Dir(pngPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSolidPNGForTest(t, pngPath, color.RGBA{R: 12, G: 34, B: 56, A: 255})
+	outsidePNG := filepath.Join(t.TempDir(), "outside.png")
+	writeSolidPNGForTest(t, outsidePNG, color.RGBA{R: 90, G: 10, B: 80, A: 255})
+	htmlPath := filepath.Join(outDir, "final_deck.html")
+	if err := os.WriteFile(htmlPath, []byte("<!doctype html><section class=\"slide\">OK</section>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := renderManifest{
+		SourceHTML:         artifact{Path: htmlPath, SHA256: mustSHA256(htmlPath)},
+		PDF:                artifact{Path: filepath.Join(outDir, "final_deck.pdf")},
+		QAMontage:          artifact{Path: filepath.Join(outDir, "qa_montage.png")},
+		ExpectedDimensions: dimension{Width: 2, Height: 2},
+		PNGFiles: []renderedImage{{
+			SlideID:    "slide_01",
+			Path:       outsidePNG,
+			SHA256:     mustSHA256(outsidePNG),
+			Dimensions: dimension{Width: 2, Height: 2},
+			Blank:      false,
+		}},
+	}
+	if err := secureWriteJSON(filepath.Join(outDir, "render_manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runVisualReviewRecord([]string{"--deck", deck, "--inspector", "QA"})
+	if err == nil || !strings.Contains(err.Error(), "render manifest artifact paths are not canonical") {
+		t.Fatalf("visual review record should reject non-canonical manifest image paths, got %v", err)
 	}
 }
 
