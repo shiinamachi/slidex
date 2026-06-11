@@ -2919,24 +2919,32 @@ func fillDependency(dep *dependency, base, ref string) {
 		dep.Risk = "dependency reference is empty"
 		return
 	}
-	if u, err := url.Parse(ref); err == nil && u.Scheme != "" && !windowsDriveURLScheme(u.Scheme) {
-		switch strings.ToLower(u.Scheme) {
-		case "http", "https":
+	if u, err := url.Parse(ref); err == nil {
+		if u.Host != "" && u.Scheme == "" {
 			dep.URL = ref
-			dep.Version = inferRemoteVersion(ref)
 			dep.Retrieved = time.Now().UTC().Format(time.RFC3339)
-			if dep.Version == "" {
-				dep.Risk = "remote dependency must use an exact pinned version or be vendored locally"
+			dep.Risk = "protocol-relative remote dependency must use explicit https with an exact pinned version or be vendored locally"
+			return
+		}
+		if u.Scheme != "" && !windowsDriveURLScheme(u.Scheme) {
+			switch strings.ToLower(u.Scheme) {
+			case "http", "https":
+				dep.URL = ref
+				dep.Version = inferRemoteVersion(ref)
+				dep.Retrieved = time.Now().UTC().Format(time.RFC3339)
+				if dep.Version == "" {
+					dep.Risk = "remote dependency must use an exact pinned version or be vendored locally"
+				}
+				return
+			case "file":
+				path, err := fileURLDependencyPath(u)
+				recordLocalDependency(dep, base, path, err)
+				return
+			default:
+				dep.URL = ref
+				dep.Risk = "unsupported dependency URL scheme: " + u.Scheme
+				return
 			}
-			return
-		case "file":
-			path, err := fileURLDependencyPath(u)
-			recordLocalDependency(dep, base, path, err)
-			return
-		default:
-			dep.URL = ref
-			dep.Risk = "unsupported dependency URL scheme: " + u.Scheme
-			return
 		}
 	}
 	path, err := localDependencyPath(base, ref)

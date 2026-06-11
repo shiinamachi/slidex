@@ -3980,9 +3980,46 @@ func TestFillDependencyRejectsUnsupportedURLSchemes(t *testing.T) {
 	}
 }
 
+func TestCollectDependenciesFlagsProtocolRelativeURLs(t *testing.T) {
+	htmlPath := filepath.Join(t.TempDir(), "final_deck.html")
+	src := `<!doctype html>
+<link rel="stylesheet" href="//cdn.example.com/lib.css">
+<style>.hero{background:url(//cdn.example.com/font.woff2)}</style>`
+	styles, assets, _ := collectDependencies(htmlPath, src, "pretendard")
+	for _, tc := range []struct {
+		name string
+		deps []dependency
+		url  string
+	}{
+		{name: "stylesheet", deps: styles, url: "//cdn.example.com/lib.css"},
+		{name: "css_url", deps: assets, url: "//cdn.example.com/font.woff2"},
+	} {
+		dep, ok := findDependencyByURL(tc.deps, tc.url)
+		if !ok {
+			t.Fatalf("%s dependency URL %q not found\nstyles=%#v\nassets=%#v", tc.name, tc.url, styles, assets)
+		}
+		if dep.Path != "" || dep.Version != "" || !strings.Contains(dep.Risk, "protocol-relative") {
+			t.Fatalf("%s protocol-relative dependency misclassified: %#v", tc.name, dep)
+		}
+	}
+	findings := dependencyPinFindings("test.protocol_relative", append(styles, assets...), htmlPath)
+	if len(findings) == 0 {
+		t.Fatalf("protocol-relative dependencies should fail pinning checks")
+	}
+}
+
 func findDependencyByPath(deps []dependency, path string) (dependency, bool) {
 	for _, dep := range deps {
 		if dep.Path == path {
+			return dep, true
+		}
+	}
+	return dependency{}, false
+}
+
+func findDependencyByURL(deps []dependency, url string) (dependency, bool) {
+	for _, dep := range deps {
+		if dep.URL == url {
 			return dep, true
 		}
 	}
