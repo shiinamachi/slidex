@@ -1,4 +1,4 @@
-name: Cross Platform
+name: Release new version
 
 on:
   workflow_dispatch:
@@ -12,13 +12,13 @@ on:
           - canary
           - production
 
-run-name: ${{ inputs.build_channel }} build by @${{ github.actor }}
+run-name: Release new version (${{ inputs.build_channel }}) by @${{ github.actor }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: cross-platform-${{ inputs.build_channel }}
+  group: release-new-version-${{ inputs.build_channel }}
   cancel-in-progress: false
 
 env:
@@ -363,10 +363,41 @@ jobs:
         uses: actions/attest@281a49d4cbb0a72c9575a50d18f6deb515a11deb # v4
         with:
           subject-path: dist/*
+      - name: Verify artifact attestations
+        env:
+          COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ needs.release-metadata.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          signer_workflow="${GH_REPO}/.github/workflows/release.yml"
+          source_ref="refs/heads/${SOURCE_REF}"
+          verify_attestation() {
+            local asset="$1"
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if gh attestation verify "$asset" \
+                --repo "$GH_REPO" \
+                --signer-workflow "$signer_workflow" \
+                --source-ref "$source_ref" \
+                --source-digest "$COMMIT_SHA"; then
+                return 0
+              fi
+              if [[ "$attempt" == "5" ]]; then
+                return 1
+              fi
+              sleep $((attempt * 5))
+            done
+          }
+          for asset in dist/*; do
+            verify_attestation "$asset"
+          done
       - name: Publish GitHub Release
         env:
           BUILD_CHANNEL: ${{ needs.release-metadata.outputs.build_channel }}
           COMMIT_SHA: ${{ needs.release-metadata.outputs.commit_sha }}
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ needs.release-metadata.outputs.prerelease }}
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.release_version }}
@@ -388,13 +419,13 @@ jobs:
           if [[ "$PRERELEASE" == "true" ]]; then
             release_flags+=(--prerelease)
           fi
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+          if gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
             printf 'release %s already exists; refusing to overwrite immutable release assets\n' "$TAG_NAME" >&2
             exit 2
           fi
-          gh release create "$TAG_NAME" dist/* --verify-tag --title "slidex ${RELEASE_VERSION}" --notes-file "$notes_file" "${release_flags[@]}"
-          gh release verify "$TAG_NAME" --repo shiinamachi/slidex
-          for asset in dist/slidex_"${RELEASE_VERSION}"_*; do
-            [[ "$asset" == *"_checksums.txt" ]] && continue
-            gh release verify-asset "$TAG_NAME" "$asset" --repo shiinamachi/slidex
-          done
+          gh release create "$TAG_NAME" dist/* --repo "$GH_REPO" --verify-tag --title "slidex ${RELEASE_VERSION}" --notes-file "$notes_file" "${release_flags[@]}"
+          expected_assets="$(mktemp)"
+          actual_assets="$(mktemp)"
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort > "$expected_assets"
+          gh release view "$TAG_NAME" --repo "$GH_REPO" --json assets --jq '.assets[].name' | sort > "$actual_assets"
+          diff -u "$expected_assets" "$actual_assets"

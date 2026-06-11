@@ -2079,8 +2079,8 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		want []string
 	}{
 		{
-			path: filepath.Join(root, ".github", "workflows", "cross-platform.yml"),
-			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "actions/attest@", "attestations: write", "refusing to overwrite immutable release assets", "gh release create", "gh release verify", "gh release verify-asset", "contents: write"},
+			path: filepath.Join(root, ".github", "workflows", "release.yml"),
+			want: []string{"workflow_dispatch", "build_channel", "canary", "develop", "production", "main", "release_version=\"${base_version}-${short_sha}\"", "Release Binaries", "SLIDEX_BUILD_CHANNEL", "SLIDEX_RELEASE_TAG", "scripts/package-release.sh", "Smoke release package before publish", "sha256sum -c", "COMMIT_SHA", "\"commit\": commit", "buildTime", "datetime.fromisoformat", "tarfile", "zipfile", "update status --json", "actions/attest@", "attestations: write", "Verify artifact attestations", "gh attestation verify", "--source-digest", "refusing to overwrite immutable release assets", "gh release create", "gh release view", "diff -u", "contents: write"},
 		},
 		{
 			path: filepath.Join(root, "scripts", "package-release.sh"),
@@ -2117,7 +2117,7 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	if info.Mode()&0o111 == 0 {
 		t.Fatal("scripts/package-release.sh must be executable")
 	}
-	workflow := readFileOrEmpty(filepath.Join(root, ".github", "workflows", "cross-platform.yml"))
+	workflow := readFileOrEmpty(filepath.Join(root, ".github", "workflows", "release.yml"))
 	if strings.Contains(workflow, "--clobber") {
 		t.Fatal("release workflow must not clobber existing release assets")
 	}
