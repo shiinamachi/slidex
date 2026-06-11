@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	xhtml "golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 type chromeEnumeratedSlide struct {
@@ -19,11 +20,6 @@ type chromeEnumeratedSlide struct {
 	Text      string `json:"text"`
 	Headline  string `json:"headline"`
 }
-
-var (
-	headOpenElementRe = regexp.MustCompile(`(?is)<head\b[^>]*>`)
-	htmlOpenElementRe = regexp.MustCompile(`(?is)<html\b[^>]*>`)
-)
 
 func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
 	if selector != ".slide" {
@@ -108,19 +104,28 @@ func injectDocumentBase(src, baseHref string) string {
 	if baseHref == "" {
 		return src
 	}
-	inspection := inspectBaseElements(src, true)
-	if len(inspection.ranges) > 0 {
-		src = removeStringRanges(src, inspection.ranges)
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err != nil {
+		return src
 	}
-	base := `<base href="` + xhtml.EscapeString(baseHref) + `">`
-	if loc := headOpenElementRe.FindStringIndex(src); loc != nil {
-		return src[:loc[1]] + "\n" + base + src[loc[1]:]
+	head := ensureDocumentHead(doc)
+	removeElementNodes(doc, "base")
+	base := &xhtml.Node{
+		Type:     xhtml.ElementNode,
+		DataAtom: atom.Base,
+		Data:     "base",
+		Attr:     []xhtml.Attribute{{Key: "href", Val: baseHref}},
 	}
-	if loc := htmlOpenElementRe.FindStringIndex(src); loc != nil {
-		head := "\n<head>\n" + base + "\n</head>"
-		return src[:loc[1]] + head + src[loc[1]:]
+	if head.FirstChild != nil {
+		head.InsertBefore(base, head.FirstChild)
+	} else {
+		head.AppendChild(base)
 	}
-	return "<head>\n" + base + "\n</head>\n" + src
+	var b strings.Builder
+	if err := xhtml.Render(&b, doc); err != nil {
+		return src
+	}
+	return b.String()
 }
 
 func injectHeadBase(head, baseHref string) string {
@@ -205,6 +210,53 @@ func removeStringRanges(src string, ranges []stringRange) string {
 		src = src[:start] + src[end:]
 	}
 	return src
+}
+
+func ensureDocumentHead(doc *xhtml.Node) *xhtml.Node {
+	htmlNode := findDirectChildElement(doc, "html")
+	if htmlNode == nil {
+		htmlNode = &xhtml.Node{Type: xhtml.ElementNode, DataAtom: atom.Html, Data: "html"}
+		doc.AppendChild(htmlNode)
+	}
+	if head := findDirectChildElement(htmlNode, "head"); head != nil {
+		return head
+	}
+	head := &xhtml.Node{Type: xhtml.ElementNode, DataAtom: atom.Head, Data: "head"}
+	if body := findDirectChildElement(htmlNode, "body"); body != nil {
+		htmlNode.InsertBefore(head, body)
+		return head
+	}
+	if htmlNode.FirstChild != nil {
+		htmlNode.InsertBefore(head, htmlNode.FirstChild)
+		return head
+	}
+	htmlNode.AppendChild(head)
+	return head
+}
+
+func findDirectChildElement(node *xhtml.Node, name string) *xhtml.Node {
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if isElementNamed(child, name) {
+			return child
+		}
+	}
+	return nil
+}
+
+func removeElementNodes(node *xhtml.Node, name string) {
+	for child := node.FirstChild; child != nil; {
+		next := child.NextSibling
+		if isElementNamed(child, name) {
+			node.RemoveChild(child)
+		} else {
+			removeElementNodes(child, name)
+		}
+		child = next
+	}
+}
+
+func isElementNamed(node *xhtml.Node, name string) bool {
+	return node != nil && node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, name)
 }
 
 func injectSlideEnumerationScript(src string) string {

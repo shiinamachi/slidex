@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf16"
+
+	xhtml "golang.org/x/net/html"
 )
 
 func TestExtractSlidesUsesHTMLParserForNestedSections(t *testing.T) {
@@ -3963,17 +3965,9 @@ func TestInjectDocumentBaseUsesSourceDirectory(t *testing.T) {
 	baseHref := documentBaseHrefForHTMLPath(htmlPath)
 	src := `<html><head><title>Deck</title></head><body><img src="assets/hero.png"></body></html>`
 	got := injectDocumentBase(src, baseHref)
-	baseTag := `<base href="` + baseHref + `">`
-	if !strings.Contains(got, baseTag) {
-		t.Fatalf("document base tag missing:\n%s", got)
-	}
-	if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
-		t.Fatalf("document base tag should be inserted at the start of head:\n%s", got)
-	}
+	requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
 	again := injectDocumentBase(got, baseHref)
-	if strings.Count(again, `<base href=`) != 1 {
-		t.Fatalf("document base tag should not be duplicated:\n%s", again)
-	}
+	requireCanonicalBaseFirstInParsedHead(t, again, baseHref)
 }
 
 func TestInjectHeadBaseKeepsSingleCanonicalBase(t *testing.T) {
@@ -3988,24 +3982,17 @@ func TestInjectDocumentBaseReplacesOnlyActualUnacceptableBase(t *testing.T) {
 	baseHref := "file:///deck/out/"
 	src := `<!doctype html><html><head><!-- <base href="file:///bad/"> --><base href="./"><title>Deck</title></head><body></body></html>`
 	got := injectDocumentBase(src, baseHref)
-	baseTag := `<base href="` + baseHref + `">`
-	if !strings.Contains(got, baseTag) {
-		t.Fatalf("document base tag missing:\n%s", got)
-	}
+	requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
 	if strings.Contains(got, `<base href="./">`) {
 		t.Fatalf("relative base should be removed:\n%s", got)
 	}
 	if !strings.Contains(got, `<!-- <base href="file:///bad/"> -->`) {
 		t.Fatalf("commented base should be preserved as inert text:\n%s", got)
 	}
-	if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
-		t.Fatalf("source base should be inserted before title:\n%s", got)
-	}
 }
 
 func TestInjectDocumentBaseNormalizesMixedBaseTags(t *testing.T) {
 	baseHref := "file:///deck/out/"
-	baseTag := `<base href="` + baseHref + `">`
 	cases := []struct {
 		name string
 		src  string
@@ -4026,16 +4013,11 @@ func TestInjectDocumentBaseNormalizesMixedBaseTags(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := injectDocumentBase(tc.src, baseHref)
-			if strings.Count(got, baseTag) != 1 {
-				t.Fatalf("expected exactly one canonical base:\n%s", got)
-			}
+			requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
 			for _, forbidden := range []string{`https://evil.example/`, `../relative/`} {
 				if strings.Contains(got, forbidden) {
 					t.Fatalf("unacceptable base survived:\n%s", got)
 				}
-			}
-			if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
-				t.Fatalf("canonical base should be first in head:\n%s", got)
 			}
 		})
 	}
@@ -4066,15 +4048,114 @@ func TestInjectHeadBaseMovesLateCanonicalBaseBeforeURLContent(t *testing.T) {
 
 func TestInjectDocumentBaseMovesLateCanonicalBaseBeforeURLContent(t *testing.T) {
 	baseHref := "file:///deck/out/"
-	baseTag := `<base href="` + baseHref + `">`
 	src := `<!doctype html><html><head><link rel="stylesheet" href="deck.css"><base href="file:///deck/out/"><title>Deck</title></head><body></body></html>`
 	got := injectDocumentBase(src, baseHref)
-	if strings.Count(got, baseTag) != 1 {
-		t.Fatalf("document should contain exactly one canonical base:\n%s", got)
+	requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
+}
+
+func TestInjectDocumentBaseNormalizesParserRecognizedPreHeadBase(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "before_html",
+			src:  `<!doctype html><base href="https://evil.example/"><html><head><link rel="stylesheet" href="deck.css"></head><body></body></html>`,
+		},
+		{
+			name: "between_html_and_head",
+			src:  `<!doctype html><html><base href="https://evil.example/"><head><link rel="stylesheet" href="deck.css"></head><body></body></html>`,
+		},
+		{
+			name: "implicit_head",
+			src:  `<!doctype html><html><base href="https://evil.example/"><link rel="stylesheet" href="deck.css"><body></body></html>`,
+		},
 	}
-	if strings.Index(got, baseTag) > strings.Index(got, `<link rel="stylesheet"`) {
-		t.Fatalf("base should precede stylesheet:\n%s", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := injectDocumentBase(tc.src, baseHref)
+			requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
+			if strings.Contains(got, "https://evil.example/") {
+				t.Fatalf("parser-recognized attacker base survived:\n%s", got)
+			}
+		})
 	}
+}
+
+func TestInjectDocumentBaseIgnoresCommentedHeadBoundary(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	src := `<!-- <head> --><html><head><link rel="stylesheet" href="deck.css"></head><body></body></html>`
+	got := injectDocumentBase(src, baseHref)
+	if !strings.Contains(got, `<!-- <head> -->`) {
+		t.Fatalf("commented head marker should remain inert text:\n%s", got)
+	}
+	requireCanonicalBaseFirstInParsedHead(t, got, baseHref)
+}
+
+func requireCanonicalBaseFirstInParsedHead(t *testing.T, src, baseHref string) {
+	t.Helper()
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hrefs := collectActualBaseHrefsForTest(doc)
+	if len(hrefs) != 1 || hrefs[0] != baseHref {
+		t.Fatalf("expected exactly one actual canonical base, got %#v in:\n%s", hrefs, src)
+	}
+	head := findFirstElementForTest(doc, "head")
+	if head == nil {
+		t.Fatalf("document head missing:\n%s", src)
+	}
+	for child := head.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != xhtml.ElementNode {
+			continue
+		}
+		if !strings.EqualFold(child.Data, "base") {
+			t.Fatalf("first head element should be canonical base, got <%s> in:\n%s", child.Data, src)
+		}
+		if href := attrValueForTest(child, "href"); href != baseHref {
+			t.Fatalf("first head base href = %q, want %q", href, baseHref)
+		}
+		return
+	}
+	t.Fatalf("head contains no element children:\n%s", src)
+}
+
+func collectActualBaseHrefsForTest(node *xhtml.Node) []string {
+	var hrefs []string
+	var walk func(*xhtml.Node)
+	walk = func(n *xhtml.Node) {
+		if n.Type == xhtml.ElementNode && strings.EqualFold(n.Data, "base") {
+			hrefs = append(hrefs, attrValueForTest(n, "href"))
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(node)
+	return hrefs
+}
+
+func findFirstElementForTest(node *xhtml.Node, name string) *xhtml.Node {
+	if node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, name) {
+		return node
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if found := findFirstElementForTest(child, name); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func attrValueForTest(node *xhtml.Node, key string) string {
+	for _, attr := range node.Attr {
+		if strings.EqualFold(attr.Key, key) {
+			return attr.Val
+		}
+	}
+	return ""
 }
 
 func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
