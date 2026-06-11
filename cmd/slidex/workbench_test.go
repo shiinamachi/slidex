@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1600,6 +1601,57 @@ func TestWorkbenchWritesRejectSymlinkParentDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outsideOut, workbenchManifestName)); !os.IsNotExist(err) {
 		t.Fatalf("outside manifest should not be created, stat err=%v", err)
+	}
+}
+
+func TestUpdateWorkbenchManifestSerializesConcurrentChanges(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	manifest.Notes = nil
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	const workers = 16
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := updateWorkbenchManifest(deck, manifest, func(current *workbenchManifest) {
+				current.Notes = append(current.Notes, fmt.Sprintf("note-%02d", i))
+				current.UpdatedAt = fmt.Sprintf("update-%02d", i)
+			})
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after concurrent updates")
+	}
+	if len(got.Notes) != workers {
+		t.Fatalf("notes length = %d, want %d: %#v", len(got.Notes), workers, got.Notes)
+	}
+	seen := map[string]bool{}
+	for _, note := range got.Notes {
+		seen[note] = true
+	}
+	for i := 0; i < workers; i++ {
+		note := fmt.Sprintf("note-%02d", i)
+		if !seen[note] {
+			t.Fatalf("missing concurrent note %s in %#v", note, got.Notes)
+		}
 	}
 }
 

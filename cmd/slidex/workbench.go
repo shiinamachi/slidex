@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -1454,7 +1455,20 @@ type workbenchHTTPServer struct {
 	token         string
 	shutdownToken string
 	shutdown      func()
+	manifestMu    sync.RWMutex
 	manifest      workbenchManifest
+}
+
+func (s *workbenchHTTPServer) currentManifest() workbenchManifest {
+	s.manifestMu.RLock()
+	defer s.manifestMu.RUnlock()
+	return s.manifest
+}
+
+func (s *workbenchHTTPServer) setManifest(manifest workbenchManifest) {
+	s.manifestMu.Lock()
+	defer s.manifestMu.Unlock()
+	s.manifest = manifest
 }
 
 func (s *workbenchHTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -1470,10 +1484,11 @@ func (s *workbenchHTTPServer) handleReady(w http.ResponseWriter, r *http.Request
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
+	manifest := s.currentManifest()
 	_ = writeJSONResponse(w, map[string]any{
 		"status":    "ready",
 		"sessionId": s.sessionID,
-		"deckDir":   s.manifest.DeckDir,
+		"deckDir":   manifest.DeckDir,
 		"pid":       os.Getpid(),
 	})
 }
@@ -1677,7 +1692,8 @@ func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOriginOrNoOrigin(r, s.manifest.URL) {
+	manifest := s.currentManifest()
+	if !sameOriginOrNoOrigin(r, manifest.URL) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -1685,7 +1701,7 @@ func (s *workbenchHTTPServer) handleSession(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	_ = writeJSONResponse(w, publicWorkbenchStatus(s.manifest))
+	_ = writeJSONResponse(w, publicWorkbenchStatus(manifest))
 }
 
 func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request) {
@@ -1697,9 +1713,10 @@ func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	manifestSnapshot := s.currentManifest()
 	switch r.Method {
 	case http.MethodGet:
-		if !sameOriginOrNoOrigin(r, s.manifest.URL) {
+		if !sameOriginOrNoOrigin(r, manifestSnapshot.URL) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -1709,7 +1726,7 @@ func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request
 		}
 		_ = writeJSONResponse(w, map[string]any{"status": "empty"})
 	case http.MethodPost:
-		if !sameOriginRequired(r, s.manifest.URL) {
+		if !sameOriginRequired(r, manifestSnapshot.URL) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -1729,16 +1746,17 @@ func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		manifest := s.manifest
-		manifest.Status = "draft"
-		manifest.DraftSavedAt = draft.UpdatedAt
-		manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
-		manifest.UpdatedAt = draft.UpdatedAt
-		if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
+		manifest, err := updateWorkbenchManifest(s.deckAbs, manifestSnapshot, func(manifest *workbenchManifest) {
+			manifest.Status = "draft"
+			manifest.DraftSavedAt = draft.UpdatedAt
+			manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
+			manifest.UpdatedAt = draft.UpdatedAt
+		})
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.manifest = manifest
+		s.setManifest(manifest)
 		_ = writeJSONResponse(w, map[string]any{"status": "draft_saved", "draft": draft, "manifest": publicWorkbenchStatus(manifest)})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1754,7 +1772,8 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOriginRequired(r, s.manifest.URL) {
+	manifestSnapshot := s.currentManifest()
+	if !sameOriginRequired(r, manifestSnapshot.URL) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -1785,7 +1804,8 @@ func (s *workbenchHTTPServer) handleComplete(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOriginRequired(r, s.manifest.URL) {
+	manifestSnapshot := s.currentManifest()
+	if !sameOriginRequired(r, manifestSnapshot.URL) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -1830,22 +1850,23 @@ func (s *workbenchHTTPServer) saveWorkbenchInput(input workbenchSaveInput, statu
 	if err != nil {
 		return workbenchManifest{}, err
 	}
-	manifest := s.manifest
 	now := time.Now().UTC().Format(time.RFC3339)
-	manifest.Status = status
-	manifest.InputSavedAt = now
-	if wizardCompletedAt != "" {
-		manifest.WizardCompletedAt = wizardCompletedAt
-	}
-	manifest.DraftSavedAt = draft.UpdatedAt
-	manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
-	manifest.UpdatedAt = now
-	manifest.BriefPath = filepath.ToSlash(filepath.Join(s.deckAbs, "brief.md"))
-	manifest.SavedFieldLengths = workbenchFieldLengths(input)
-	if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
+	manifest, err := updateWorkbenchManifest(s.deckAbs, s.currentManifest(), func(manifest *workbenchManifest) {
+		manifest.Status = status
+		manifest.InputSavedAt = now
+		if wizardCompletedAt != "" {
+			manifest.WizardCompletedAt = wizardCompletedAt
+		}
+		manifest.DraftSavedAt = draft.UpdatedAt
+		manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
+		manifest.UpdatedAt = now
+		manifest.BriefPath = filepath.ToSlash(filepath.Join(s.deckAbs, "brief.md"))
+		manifest.SavedFieldLengths = workbenchFieldLengths(input)
+	})
+	if err != nil {
 		return workbenchManifest{}, err
 	}
-	s.manifest = manifest
+	s.setManifest(manifest)
 	return manifest, nil
 }
 
@@ -1920,21 +1941,23 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 		return manifest, false, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	manifest.Status = "generating"
-	manifest.GenerationStatus = "running"
-	manifest.GenerationStartedAt = now
-	manifest.GenerationEndedAt = ""
-	manifest.GenerationPID = cmd.Process.Pid
-	manifest.GenerationExitCode = 0
-	manifest.GenerationCommand = command
-	manifest.GenerationLogPath = filepath.ToSlash(logPath)
-	manifest.UpdatedAt = now
-	if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
+	manifest, err = updateWorkbenchManifest(s.deckAbs, manifest, func(manifest *workbenchManifest) {
+		manifest.Status = "generating"
+		manifest.GenerationStatus = "running"
+		manifest.GenerationStartedAt = now
+		manifest.GenerationEndedAt = ""
+		manifest.GenerationPID = cmd.Process.Pid
+		manifest.GenerationExitCode = 0
+		manifest.GenerationCommand = command
+		manifest.GenerationLogPath = filepath.ToSlash(logPath)
+		manifest.UpdatedAt = now
+	})
+	if err != nil {
 		signalManagedProcess(cmd.Process.Pid)
 		_ = logFile.Close()
 		return manifest, false, err
 	}
-	s.manifest = manifest
+	s.setManifest(manifest)
 	go s.waitForGeneration(cmd, logFile, manifest)
 	return manifest, false, nil
 }
@@ -1942,22 +1965,21 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 func (s *workbenchHTTPServer) waitForGeneration(cmd *exec.Cmd, logFile *os.File, started workbenchManifest) {
 	err := cmd.Wait()
 	_ = logFile.Close()
-	manifest := started
-	if current, ok := readWorkbenchManifest(s.deckAbs); ok {
-		manifest = current
-	}
-	manifest.GenerationEndedAt = time.Now().UTC().Format(time.RFC3339)
-	manifest.UpdatedAt = manifest.GenerationEndedAt
-	manifest.GenerationExitCode = cmd.ProcessState.ExitCode()
-	if err == nil {
-		manifest.Status = "generated"
-		manifest.GenerationStatus = "completed"
-	} else {
-		manifest.Status = "generation_failed"
-		manifest.GenerationStatus = "failed"
-	}
-	if writeWorkbenchManifest(s.deckAbs, manifest) == nil {
-		s.manifest = manifest
+	endedAt := time.Now().UTC().Format(time.RFC3339)
+	manifest, writeErr := updateWorkbenchManifest(s.deckAbs, started, func(manifest *workbenchManifest) {
+		manifest.GenerationEndedAt = endedAt
+		manifest.UpdatedAt = endedAt
+		manifest.GenerationExitCode = cmd.ProcessState.ExitCode()
+		if err == nil {
+			manifest.Status = "generated"
+			manifest.GenerationStatus = "completed"
+		} else {
+			manifest.Status = "generation_failed"
+			manifest.GenerationStatus = "failed"
+		}
+	})
+	if writeErr == nil {
+		s.setManifest(manifest)
 	}
 }
 
@@ -1970,7 +1992,8 @@ func (s *workbenchHTTPServer) handleShutdown(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !sameOriginRequired(r, s.manifest.URL) {
+	manifestSnapshot := s.currentManifest()
+	if !sameOriginRequired(r, manifestSnapshot.URL) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -1978,14 +2001,15 @@ func (s *workbenchHTTPServer) handleShutdown(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	manifest := s.manifest
-	manifest.Status = "stopping"
-	manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := writeWorkbenchManifest(s.deckAbs, manifest); err != nil {
+	manifest, err := updateWorkbenchManifest(s.deckAbs, manifestSnapshot, func(manifest *workbenchManifest) {
+		manifest.Status = "stopping"
+		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	})
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.manifest = manifest
+	s.setManifest(manifest)
 	_ = writeJSONResponse(w, map[string]any{"status": "stopping", "manifest": publicWorkbenchStatus(manifest)})
 	if s.shutdown != nil {
 		go func() {
@@ -2000,10 +2024,11 @@ func workbenchSessionPathMatches(path, sessionID, suffix string) bool {
 }
 
 func (s *workbenchHTTPServer) workbenchHTML() string {
-	filePathHTML := workbenchFilePathHTML(s.manifest)
+	manifest := s.currentManifest()
+	filePathHTML := workbenchFilePathHTML(manifest)
 	bootstrap := map[string]any{
-		"deckId":        s.manifest.DeckID,
-		"deckDir":       s.manifest.DeckDir,
+		"deckId":        manifest.DeckID,
+		"deckDir":       manifest.DeckDir,
 		"sessionId":     s.sessionID,
 		"apiBase":       "/workbench/" + s.sessionID + "/api",
 		"assetBase":     "/workbench/" + s.sessionID + "/assets/",
@@ -2012,7 +2037,7 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
 		"filePathHTML":  filePathHTML,
 	}
 	raw, _ := json.Marshal(bootstrap)
-	title := html.EscapeString(s.manifest.DeckID)
+	title := html.EscapeString(manifest.DeckID)
 	assetBase := "/workbench/" + s.sessionID + "/assets/"
 	return `<!doctype html>
 <html lang="ko">
@@ -2081,7 +2106,7 @@ func (s *workbenchHTTPServer) workbenchHTML() string {
 	          <h1>Deck intake workbench</h1>
           <div class="meta">Deck: <strong>` + title + `</strong></div>
         </div>
-        <div class="meta deck-dir">` + html.EscapeString(s.manifest.DeckDir) + `</div>
+        <div class="meta deck-dir">` + html.EscapeString(manifest.DeckDir) + `</div>
       </header>
       <nav class="stepper" aria-label="Wizard steps">
         <button class="step active" type="button">1. 요청 정리</button>
@@ -2642,7 +2667,19 @@ func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid
 }
 
 func readWorkbenchManifest(deckAbs string) (workbenchManifest, bool) {
-	raw, err := os.ReadFile(filepath.Join(deckAbs, "out", workbenchManifestName))
+	unlock := lockWorkbenchManifest(deckAbs)
+	defer unlock()
+	return readWorkbenchManifestUnlocked(deckAbs)
+}
+
+func readWorkbenchManifestUnlocked(deckAbs string) (workbenchManifest, bool) {
+	path := workbenchManifestPath(deckAbs)
+	f, _, err := openRegularFileForRead(path)
+	if err != nil {
+		return workbenchManifest{}, false
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(f)
 	if err != nil {
 		return workbenchManifest{}, false
 	}
@@ -2654,7 +2691,41 @@ func readWorkbenchManifest(deckAbs string) (workbenchManifest, bool) {
 }
 
 func writeWorkbenchManifest(deckAbs string, manifest workbenchManifest) error {
-	return secureWriteJSON(filepath.Join(deckAbs, "out", workbenchManifestName), manifest)
+	unlock := lockWorkbenchManifest(deckAbs)
+	defer unlock()
+	return writeWorkbenchManifestUnlocked(deckAbs, manifest)
+}
+
+func updateWorkbenchManifest(deckAbs string, fallback workbenchManifest, mutate func(*workbenchManifest)) (workbenchManifest, error) {
+	unlock := lockWorkbenchManifest(deckAbs)
+	defer unlock()
+	manifest := fallback
+	if current, ok := readWorkbenchManifestUnlocked(deckAbs); ok {
+		manifest = current
+	}
+	mutate(&manifest)
+	if err := writeWorkbenchManifestUnlocked(deckAbs, manifest); err != nil {
+		return workbenchManifest{}, err
+	}
+	return manifest, nil
+}
+
+func writeWorkbenchManifestUnlocked(deckAbs string, manifest workbenchManifest) error {
+	return secureWriteJSON(workbenchManifestPath(deckAbs), manifest)
+}
+
+func workbenchManifestPath(deckAbs string) string {
+	return filepath.Join(deckAbs, "out", workbenchManifestName)
+}
+
+var workbenchManifestLocks sync.Map
+
+func lockWorkbenchManifest(deckAbs string) func() {
+	key := filepath.Clean(workbenchManifestPath(deckAbs))
+	value, _ := workbenchManifestLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func workbenchControlPath(deckAbs string) string {
