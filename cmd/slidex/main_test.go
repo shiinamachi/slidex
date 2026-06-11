@@ -3545,6 +3545,13 @@ func TestTextArtifactsRejectSymlinkTargets(t *testing.T) {
 			},
 		},
 		{
+			name: "source_json",
+			path: filepath.Join(outDir, "source.json"),
+			write: func(path string) error {
+				return writeSourceJSONFile(path, map[string]any{"ok": true})
+			},
+		},
+		{
 			name: "delivery_summary",
 			path: filepath.Join(outDir, "delivery_summary.md"),
 			write: func(string) error {

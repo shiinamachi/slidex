@@ -4724,7 +4724,7 @@ func writeSourceJSONFile(path string, v any) error {
 		return err
 	}
 	raw = append(raw, '\n')
-	return os.WriteFile(path, raw, 0o644)
+	return secureWriteFile(path, raw, 0o644)
 }
 
 func copyFile(src, dst string) error {
