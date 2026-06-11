@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +21,6 @@ type chromeEnumeratedSlide struct {
 }
 
 var (
-	baseElementRe     = regexp.MustCompile(`(?is)<base\b`)
 	headOpenElementRe = regexp.MustCompile(`(?is)<head\b[^>]*>`)
 	htmlOpenElementRe = regexp.MustCompile(`(?is)<html\b[^>]*>`)
 )
@@ -105,8 +105,13 @@ func documentBaseHrefForHTMLPath(htmlPath string) string {
 }
 
 func injectDocumentBase(src, baseHref string) string {
-	if baseHref == "" || baseElementRe.MatchString(src) {
+	if baseHref == "" {
 		return src
+	}
+	if ok, ranges := inspectBaseElements(src, baseHref, true); ok {
+		return src
+	} else if len(ranges) > 0 {
+		src = removeStringRanges(src, ranges)
 	}
 	base := `<base href="` + xhtml.EscapeString(baseHref) + `">`
 	if loc := headOpenElementRe.FindStringIndex(src); loc != nil {
@@ -120,10 +125,106 @@ func injectDocumentBase(src, baseHref string) string {
 }
 
 func injectHeadBase(head, baseHref string) string {
-	if baseHref == "" || baseElementRe.MatchString(head) {
+	if baseHref == "" {
 		return head
 	}
+	if ok, ranges := inspectBaseElements(head, baseHref, false); ok {
+		return head
+	} else if len(ranges) > 0 {
+		head = removeStringRanges(head, ranges)
+	}
 	return `<base href="` + xhtml.EscapeString(baseHref) + `">` + "\n" + head
+}
+
+type stringRange struct {
+	start int
+	end   int
+}
+
+func inspectBaseElements(src, baseHref string, requireHead bool) (bool, []stringRange) {
+	z := xhtml.NewTokenizer(strings.NewReader(src))
+	inHead := !requireHead
+	cursor := 0
+	var ranges []stringRange
+	for {
+		tt := z.Next()
+		if tt == xhtml.ErrorToken {
+			if z.Err() == io.EOF {
+				return false, ranges
+			}
+			return false, ranges
+		}
+		tokenRange := currentTokenRange(src, &cursor, string(z.Raw()))
+		nameBytes, _ := z.TagName()
+		name := strings.ToLower(string(nameBytes))
+		switch tt {
+		case xhtml.StartTagToken:
+			if requireHead && name == "head" {
+				inHead = true
+				continue
+			}
+			if inHead && name == "base" {
+				if baseHrefMatches(tokenAttr(z, "href"), baseHref) {
+					return true, nil
+				}
+				ranges = append(ranges, tokenRange)
+			}
+		case xhtml.SelfClosingTagToken:
+			if inHead && name == "base" {
+				if baseHrefMatches(tokenAttr(z, "href"), baseHref) {
+					return true, nil
+				}
+				ranges = append(ranges, tokenRange)
+			}
+		case xhtml.EndTagToken:
+			if requireHead && name == "head" {
+				inHead = false
+			}
+		}
+	}
+}
+
+func tokenAttr(z *xhtml.Tokenizer, name string) string {
+	for {
+		key, val, more := z.TagAttr()
+		if strings.EqualFold(string(key), name) {
+			return strings.TrimSpace(string(val))
+		}
+		if !more {
+			return ""
+		}
+	}
+}
+
+func baseHrefMatches(href, baseHref string) bool {
+	return strings.TrimSpace(href) == strings.TrimSpace(baseHref)
+}
+
+func currentTokenRange(src string, cursor *int, raw string) stringRange {
+	if raw == "" {
+		return stringRange{}
+	}
+	if *cursor > len(src) {
+		*cursor = len(src)
+	}
+	if idx := strings.Index(src[*cursor:], raw); idx >= 0 {
+		start := *cursor + idx
+		end := start + len(raw)
+		*cursor = end
+		return stringRange{start: start, end: end}
+	}
+	return stringRange{}
+}
+
+func removeStringRanges(src string, ranges []stringRange) string {
+	for i := len(ranges) - 1; i >= 0; i-- {
+		start, end := ranges[i].start, ranges[i].end
+		if start < 0 || end > len(src) || start >= end {
+			continue
+		}
+		src = src[:start] + src[end:]
+	}
+	return src
 }
 
 func injectSlideEnumerationScript(src string) string {

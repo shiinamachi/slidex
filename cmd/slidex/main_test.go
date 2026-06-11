@@ -3853,7 +3853,7 @@ func TestInjectDocumentBaseUsesSourceDirectory(t *testing.T) {
 	if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
 		t.Fatalf("document base tag should be inserted at the start of head:\n%s", got)
 	}
-	again := injectDocumentBase(got, "file:///other/")
+	again := injectDocumentBase(got, baseHref)
 	if strings.Count(again, `<base href=`) != 1 {
 		t.Fatalf("document base tag should not be duplicated:\n%s", again)
 	}
@@ -3861,8 +3861,37 @@ func TestInjectDocumentBaseUsesSourceDirectory(t *testing.T) {
 
 func TestInjectHeadBaseKeepsExistingBase(t *testing.T) {
 	head := `<base href="file:///deck/out/"><title>Deck</title>`
-	if got := injectHeadBase(head, "file:///other/"); got != head {
+	if got := injectHeadBase(head, "file:///deck/out/"); got != head {
 		t.Fatalf("existing base tag should be preserved, got %q", got)
+	}
+}
+
+func TestInjectDocumentBaseReplacesOnlyActualUnacceptableBase(t *testing.T) {
+	baseHref := "file:///deck/out/"
+	src := `<!doctype html><html><head><!-- <base href="file:///bad/"> --><base href="./"><title>Deck</title></head><body></body></html>`
+	got := injectDocumentBase(src, baseHref)
+	baseTag := `<base href="` + baseHref + `">`
+	if !strings.Contains(got, baseTag) {
+		t.Fatalf("document base tag missing:\n%s", got)
+	}
+	if strings.Contains(got, `<base href="./">`) {
+		t.Fatalf("relative base should be removed:\n%s", got)
+	}
+	if !strings.Contains(got, `<!-- <base href="file:///bad/"> -->`) {
+		t.Fatalf("commented base should be preserved as inert text:\n%s", got)
+	}
+	if strings.Index(got, baseTag) > strings.Index(got, "<title>") {
+		t.Fatalf("source base should be inserted before title:\n%s", got)
+	}
+}
+
+func TestInjectHeadBaseReplacesRelativeBase(t *testing.T) {
+	got := injectHeadBase(`<base href="./"><title>Deck</title>`, "file:///deck/out/")
+	if !strings.HasPrefix(got, `<base href="file:///deck/out/">`) {
+		t.Fatalf("head base should start with source base, got %q", got)
+	}
+	if strings.Contains(got, `<base href="./">`) {
+		t.Fatalf("relative base should be removed, got %q", got)
 	}
 }
 
