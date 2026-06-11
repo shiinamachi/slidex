@@ -1603,6 +1603,9 @@ func runPipeline(args []string) error {
 	if *deck == "" {
 		return exitCodeError(2, "--deck is required")
 	}
+	if !validPipelineUntil(*until) {
+		return exitCodeError(2, "--until must be one of: render, qa, package")
+	}
 	deckAbs := mustAbs(*deck)
 	outDir := filepath.Join(deckAbs, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -1886,6 +1889,15 @@ func runPipeline(args []string) error {
 		return err
 	}
 	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "status": "complete", "until": *until, "state": filepath.Join(outDir, "slidex_state.json")})
+}
+
+func validPipelineUntil(until string) bool {
+	switch until {
+	case "render", "qa", "package":
+		return true
+	default:
+		return false
+	}
 }
 
 func runClean(args []string) error {

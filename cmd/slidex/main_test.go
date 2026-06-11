@@ -106,6 +106,20 @@ func TestRunInitCreatesDeckWorkspaceFromTemplate(t *testing.T) {
 	}
 }
 
+func TestRunPipelineRejectsInvalidUntilBeforeSideEffects(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := os.MkdirAll(deck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := runPipeline([]string{"--deck", deck, "--until", "bogus"})
+	if err == nil || !strings.Contains(err.Error(), "--until must be one of") {
+		t.Fatalf("expected invalid --until error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(deck, "out")); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid --until should fail before creating out directory, stat err=%v", statErr)
+	}
+}
+
 func TestRunBufferedCommandReportsTimeout(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
