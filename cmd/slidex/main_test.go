@@ -3613,6 +3613,49 @@ func TestFileSnapshotTransactionRollbackRestoresFiles(t *testing.T) {
 	}
 }
 
+func TestUpdateSpecFromHTMLPreservesLogicalID(t *testing.T) {
+	specPath := filepath.Join(t.TempDir(), "deck_spec.json")
+	spec := map[string]any{
+		"slides": []any{
+			map[string]any{
+				"id":           "intro",
+				"htmlId":       "slide_01",
+				"sectionRole":  "cover",
+				"slideType":    "cover",
+				"headline":     "Old headline",
+				"keyMessage":   "Old headline",
+				"bodyContent":  []any{"Old body"},
+				"evidenceRefs": []any{},
+			},
+		},
+	}
+	if err := writeJSONFile(specPath, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateSpecFromHTML(specPath, []slideInfo{{ID: "slide_01", Headline: "New headline", Text: "New headline. New body"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	raw, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	slides, _ := got["slides"].([]any)
+	if len(slides) != 1 {
+		t.Fatalf("slides length = %d", len(slides))
+	}
+	slide, _ := slides[0].(map[string]any)
+	if slide["id"] != "intro" || slide["htmlId"] != "slide_01" {
+		t.Fatalf("logical id/htmlId not preserved: %#v", slide)
+	}
+	if slide["headline"] != "New headline" {
+		t.Fatalf("headline not updated: %#v", slide)
+	}
+}
+
 func TestCopyDirPreservesExecutableMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not use Unix executable mode bits")

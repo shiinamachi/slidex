@@ -4062,21 +4062,25 @@ func updateSpecFromHTML(specPath string, slides []slideInfo) error {
 				if id, _ := s["id"].(string); id != "" {
 					oldSlides[id] = s
 				}
+				if htmlID, _ := s["htmlId"].(string); htmlID != "" {
+					oldSlides[htmlID] = s
+				}
 			}
 		}
 	}
 	var newSlides []any
 	for i, htmlSlide := range slides {
-		id := htmlSlide.ID
-		if id == "" {
-			id = fmt.Sprintf("slide_%02d", i+1)
+		htmlID := htmlSlide.ID
+		if htmlID == "" {
+			htmlID = fmt.Sprintf("slide_%02d", i+1)
 		}
-		slide := oldSlides[id]
+		slide := oldSlides[htmlID]
 		if slide == nil {
 			slide = map[string]any{}
 		}
+		id := firstNonEmpty(stringValue(slide["id"]), htmlID)
 		slide["id"] = id
-		slide["htmlId"] = id
+		slide["htmlId"] = htmlID
 		if slide["sectionRole"] == nil || slide["sectionRole"] == "" {
 			slide["sectionRole"] = "content"
 		}
