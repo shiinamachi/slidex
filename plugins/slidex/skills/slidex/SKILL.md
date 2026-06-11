@@ -5,7 +5,7 @@ description: Compatibility skill for slidex. Prefer slidex-start for new deck wo
 
 # slidex Plugin Skill
 
-For a new deck, use `slidex-start` first. Use `slidex run --deck decks/<deck_id>` only after the initial deck creation input has been saved.
+For a new deck, use `slidex-start` first. The React Wizard saves initial deck creation input and starts generation with `slidex run --deck decks/<deck_id> --non-interactive` after the user selects `Complete & generate`. Use `slidex run --deck decks/<deck_id>` manually only when repairing or resuming an existing deck.
 
 Required final gates are current rendered PNGs, `final_deck.pdf`, `render_manifest.json`, `qa_montage.png`, `qa_report.md`, `delivery_summary.md`, and `slidex package --deck decks/<deck_id>`.
 

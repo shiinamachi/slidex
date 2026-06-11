@@ -9,14 +9,14 @@
     "skills": "./skills/",
     "interface": {
         "displayName": "slidex",
-        "shortDescription": "Create slidex decks and open the local workbench.",
-        "longDescription": "slidex starts a loopback deck-creation workbench from Codex, bootstraps deck-local workspaces, and keeps the CLI as the source of truth for later HTML/PDF render, QA, and package stages.",
+        "shortDescription": "Create slidex decks with a local React wizard workbench.",
+        "longDescription": "slidex starts a loopback React wizard workbench from Codex, opens it in the Codex App Browser, captures enough deck intake to proceed, and keeps the CLI as the source of truth for HTML/PDF render, QA, and package stages.",
         "developerName": "shiinamachi",
         "category": "Productivity",
         "capabilities": ["Interactive", "Read", "Write"],
         "defaultPrompt": [
-            "Start a new slidex deck in this workspace and immediately open the slidex workbench in the Codex App Browser using Browser/@Browser when available.",
-            "Create a slidex deck called <deck_id>, open the local workbench in the Codex App Browser using Browser/@Browser when available, and save the initial brief from the workbench.",
+            "Start a new slidex deck, seed the React wizard, and open it in the Codex App Browser.",
+            "Create deck <deck_id>, open the React wizard, and generate after I complete it.",
             "Run the slidex delivery workflow for an existing deck and verify render, QA, and package gates."
         ]
     },

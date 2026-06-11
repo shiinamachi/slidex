@@ -8,15 +8,25 @@ The Go CLI remains the implementation source of truth.
 1. Install or enable the local `slidex` plugin.
 2. Invoke `@slidex` or `slidex-start` in a Codex App local/worktree thread.
 3. Run `slidex workbench start --deck-id <deck_id>` from the workspace root.
+   When the user invocation contains usable details, pass them as seed fields
+   such as `--initial-request`, `--title`, `--audience`, `--decision-goal`,
+   `--source-notes`, `--key-messages`, `--required-claims`, `--constraints`,
+   and `--output-expectations`.
 4. Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
    Codex App in-app browser. The startup intent is Browser-first: use the
    Browser plugin / `@Browser` to navigate there when available, then fall back
    to clicking the URL or navigating manually.
-5. Save initial deck creation input from the workbench.
-6. Verify `decks/<deck_id>/brief.md` and
-   `decks/<deck_id>/out/workbench_draft.json` plus
-   `decks/<deck_id>/out/workbench_manifest.json`.
-7. Optionally run local HTTP save smoke before GUI evidence:
+5. Complete the local React Wizard. It asks for title, audience, decision goal,
+   source notes, key messages, output expectations, and optional
+   claim/constraint details.
+6. Select `Complete & generate` in the wizard. This writes `brief.md`,
+   `out/workbench_draft.json`, and `out/workbench_manifest.json`, records
+   `wizardCompletedAt`, and starts `slidex run --deck decks/<deck_id>
+   --non-interactive` in the background.
+7. Verify `decks/<deck_id>/out/workbench_manifest.json` reports
+   `generationStatus` and inspect `decks/<deck_id>/out/workbench_generation.log`
+   if generation fails.
+8. Optionally run local HTTP save smoke before GUI evidence:
 
 ```bash
 slidex workbench save-smoke --workspace <tmp-workspace> --deck-id <deck_id>
@@ -27,7 +37,7 @@ verifies `brief.md`, `out/workbench_draft.json`,
 `out/workbench_manifest.json`, token redaction, and writes
 `out/workbench_save_smoke.json`. It is not Codex App GUI/browser evidence.
 
-8. After actually inspecting the Codex App browser surface, record deck-local
+9. After actually inspecting the Codex App browser surface, record deck-local
    evidence:
 
 ```bash

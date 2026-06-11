@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -286,6 +287,109 @@ func TestWorkbenchShutdownRequiresDedicatedTokenAndSameOrigin(t *testing.T) {
 	if stopped.Status != "stopping" {
 		t.Fatalf("manifest status = %q, want stopping", stopped.Status)
 	}
+}
+
+func TestWorkbenchCompleteRequiresWizardDetail(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	payload := []byte(`{"title":"Demo","audience":"Board","decisionGoal":"Approve pilot"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/complete", bytes.NewReader(payload))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleComplete(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("incomplete wizard status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "sourceNotes") || !strings.Contains(rec.Body.String(), "keyMessages") {
+		t.Fatalf("completion error should list missing wizard fields: %s", rec.Body.String())
+	}
+}
+
+func TestWorkbenchCompleteStartsGeneration(t *testing.T) {
+	oldCommand := newWorkbenchGenerationCommand
+	newWorkbenchGenerationCommand = func(deckAbs string) (*exec.Cmd, []string, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1")
+		return cmd, []string{"slidex-test-generation", deckAbs}, nil
+	}
+	defer func() { newWorkbenchGenerationCommand = oldCommand }()
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	payload := []byte(`{
+		"initialRequest":"Create an investor update deck for the Q3 pilot decision.",
+		"title":"Q3 pilot decision deck",
+		"audience":"Executive investment committee",
+		"decisionGoal":"Approve whether to fund the Q3 pilot.",
+		"sourceNotes":"Use only the confirmed customer interviews and budget notes supplied by the user.",
+		"keyMessages":"Pilot scope, budget ask, implementation risk, and decision timeline.",
+		"requiredClaims":"Do not claim ROI, certifications, or customer counts unless sourced.",
+		"constraints":"Avoid unsupported security claims and keep confidential names out.",
+		"outputExpectations":"HTML and PDF deck suitable for executive review."
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/complete", bytes.NewReader(payload))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleComplete(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "generation_started" {
+		t.Fatalf("complete response status = %#v", response["status"])
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after complete")
+	}
+	if recorded.WizardCompletedAt == "" || recorded.GenerationStatus != "running" || recorded.GenerationPID <= 0 {
+		t.Fatalf("manifest should record wizard completion and running generation: %#v", recorded)
+	}
+	if recorded.GenerationLogPath != filepath.ToSlash(filepath.Join(deck, "out", workbenchGenerationLogName)) {
+		t.Fatalf("unexpected generation log path: %#v", recorded.GenerationLogPath)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		recorded, _ = readWorkbenchManifest(deck)
+		if recorded.GenerationStatus == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if recorded.GenerationStatus != "completed" || recorded.GenerationExitCode != 0 {
+		t.Fatalf("generation should complete through helper process: %#v", recorded)
+	}
+	brief := readFileOrEmpty(filepath.Join(deck, "brief.md"))
+	for _, want := range []string{"Original Plugin Request", "Key Messages", "Wizard Completion"} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("brief missing %q:\n%s", want, brief)
+		}
+	}
+}
+
+func TestWorkbenchGenerationHelperProcess(t *testing.T) {
+	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION") != "1" {
+		return
+	}
+	fmt.Println("generation helper complete")
+	os.Exit(0)
 }
 
 func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {

@@ -70,7 +70,7 @@ the editable source is an HTML file, and the delivery artifact is a PDF.
 | 🖼️ | **Automated Rendering** | Slide PNGs and paginated PDF via headless Chrome/Chromium/Edge |
 | ✅ | **Quality Assurance** | QA montage, QA report, and freshness checks before delivery |
 | 📦 | **Package Verification** | Validates all required artifacts exist and match current HTML |
-| 🔌 | **Codex Plugin** | Interactive workbench for deck creation via Codex App browser |
+| 🔌 | **Codex Plugin** | Local React wizard workbench for deck creation via Codex App browser |
 | 📋 | **Evidence-aware** | Every claim must be sourced, confirmed, or marked as an assumption |
 
 ---

@@ -34,7 +34,7 @@ Windows에서는 `127.0.0.1` loopback WebSocket을 기본 transport로 선택합
 
 ## Primary CLI Workflow
 
-새 deck creation을 Codex App에서 시작할 때는 plugin workbench를 사용합니다.
+새 deck creation을 Codex App에서 시작할 때는 plugin React workbench를 사용합니다.
 
 ```bash
 mise exec -- slidex workbench start --deck-id customer-retention
@@ -44,10 +44,13 @@ mise exec -- slidex workbench start --deck-id customer-retention
 navigation을 우선 시도하고, 불가능하면 URL 클릭 또는 수동 navigation으로 엽니다.
 Public Codex 0.138.0 계약에는 plugin-owned arbitrary Canvas mount 또는 직접
 browser-open request API가 확인되지 않았습니다.
-Workbench 입력은 `brief.md`, `out/workbench_draft.json`,
-`out/workbench_manifest.json`에 저장됩니다. Codex Plugin MCP는 PATH의 `slidex`를
-실행하므로 local plugin 검증 전 `mise exec -- go install ./cmd/slidex`로 설치 binary를
-현재 소스와 맞춥니다.
+Workbench는 로컬 React Wizard로 표시되며, 사용자가 `Complete & generate`를 선택하면
+`brief.md`, `out/workbench_draft.json`, `out/workbench_manifest.json`을 저장하고
+`slidex run --deck decks/<deck_id> --non-interactive`를 백그라운드로 시작합니다.
+생성 상태와 로그 경로는 `out/workbench_manifest.json`의 `generationStatus` 및
+`generationLogPath`에 기록됩니다. Codex Plugin MCP는 PATH의 `slidex`를 실행하므로
+local plugin 검증 전 `mise exec -- go install ./cmd/slidex`로 설치 binary를 현재 소스와
+맞춥니다.
 
 기본 실행은 `slidex run`을 사용합니다.
 

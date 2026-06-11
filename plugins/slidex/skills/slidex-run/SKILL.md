@@ -6,7 +6,7 @@ user-invocable: true
 
 # slidex-run
 
-Use this for existing deck workspaces after startup input is complete.
+Use this for existing deck workspaces after startup input is complete. If the React Wizard has already started generation and `out/workbench_manifest.json` reports `generationStatus: running`, monitor that run instead of starting a duplicate one.
 
 ## Workflow
 
