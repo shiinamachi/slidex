@@ -26,25 +26,21 @@ Store the chosen extension as `EXT` (`tar.gz` or `zip`).
 
 ---
 
-## Step 2 — Resolve the latest release tag
+## Step 2 — Resolve the release tag
 
-Verified release installs require GitHub CLI (`gh`) because GitHub artifact
-attestations are verified with GitHub CLI commands before the package is
-trusted. If `gh` is unavailable or unauthenticated, stop and report that a
-verified release install cannot be completed.
+Use the requested build channel from the user's one-shot prompt.
 
-Use GitHub CLI:
+Default installs use the latest stable release. Resolve it through the public
+GitHub Releases API; do not require GitHub CLI for the default install:
 
 ```bash
-gh release view --repo shiinamachi/slidex --json tagName -q .tagName
+TAG="$(curl -fsSL https://api.github.com/repos/shiinamachi/slidex/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+test -n "$TAG"
 ```
 
-For diagnostic lookup only, the public GitHub API can show whether a release tag
-exists, but this does not replace GitHub CLI release and attestation
-verification:
-
-```bash
-curl -sL https://api.github.com/repos/shiinamachi/slidex/releases/latest | grep -Po '"tag_name":\s*"\K[^"]+'
+```powershell
+$TAG = (Invoke-RestMethod "https://api.github.com/repos/shiinamachi/slidex/releases/latest").tag_name
+if (-not $TAG) { throw "Unable to resolve latest stable slidex release tag" }
 ```
 
 Store the result as `TAG`.
@@ -60,19 +56,23 @@ ASSET_VERSION="${TAG#v}"
 $ASSET_VERSION = $TAG.TrimStart("v")
 ```
 
-Default installs use the latest stable release. If the user explicitly asks for
-a canary install, choose the newest prerelease tag that matches
+If the user explicitly asks for a canary install, choose the newest non-draft
+prerelease tag that matches
 `v<VERSION>-canary.<YYYYMMDDHHMMSS>` and use its matching canary assets instead. Do
 not switch an existing install between production and canary in place; the
 package's `.slidex/install.json` records the immutable channel for that install.
 
-With GitHub CLI, resolve a canary tag deterministically:
+Use the public GitHub Releases API for canary selection:
 
-```bash
-gh release list --repo shiinamachi/slidex --json tagName,isPrerelease,isDraft,publishedAt --limit 100 \
-  -q '.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-canary\\.[0-9]{14}$"))) | .tagName' \
-  | head -n 1
+```text
+GET https://api.github.com/repos/shiinamachi/slidex/releases?per_page=100
 ```
+
+Select the first release whose `draft` is `false`, `prerelease` is `true`, and
+`tag_name` matches
+`^v[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{14}$`. GitHub returns releases in
+reverse chronological order, so the first matching entry is the newest canary
+release. Store the selected `tag_name` as `TAG`.
 
 ---
 
@@ -105,7 +105,7 @@ https://github.com/shiinamachi/slidex/releases/download/<TAG>/slidex_<ASSET_VERS
 
 ---
 
-## Step 4 — Verify the SHA-256 checksum and GitHub artifact attestation
+## Step 4 — Verify the SHA-256 checksum and optional GitHub artifact attestation
 
 Store the package filename:
 
@@ -140,7 +140,13 @@ Write-Host "SHA-256 verified."
 
 > **If the checksum does not match, stop immediately and report the failure.**
 
-Then verify the GitHub artifact attestation:
+Default Codex App installs do **not** require GitHub CLI (`gh`) or GitHub
+login. Do not install `gh`, do not run `gh auth login`, and do not stop the
+default install only because `gh` is unavailable.
+
+If `gh` is already installed and authenticated, or if the user explicitly asks
+for stronger release provenance verification, run the optional GitHub artifact
+attestation check:
 
 ```bash
 gh attestation verify "$PACKAGE_FILE" \
@@ -149,9 +155,9 @@ gh attestation verify "$PACKAGE_FILE" \
   --cert-identity-regex '^https://github.com/shiinamachi/slidex/.github/workflows/release.yml@refs/(heads/(main|develop)|tags/v[0-9].*)$'
 ```
 
-> **If `gh` is not installed, authentication is unavailable, or any attestation
-> command fails, stop and report the package as unverified. Do not continue the
-> install as a verified release package.**
+If optional attestation is skipped, report `attestation: skipped` and continue
+after the SHA-256 checksum passes. If the user explicitly requested attestation
+and the command fails, stop and report the package as not provenance-verified.
 
 ---
 
@@ -246,7 +252,6 @@ Run the following commands from the install directory:
 ```bash
 slidex --help
 slidex update status --json
-slidex doctor --render
 ```
 
 Expected results:
@@ -255,8 +260,6 @@ Expected results:
 - `slidex update status --json` reports `production` or `canary` for release
   package installs. Source checkouts and `go install` development binaries
   report `local-development` with automatic updates disabled.
-- `slidex doctor --render` checks the workspace structure and browser
-  availability, and exits with code `0`.
 - After registering the plugin, restart Codex, start a new thread, and run:
 
   ```bash
@@ -276,6 +279,12 @@ Expected results:
   `skills/slidex-start/SKILL.md`, and after `slidex update verify --json`
   reports `restartRequired: false`, `pluginVerificationStatus: "verified"`,
   and matching `verifiedPluginPath` / `verifiedStartSkillPath` values.
+
+For full document rendering readiness, optionally run:
+
+```bash
+slidex doctor --render
+```
 
 > If `slidex doctor --render` reports that Chrome is not detected, set one of
 > these environment variables to the browser binary path:
@@ -300,8 +309,10 @@ Each release package includes:
 | Codex protocol bundle | `internal/codex/protocol/codex-cli-0.138.0/` |
 | Install/update metadata | `.slidex/install.json` |
 
-Code signing is deferred. Always verify the SHA-256 checksum and GitHub artifact
-attestation before trusting a downloaded release package.
+Code signing is deferred. Always verify the SHA-256 checksum before installing a
+downloaded release package. Use the optional GitHub artifact attestation check
+when `gh` is already available or when the user explicitly asks for stronger
+release provenance verification.
 
 ---
 

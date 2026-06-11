@@ -2147,11 +2147,11 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 		},
 		{
 			path: filepath.Join(root, "INSTALL.md"),
-			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "latest release tag", "GitHub CLI (`gh`)", "SHA-256", "GitHub artifact attestation", "gh attestation verify", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
+			want: []string{"Internal Install Instructions for Codex", "Step 1", "Step 8", "release tag", "public GitHub Releases API", "GitHub CLI (`gh`)", "Do not install `gh`", "SHA-256", "optional GitHub artifact attestation", "gh attestation verify", "restart Codex", "pluginVerificationStatus: \"verified\"", "verifiedPluginPath", "Code signing is deferred", "canary install", "immutable channel", "--candidate", "--attestation-policy allow-unverified"},
 		},
 		{
 			path: filepath.Join(root, "CODEX_INSTALL_PROMPT.md"),
-			want: []string{"How to use", "사용법", "What this prompt does", "https://github.com/shiinamachi/slidex", "read INSTALL.md", "GitHub artifact attestation", "plugin-smoke"},
+			want: []string{"How to use", "사용법", "Production Prompt", "Canary Prompt", "What this prompt does", "https://github.com/shiinamachi/slidex", "Read INSTALL.md", "production channel", "canary channel", "does not require GitHub CLI"},
 		},
 	}
 	for _, check := range checks {
@@ -2187,19 +2187,28 @@ func TestUserFacingInstallDocsExposeCanonicalOneShotPrompt(t *testing.T) {
 	prompt := canonicalInstallPromptForTest(t, root)
 	for _, phrase := range []string{
 		"https://github.com/shiinamachi/slidex",
-		"read INSTALL.md",
-		"detect the local OS and architecture",
-		"GitHub CLI is available",
-		"latest GitHub Release tag",
-		"SHA-256 checksum",
-		"GitHub artifact attestation",
-		"register the Codex plugin",
-		`"slidex codex app-server plugin-smoke --json"`,
-		`"slidex --help"`,
-		`"slidex doctor --render"`,
+		"Read INSTALL.md",
+		"production channel install instructions",
 	} {
 		if !strings.Contains(prompt, phrase) {
 			t.Fatalf("canonical install prompt is missing %q", phrase)
+		}
+	}
+	if len(prompt) > 180 {
+		t.Fatalf("canonical install prompt is too long: %d chars", len(prompt))
+	}
+	for _, phrase := range []string{
+		"detect the local OS and architecture",
+		"GitHub CLI",
+		"SHA-256 checksum",
+		"GitHub artifact attestation",
+		"register the Codex plugin",
+		"plugin-smoke",
+		"slidex --help",
+		"slidex doctor --render",
+	} {
+		if strings.Contains(prompt, phrase) {
+			t.Fatalf("canonical install prompt exposes detailed install guidance %q", phrase)
 		}
 	}
 	checks := []struct {

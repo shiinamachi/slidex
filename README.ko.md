@@ -13,14 +13,15 @@
 ## ⚡ Codex App으로 설치
 
 설치 채널을 하나 선택한 뒤, 해당 프롬프트를 **Codex App** 채팅창에 붙여넣으세요.
-Codex가 자동으로 CLI 설치, 플러그인 등록, 검증까지 수행합니다.
+Codex가 자동으로 CLI 설치, 플러그인 등록, 검증까지 수행합니다. 기본 설치에는
+GitHub CLI나 GitHub 로그인이 필요하지 않습니다.
 
 ### Production 빌드
 
 최신 안정 릴리스를 설치할 때 사용하세요:
 
 ```text
-Install slidex production build from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step: detect the local OS and architecture, confirm GitHub CLI is available for artifact attestation verification, download the matching release package from the latest stable GitHub Release tag, verify the SHA-256 checksum and GitHub artifact attestation, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, restart Codex, start a new Codex thread, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm the CLI. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. Run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" to confirm bundled plugin skills match the install. If update status reports restartRequired, restart Codex, start a new thread, rerun "slidex codex app-server plugin-smoke --json", and then rerun "slidex update verify --json" before treating bundled skills as active. Report each step's result.
+Install slidex production build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the production channel install instructions.
 ```
 
 ### Canary 빌드 (Pre-Release)
@@ -29,10 +30,11 @@ Canary 빌드는 개발 중인 프리릴리즈 빌드이며 불안정할 수 있
 않은 수정 사항이 필요하거나 다음 변경 사항을 테스트할 때만 사용하세요:
 
 ```text
-Install slidex canary build from https://github.com/shiinamachi/slidex; read INSTALL.md in that repository and complete every step for a canary install: detect the local OS and architecture, confirm GitHub CLI is available for artifact attestation verification, choose the newest non-draft prerelease tag that matches "v<VERSION>-canary.<YYYYMMDDHHMMSS>", download the matching canary release package, verify the SHA-256 checksum and GitHub artifact attestation, extract and install the binary to a stable directory, add it to PATH, register the Codex plugin from the bundled marketplace, restart Codex, start a new Codex thread, and run "slidex --help", "slidex update status --json", and "slidex doctor --render" to confirm the CLI. Do not switch an existing production install to canary in place; report if a separate install is needed. If update status reports pendingActivation, run the reported pendingActivationCommand before plugin smoke. Run "slidex codex app-server plugin-smoke --json", and then run "slidex update verify --json" to confirm bundled plugin skills match the install. If update status reports restartRequired, restart Codex, start a new thread, rerun "slidex codex app-server plugin-smoke --json", and then rerun "slidex update verify --json" before treating bundled skills as active. Report each step's result.
+Install slidex canary build from https://github.com/shiinamachi/slidex. Read INSTALL.md in that repository and follow the canary channel install instructions; keep canary separate from any existing production install.
 ```
 
-> 전체 내부 설치 절차는 [INSTALL.md](INSTALL.md)에 있습니다.
+> 선택적 GitHub artifact attestation 검증을 포함한 전체 내부 설치 절차는
+> [INSTALL.md](INSTALL.md)에 있습니다.
 
 ---
 
