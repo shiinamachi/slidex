@@ -3786,6 +3786,11 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		if err := rollbackSyncChanges(); err != nil {
 			return nil, err
 		}
+		if raw, err := os.ReadFile(baselinePath); err == nil {
+			newBaselineHash = sha256Bytes(raw)
+		} else {
+			newBaselineHash = ""
+		}
 	}
 	if containsMeaningChange(changes) {
 		derivativeStale = append(derivativeStale, "brief.md: HTML text changed; confirm whether brief facts, audience, objective, or desired outcome changed.")

@@ -3716,6 +3716,67 @@ func TestSyncHTMLEditsUpdatesBaselineBeforeQA(t *testing.T) {
 	}
 }
 
+func TestSyncHTMLEditsReportsRestoredBaselineHashAfterQAFailure(t *testing.T) {
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baselineHTML := `<!doctype html><html><body><section class="slide" id="slide_01"><h1>Old headline</h1><p>Old body</p></section></body></html>`
+	currentHTML := `<!doctype html><html><body><section class="slide" id="slide_01"><h1>New headline</h1><p>New body</p></section></body></html>`
+	specRaw := `{"slides":[{"id":"intro","htmlId":"slide_01","headline":"Old headline","bodyContent":["Old body"]}]}`
+	for path, raw := range map[string]string{
+		filepath.Join(outDir, "final_deck.html"):                    currentHTML,
+		filepath.Join(outDir, "final_deck.generated_baseline.html"): baselineHTML,
+		filepath.Join(outDir, "deck_spec.json"):                     specRaw,
+		filepath.Join(outDir, "notes.md"):                           "original notes\n",
+		filepath.Join(outDir, "qa_report.md"):                       "original qa report\n",
+	} {
+		if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	oldRenderHTML := syncRenderHTML
+	oldQADeck := syncQADeck
+	t.Cleanup(func() {
+		syncRenderHTML = oldRenderHTML
+		syncQADeck = oldQADeck
+	})
+	syncRenderHTML = func(renderConfig) (renderManifest, error) {
+		return renderManifest{}, nil
+	}
+	syncQADeck = func(deckAbs string, writeReport bool) (qaResult, error) {
+		if got, want := mustSHA256(filepath.Join(deckAbs, "out", "final_deck.generated_baseline.html")), mustSHA256(filepath.Join(deckAbs, "out", "final_deck.html")); got != want {
+			t.Fatalf("QA should validate candidate baseline before rollback: got %s, want %s", got, want)
+		}
+		if err := os.WriteFile(filepath.Join(deckAbs, "out", "qa_report.md"), []byte("qa fail\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return qaResult{Status: "fail"}, nil
+	}
+
+	report, err := syncHTMLEdits(deck, 1920, 1080, "pretendard", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredHash := sha256Bytes([]byte(baselineHTML))
+	currentHash := sha256Bytes([]byte(currentHTML))
+	if got := readFileOrEmpty(filepath.Join(outDir, "final_deck.generated_baseline.html")); got != baselineHTML {
+		t.Fatalf("baseline was not restored after QA failure:\n got %q\nwant %q", got, baselineHTML)
+	}
+	if report["newBaselineHash"] != restoredHash {
+		t.Fatalf("newBaselineHash = %v, want restored hash %s", report["newBaselineHash"], restoredHash)
+	}
+	if report["newBaselineHash"] == currentHash {
+		t.Fatalf("newBaselineHash should not report rejected candidate hash: %#v", report)
+	}
+	syncReport := readFileOrEmpty(filepath.Join(outDir, "html_edit_sync.md"))
+	if !strings.Contains(syncReport, restoredHash) {
+		t.Fatalf("sync report should describe restored baseline hash, got:\n%s", syncReport)
+	}
+}
+
 func TestUpdateSpecFromHTMLPreservesLogicalID(t *testing.T) {
 	specPath := filepath.Join(t.TempDir(), "deck_spec.json")
 	spec := map[string]any{
