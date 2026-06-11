@@ -901,13 +901,17 @@ func markPluginVerified(installRoot, pluginVersion, pluginPath, skillPath string
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
+	currentVersion, currentTag := updateStatePackageIdentity(installRoot)
 	state, _, _ := readUpdateState(installRoot)
 	if state == nil {
 		state = &updateState{}
 	}
-	state.CurrentVersion = toolVersion
+	state.CurrentVersion = firstNonEmpty(currentVersion, toolVersion)
 	if state.TargetVersion == "" {
-		state.TargetVersion = pluginVersionBase(pluginVersion)
+		state.TargetVersion = state.CurrentVersion
+	}
+	if state.TargetTag == "" {
+		state.TargetTag = currentTag
 	}
 	state.RestartRequired = false
 	state.RestartReason = ""
@@ -924,13 +928,17 @@ func markPluginDrift(installRoot, pluginVersion, skillPath string) error {
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
+	currentVersion, currentTag := updateStatePackageIdentity(installRoot)
 	state, _, _ := readUpdateState(installRoot)
 	if state == nil {
 		state = &updateState{}
 	}
-	state.CurrentVersion = toolVersion
+	state.CurrentVersion = firstNonEmpty(currentVersion, toolVersion)
 	if state.TargetVersion == "" {
-		state.TargetVersion = pluginVersionBase(pluginVersion)
+		state.TargetVersion = state.CurrentVersion
+	}
+	if state.TargetTag == "" {
+		state.TargetTag = currentTag
 	}
 	state.RestartRequired = true
 	state.RestartReason = "Codex plugin verification found a visible plugin or skill path that does not match this install root"
@@ -938,6 +946,14 @@ func markPluginDrift(installRoot, pluginVersion, skillPath string) error {
 	state.VerificationCommand = "slidex codex app-server plugin-smoke --json"
 	state.PluginUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return writeUpdateState(installRoot, *state)
+}
+
+func updateStatePackageIdentity(installRoot string) (version, tag string) {
+	metadata, err := readInstallMetadata(installMetadataPath(installRoot))
+	if err != nil || metadata == nil {
+		return "", ""
+	}
+	return strings.TrimSpace(metadata.Version), strings.TrimSpace(metadata.Tag)
 }
 
 func verifyArchiveCandidateSHA256(archivePath, checksumsPath string) error {

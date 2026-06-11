@@ -1308,10 +1308,8 @@ func TestPostRestartPluginVerificationClearsRestartState(t *testing.T) {
 func TestPostRestartPluginVerificationAcceptsCodexCacheSkillPath(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
-	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
-	if err := markPluginRestartRequired(installRoot, toolVersion, "v"+toolVersion); err != nil {
-		t.Fatal(err)
-	}
+	canaryVersion := toolVersion + "-canary.20260610010000"
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, canaryVersion))
 	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
 	cacheInstallRoot := t.TempDir()
 	writePostRestartPluginFilesForTest(t, cacheInstallRoot, toolVersion+"+codex.test", toolVersion)
@@ -1344,6 +1342,9 @@ func TestPostRestartPluginVerificationAcceptsCodexCacheSkillPath(t *testing.T) {
 	}
 	if status.VerifiedStartSkillPath != filepath.ToSlash(cacheSkillPath) || status.PluginVerificationStatus != "verified" {
 		t.Fatalf("verified cache skill status = %#v", status)
+	}
+	if status.CurrentVersion != canaryVersion || status.TargetVersion != canaryVersion || status.TargetTag != "v"+canaryVersion {
+		t.Fatalf("verified canary package identity not preserved: %#v", status)
 	}
 }
 
