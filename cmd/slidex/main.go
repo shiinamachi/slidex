@@ -2822,8 +2822,6 @@ func cleanRenderedSlides(outDir string) error {
 }
 
 var (
-	cssURLRe         = regexp.MustCompile(`(?is)url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")\s][^)]*?))\s*\)`)
-	cssImportRe      = regexp.MustCompile(`(?is)@import\s+(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^'")\s;]+))`)
 	styleAttributeRe = regexp.MustCompile(`(?is)\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 )
 
@@ -2929,19 +2927,18 @@ func collectHTMLRenderResourceRefs(base, src string) ([]renderResourceRef, error
 
 func collectCSSRenderResourceRefs(base, cssText, context string) []renderResourceRef {
 	refs := make([]renderResourceRef, 0)
-	for _, m := range cssURLRe.FindAllStringSubmatch(cssText, -1) {
-		ref := normalizeCSSResourceRef(firstNonEmpty(m[1], m[2], m[3]))
+	for _, cssRef := range scanCSSResourceRefs(cssText, true) {
+		ref := normalizeCSSResourceRef(cssRef.Ref)
 		if shouldSkipCSSURLDependency(ref) {
 			continue
 		}
-		refs = append(refs, renderResourceRef{Context: context + " url()", Base: base, Ref: ref})
-	}
-	for _, m := range cssImportRe.FindAllStringSubmatch(cssText, -1) {
-		ref := normalizeCSSResourceRef(firstNonEmpty(m[1], m[2], m[3]))
-		if shouldSkipCSSURLDependency(ref) {
-			continue
+		suffix := " url()"
+		linkedCSS := false
+		if cssRef.Kind == "import" {
+			suffix = " @import"
+			linkedCSS = true
 		}
-		refs = append(refs, renderResourceRef{Context: context + " @import", Base: base, Ref: ref, LinkedCSS: true})
+		refs = append(refs, renderResourceRef{Context: context + suffix, Base: base, Ref: ref, LinkedCSS: linkedCSS})
 	}
 	return refs
 }
@@ -3130,8 +3127,13 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 }
 
 func collectCSSURLDependencies(deps []dependency, seen map[string]bool, base, cssText, idPrefix string) []dependency {
-	for i, m := range cssURLRe.FindAllStringSubmatch(cssText, -1) {
-		ref := normalizeCSSResourceRef(firstNonEmpty(m[1], m[2], m[3]))
+	i := 0
+	for _, cssRef := range scanCSSResourceRefs(cssText, false) {
+		if cssRef.Kind != "url" {
+			continue
+		}
+		i++
+		ref := normalizeCSSResourceRef(cssRef.Ref)
 		if shouldSkipCSSURLDependency(ref) {
 			continue
 		}
@@ -3166,6 +3168,256 @@ func shouldSkipCSSURLDependency(ref string) bool {
 		return true
 	}
 	return strings.HasPrefix(strings.ToLower(ref), "data:")
+}
+
+type cssResourceRef struct {
+	Kind string
+	Ref  string
+}
+
+func scanCSSResourceRefs(cssText string, includeImports bool) []cssResourceRef {
+	refs := make([]cssResourceRef, 0)
+	for i := 0; i < len(cssText); {
+		switch cssText[i] {
+		case '/', '"', '\'':
+			next, skipped := skipCSSCommentOrString(cssText, i)
+			if skipped {
+				i = next
+				continue
+			}
+		case '@':
+			if includeImports {
+				name, next, ok := consumeCSSIdent(cssText, i+1)
+				if ok && strings.EqualFold(name, "import") {
+					if ref, after, ok := consumeCSSImportRef(cssText, next); ok {
+						refs = append(refs, cssResourceRef{Kind: "import", Ref: ref})
+						i = after
+						continue
+					}
+				}
+			}
+		}
+		name, next, ok := consumeCSSIdent(cssText, i)
+		if !ok {
+			i++
+			continue
+		}
+		if strings.EqualFold(name, "url") {
+			open := skipCSSComments(cssText, next)
+			if open < len(cssText) && cssText[open] == '(' {
+				if ref, after, ok := consumeCSSURLFunctionRef(cssText, open+1); ok {
+					refs = append(refs, cssResourceRef{Kind: "url", Ref: ref})
+					i = after
+					continue
+				}
+			}
+		}
+		i = next
+	}
+	return refs
+}
+
+func skipCSSCommentOrString(cssText string, i int) (int, bool) {
+	if i+1 < len(cssText) && cssText[i] == '/' && cssText[i+1] == '*' {
+		return skipCSSComment(cssText, i), true
+	}
+	if cssText[i] == '"' || cssText[i] == '\'' {
+		_, next, ok := consumeCSSQuotedString(cssText, i)
+		if ok {
+			return next, true
+		}
+		return len(cssText), true
+	}
+	return i, false
+}
+
+func consumeCSSImportRef(cssText string, i int) (string, int, bool) {
+	i = skipCSSWhitespaceAndComments(cssText, i)
+	if i >= len(cssText) {
+		return "", i, false
+	}
+	if cssText[i] == '"' || cssText[i] == '\'' {
+		return consumeCSSQuotedString(cssText, i)
+	}
+	name, next, ok := consumeCSSIdent(cssText, i)
+	if ok && strings.EqualFold(name, "url") {
+		open := skipCSSComments(cssText, next)
+		if open < len(cssText) && cssText[open] == '(' {
+			return consumeCSSURLFunctionRef(cssText, open+1)
+		}
+	}
+	start := i
+	for i < len(cssText) && cssText[i] != ';' && !isCSSWhitespaceByte(cssText[i]) {
+		if i+1 < len(cssText) && cssText[i] == '/' && cssText[i+1] == '*' {
+			break
+		}
+		i++
+	}
+	if i == start {
+		return "", i, false
+	}
+	return cssText[start:i], i, true
+}
+
+func consumeCSSURLFunctionRef(cssText string, i int) (string, int, bool) {
+	i = skipCSSWhitespaceAndComments(cssText, i)
+	if i >= len(cssText) {
+		return "", i, false
+	}
+	if cssText[i] == '"' || cssText[i] == '\'' {
+		ref, next, ok := consumeCSSQuotedString(cssText, i)
+		if !ok {
+			return "", next, false
+		}
+		next = skipCSSWhitespaceAndComments(cssText, next)
+		if next < len(cssText) && cssText[next] == ')' {
+			return ref, next + 1, true
+		}
+		return "", next, false
+	}
+	var b strings.Builder
+	for i < len(cssText) {
+		if cssText[i] == ')' {
+			return strings.TrimSpace(b.String()), i + 1, true
+		}
+		if i+1 < len(cssText) && cssText[i] == '/' && cssText[i+1] == '*' {
+			i = skipCSSComment(cssText, i)
+			continue
+		}
+		b.WriteByte(cssText[i])
+		i++
+	}
+	return "", i, false
+}
+
+func consumeCSSQuotedString(cssText string, i int) (string, int, bool) {
+	if i >= len(cssText) || (cssText[i] != '"' && cssText[i] != '\'') {
+		return "", i, false
+	}
+	quote := cssText[i]
+	i++
+	var b strings.Builder
+	for i < len(cssText) {
+		if cssText[i] == quote {
+			return b.String(), i + 1, true
+		}
+		if cssText[i] == '\\' {
+			b.WriteByte(cssText[i])
+			i++
+			if i < len(cssText) {
+				b.WriteByte(cssText[i])
+				i++
+			}
+			continue
+		}
+		b.WriteByte(cssText[i])
+		i++
+	}
+	return b.String(), i, false
+}
+
+func consumeCSSIdent(cssText string, i int) (string, int, bool) {
+	var b strings.Builder
+	start := i
+	for i < len(cssText) {
+		if isCSSIdentByte(cssText[i]) {
+			b.WriteByte(cssText[i])
+			i++
+			continue
+		}
+		if isValidCSSEscape(cssText, i) {
+			decoded, next := consumeCSSEscape(cssText, i)
+			b.WriteString(decoded)
+			i = next
+			continue
+		}
+		break
+	}
+	if i == start {
+		return "", i, false
+	}
+	return b.String(), i, true
+}
+
+func consumeCSSEscape(cssText string, i int) (string, int) {
+	if i >= len(cssText) || cssText[i] != '\\' {
+		return "", i
+	}
+	i++
+	if i >= len(cssText) {
+		return "", i
+	}
+	if isCSSNewlineByte(cssText[i]) {
+		return "", consumeCSSNewline(cssText, i)
+	}
+	start := i
+	for i < len(cssText) && i-start < 6 && isASCIIHexDigit(cssText[i]) {
+		i++
+	}
+	if i > start {
+		decoded, err := strconv.ParseInt(cssText[start:i], 16, 32)
+		if err != nil || decoded == 0 || decoded > 0x10ffff || (decoded >= 0xd800 && decoded <= 0xdfff) {
+			if i < len(cssText) && isCSSWhitespaceByte(cssText[i]) {
+				i = consumeCSSWhitespaceAfterHexEscape(cssText, i)
+			}
+			return "\uFFFD", i
+		}
+		if i < len(cssText) && isCSSWhitespaceByte(cssText[i]) {
+			i = consumeCSSWhitespaceAfterHexEscape(cssText, i)
+		}
+		return string(rune(decoded)), i
+	}
+	decoded := string(cssText[i])
+	i++
+	return decoded, i
+}
+
+func skipCSSWhitespaceAndComments(cssText string, i int) int {
+	for i < len(cssText) {
+		if isCSSWhitespaceByte(cssText[i]) {
+			i++
+			continue
+		}
+		if i+1 < len(cssText) && cssText[i] == '/' && cssText[i+1] == '*' {
+			i = skipCSSComment(cssText, i)
+			continue
+		}
+		return i
+	}
+	return i
+}
+
+func skipCSSComments(cssText string, i int) int {
+	for i+1 < len(cssText) && cssText[i] == '/' && cssText[i+1] == '*' {
+		i = skipCSSComment(cssText, i)
+	}
+	return i
+}
+
+func skipCSSComment(cssText string, i int) int {
+	i += 2
+	for i+1 < len(cssText) {
+		if cssText[i] == '*' && cssText[i+1] == '/' {
+			return i + 2
+		}
+		i++
+	}
+	return len(cssText)
+}
+
+func isCSSIdentByte(b byte) bool {
+	return (b >= 'A' && b <= 'Z') ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= '0' && b <= '9') ||
+		b == '_' ||
+		b == '-' ||
+		b >= 0x80
+}
+
+func isValidCSSEscape(cssText string, i int) bool {
+	return i < len(cssText) &&
+		cssText[i] == '\\' &&
+		(i+1 >= len(cssText) || !isCSSNewlineByte(cssText[i+1]))
 }
 
 func normalizeCSSResourceRef(ref string) string {

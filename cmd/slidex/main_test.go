@@ -4943,6 +4943,26 @@ func TestRenderResourcePreflightRejectsCSSEscapedRemoteFetches(t *testing.T) {
 	}
 }
 
+func TestRenderResourcePreflightRejectsEscapedCSSTokens(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	src := `<!doctype html><html><head><style>
+.slide { background-image: \75\72\6c("http://127.0.0.1:8765/escaped-function.png"); }
+@\69mport "http://127.0.0.1:8765/escaped-import.css";
+</style></head><body><section class="slide">OK</section></body></html>`
+
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil {
+		t.Fatal("CSS-escaped url/import tokens should fail preflight")
+	}
+	msg := err.Error()
+	for _, want := range []string{"escaped-function.png", "escaped-import.css"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("preflight error missing escaped CSS token URL %q:\n%s", want, msg)
+		}
+	}
+}
+
 func TestRenderResourcePreflightRejectsLinkImagePreloadSrcsetRemote(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	htmlPath := filepath.Join(deck, "out", "final_deck.html")
