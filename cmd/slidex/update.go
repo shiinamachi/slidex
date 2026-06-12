@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -54,6 +55,15 @@ const (
 	maxUpdateArchiveEntries         = 20000
 	maxUpdateArchiveFileBytes       = int64(256 << 20)
 	maxUpdateArchiveExpandedBytes   = int64(1024 << 20)
+	maxUpdateZipCentralDirBytes     = int64(64 << 20)
+
+	zipEndOfCentralDirectorySignature       = uint32(0x06054b50)
+	zip64EndOfCentralDirectorySignature     = uint32(0x06064b50)
+	zip64EndOfCentralDirectoryLocSignature  = uint32(0x07064b50)
+	zipEndOfCentralDirectoryMinSize         = 22
+	zipMaxCommentSize                       = 65535
+	zip64EndOfCentralDirectoryLocatorSize   = 20
+	zip64EndOfCentralDirectoryMinRecordSize = 56
 )
 
 var (
@@ -1180,18 +1190,20 @@ func extractDownloadedReleaseArchive(stageParent, archivePath string) (candidate
 }
 
 type updateArchiveExtractionBudget struct {
-	maxEntries  int
-	maxFileSize int64
-	maxTotal    int64
-	entries     int
-	total       int64
+	maxEntries          int
+	maxFileSize         int64
+	maxTotal            int64
+	maxCentralDirectory int64
+	entries             int
+	total               int64
 }
 
 func defaultUpdateArchiveExtractionBudget() *updateArchiveExtractionBudget {
 	return &updateArchiveExtractionBudget{
-		maxEntries:  maxUpdateArchiveEntries,
-		maxFileSize: maxUpdateArchiveFileBytes,
-		maxTotal:    maxUpdateArchiveExpandedBytes,
+		maxEntries:          maxUpdateArchiveEntries,
+		maxFileSize:         maxUpdateArchiveFileBytes,
+		maxTotal:            maxUpdateArchiveExpandedBytes,
+		maxCentralDirectory: maxUpdateZipCentralDirBytes,
 	}
 }
 
@@ -1297,6 +1309,9 @@ func extractZipArchiveWithBudget(archivePath, dest string, budget *updateArchive
 	if budget == nil {
 		budget = defaultUpdateArchiveExtractionBudget()
 	}
+	if err := validateZipArchiveDirectoryBudget(archivePath, budget); err != nil {
+		return err
+	}
 	zr, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
@@ -1354,6 +1369,151 @@ func extractZipArchiveWithBudget(archivePath, dest string, budget *updateArchive
 		if closeErr != nil {
 			return closeErr
 		}
+	}
+	return nil
+}
+
+type zipArchiveDirectoryMetadata struct {
+	entries                uint64
+	centralDirectorySize   uint64
+	centralDirectoryOffset uint64
+}
+
+func validateZipArchiveDirectoryBudget(archivePath string, budget *updateArchiveExtractionBudget) error {
+	metadata, err := readZipArchiveDirectoryMetadata(archivePath)
+	if err != nil {
+		return err
+	}
+	if budget.maxEntries > 0 && metadata.entries > uint64(budget.maxEntries) {
+		return fmt.Errorf("archive contains too many entries before opening ZIP: %d > %d", metadata.entries, budget.maxEntries)
+	}
+	if budget.maxCentralDirectory > 0 && metadata.centralDirectorySize > uint64(budget.maxCentralDirectory) {
+		return fmt.Errorf("ZIP central directory exceeds maximum size before opening ZIP: %d bytes > %d", metadata.centralDirectorySize, budget.maxCentralDirectory)
+	}
+	return nil
+}
+
+func readZipArchiveDirectoryMetadata(archivePath string) (zipArchiveDirectoryMetadata, error) {
+	var metadata zipArchiveDirectoryMetadata
+	f, info, err := openRegularFileForRead(archivePath)
+	if err != nil {
+		return metadata, err
+	}
+	defer f.Close()
+	archiveSize := info.Size()
+	if archiveSize < zipEndOfCentralDirectoryMinSize {
+		return metadata, fmt.Errorf("ZIP archive is too small to contain an end of central directory record: %s", filepath.ToSlash(archivePath))
+	}
+	tailSize := int64(zipEndOfCentralDirectoryMinSize + zipMaxCommentSize)
+	if archiveSize < tailSize {
+		tailSize = archiveSize
+	}
+	tail := make([]byte, int(tailSize))
+	tailOffset := archiveSize - tailSize
+	if _, err := f.ReadAt(tail, tailOffset); err != nil {
+		return metadata, err
+	}
+	eocdIndex := -1
+	for i := len(tail) - zipEndOfCentralDirectoryMinSize; i >= 0; i-- {
+		if binary.LittleEndian.Uint32(tail[i:i+4]) != zipEndOfCentralDirectorySignature {
+			continue
+		}
+		commentLen := int(binary.LittleEndian.Uint16(tail[i+20 : i+22]))
+		if i+zipEndOfCentralDirectoryMinSize+commentLen == len(tail) {
+			eocdIndex = i
+			break
+		}
+	}
+	if eocdIndex < 0 {
+		return metadata, fmt.Errorf("ZIP archive is missing an end of central directory record: %s", filepath.ToSlash(archivePath))
+	}
+	eocd := tail[eocdIndex:]
+	eocdOffset := tailOffset + int64(eocdIndex)
+	diskNumber := binary.LittleEndian.Uint16(eocd[4:6])
+	centralDirectoryDisk := binary.LittleEndian.Uint16(eocd[6:8])
+	entriesOnDisk := binary.LittleEndian.Uint16(eocd[8:10])
+	totalEntries := binary.LittleEndian.Uint16(eocd[10:12])
+	centralDirectorySize32 := binary.LittleEndian.Uint32(eocd[12:16])
+	centralDirectoryOffset32 := binary.LittleEndian.Uint32(eocd[16:20])
+	if diskNumber != 0 || centralDirectoryDisk != 0 {
+		return metadata, fmt.Errorf("multi-disk ZIP archives are not supported: %s", filepath.ToSlash(archivePath))
+	}
+	requiresZip64 := entriesOnDisk == 0xffff || totalEntries == 0xffff || centralDirectorySize32 == 0xffffffff || centralDirectoryOffset32 == 0xffffffff
+	if requiresZip64 {
+		metadata, err = readZip64ArchiveDirectoryMetadata(f, archiveSize, eocdOffset)
+		if err != nil {
+			return metadata, err
+		}
+	} else {
+		if entriesOnDisk != totalEntries {
+			return metadata, fmt.Errorf("multi-disk ZIP archives are not supported: %s", filepath.ToSlash(archivePath))
+		}
+		metadata = zipArchiveDirectoryMetadata{
+			entries:                uint64(totalEntries),
+			centralDirectorySize:   uint64(centralDirectorySize32),
+			centralDirectoryOffset: uint64(centralDirectoryOffset32),
+		}
+	}
+	if err := validateZipArchiveDirectoryBounds(metadata, eocdOffset, archivePath); err != nil {
+		return metadata, err
+	}
+	return metadata, nil
+}
+
+func readZip64ArchiveDirectoryMetadata(f *os.File, archiveSize, eocdOffset int64) (zipArchiveDirectoryMetadata, error) {
+	var metadata zipArchiveDirectoryMetadata
+	if eocdOffset < zip64EndOfCentralDirectoryLocatorSize {
+		return metadata, fmt.Errorf("ZIP64 archive is missing a locator before the end of central directory")
+	}
+	var locator [zip64EndOfCentralDirectoryLocatorSize]byte
+	if _, err := f.ReadAt(locator[:], eocdOffset-zip64EndOfCentralDirectoryLocatorSize); err != nil {
+		return metadata, err
+	}
+	if binary.LittleEndian.Uint32(locator[0:4]) != zip64EndOfCentralDirectoryLocSignature {
+		return metadata, fmt.Errorf("ZIP64 archive is missing a locator before the end of central directory")
+	}
+	diskWithDirectory := binary.LittleEndian.Uint32(locator[4:8])
+	zip64DirectoryOffset := binary.LittleEndian.Uint64(locator[8:16])
+	totalDisks := binary.LittleEndian.Uint32(locator[16:20])
+	if diskWithDirectory != 0 || totalDisks > 1 {
+		return metadata, fmt.Errorf("multi-disk ZIP64 archives are not supported")
+	}
+	if zip64DirectoryOffset > uint64(archiveSize) || uint64(archiveSize)-zip64DirectoryOffset < zip64EndOfCentralDirectoryMinRecordSize {
+		return metadata, fmt.Errorf("ZIP64 end of central directory record exceeds archive bounds")
+	}
+	var record [zip64EndOfCentralDirectoryMinRecordSize]byte
+	if _, err := f.ReadAt(record[:], int64(zip64DirectoryOffset)); err != nil {
+		return metadata, err
+	}
+	if binary.LittleEndian.Uint32(record[0:4]) != zip64EndOfCentralDirectorySignature {
+		return metadata, fmt.Errorf("ZIP64 archive is missing an end of central directory record")
+	}
+	if recordSize := binary.LittleEndian.Uint64(record[4:12]); recordSize < 44 {
+		return metadata, fmt.Errorf("ZIP64 end of central directory record is too small: %d bytes", recordSize)
+	}
+	diskNumber := binary.LittleEndian.Uint32(record[16:20])
+	centralDirectoryDisk := binary.LittleEndian.Uint32(record[20:24])
+	if diskNumber != 0 || centralDirectoryDisk != 0 {
+		return metadata, fmt.Errorf("multi-disk ZIP64 archives are not supported")
+	}
+	entriesOnDisk := binary.LittleEndian.Uint64(record[24:32])
+	totalEntries := binary.LittleEndian.Uint64(record[32:40])
+	if entriesOnDisk != totalEntries {
+		return metadata, fmt.Errorf("multi-disk ZIP64 archives are not supported")
+	}
+	return zipArchiveDirectoryMetadata{
+		entries:                totalEntries,
+		centralDirectorySize:   binary.LittleEndian.Uint64(record[40:48]),
+		centralDirectoryOffset: binary.LittleEndian.Uint64(record[48:56]),
+	}, nil
+}
+
+func validateZipArchiveDirectoryBounds(metadata zipArchiveDirectoryMetadata, eocdOffset int64, archivePath string) error {
+	if metadata.centralDirectoryOffset > uint64(eocdOffset) {
+		return fmt.Errorf("ZIP central directory exceeds archive bounds: %s", filepath.ToSlash(archivePath))
+	}
+	if metadata.centralDirectorySize > uint64(eocdOffset)-metadata.centralDirectoryOffset {
+		return fmt.Errorf("ZIP central directory exceeds archive bounds: %s", filepath.ToSlash(archivePath))
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -675,6 +676,49 @@ func TestExtractZipArchiveRejectsExtractionBudgetBeforeWriting(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(entryLimitRoot, "candidate", "one.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("zip entry-count preflight should reject before writing files, stat err=%v", err)
+	}
+}
+
+func TestExtractZipArchiveRejectsEOCDEntryBudgetBeforeOpen(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	eocd := make([]byte, zipEndOfCentralDirectoryMinSize)
+	binary.LittleEndian.PutUint32(eocd[0:4], zipEndOfCentralDirectorySignature)
+	binary.LittleEndian.PutUint16(eocd[8:10], 2)
+	binary.LittleEndian.PutUint16(eocd[10:12], 2)
+	if err := os.WriteFile(archivePath, eocd, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractZipArchiveWithBudget(archivePath, t.TempDir(), &updateArchiveExtractionBudget{
+		maxEntries:  1,
+		maxFileSize: 10,
+		maxTotal:    10,
+	})
+	if err == nil || !strings.Contains(err.Error(), "too many entries before opening ZIP") {
+		t.Fatalf("expected EOCD entry budget rejection before zip.OpenReader, got %v", err)
+	}
+}
+
+func TestExtractZipArchiveRejectsCentralDirectoryBudgetBeforeOpen(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	centralDirectory := make([]byte, 11)
+	eocd := make([]byte, zipEndOfCentralDirectoryMinSize)
+	binary.LittleEndian.PutUint32(eocd[0:4], zipEndOfCentralDirectorySignature)
+	binary.LittleEndian.PutUint16(eocd[8:10], 1)
+	binary.LittleEndian.PutUint16(eocd[10:12], 1)
+	binary.LittleEndian.PutUint32(eocd[12:16], uint32(len(centralDirectory)))
+	if err := os.WriteFile(archivePath, append(centralDirectory, eocd...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractZipArchiveWithBudget(archivePath, t.TempDir(), &updateArchiveExtractionBudget{
+		maxEntries:          10,
+		maxFileSize:         10,
+		maxTotal:            10,
+		maxCentralDirectory: 10,
+	})
+	if err == nil || !strings.Contains(err.Error(), "central directory exceeds maximum size before opening ZIP") {
+		t.Fatalf("expected central directory budget rejection before zip.OpenReader, got %v", err)
 	}
 }
 
