@@ -55,6 +55,8 @@ const (
 	maxRenderedPNGBytes  = int64(128 << 20)
 	maxRenderedPNGPixels = int64(64_000_000)
 	maxRenderedPDFBytes  = int64(512 << 20)
+	maxMontageSlides     = 500
+	maxMontagePixels     = maxRenderedPNGPixels
 )
 
 func isReleaseBaseVersion(version string) bool {
@@ -2794,6 +2796,29 @@ func decodeRenderedPNG(path string, expectedW, expectedH int) (image.Image, dime
 	return img, dim, nil
 }
 
+func renderedPNGDimensions(path string, expectedW, expectedH int) (dimension, error) {
+	f, info, err := openRegularFileForRead(path)
+	if err != nil {
+		return dimension{}, err
+	}
+	defer f.Close()
+	if info.Size() > maxRenderedPNGBytes {
+		return dimension{}, fmt.Errorf("PNG artifact exceeds maximum allowed size: %s is %d bytes > %d", filepath.ToSlash(path), info.Size(), maxRenderedPNGBytes)
+	}
+	cfg, err := png.DecodeConfig(f)
+	if err != nil {
+		return dimension{}, err
+	}
+	dim := dimension{Width: cfg.Width, Height: cfg.Height}
+	if _, err := renderedRGBByteCount(dim.Width, dim.Height, "PNG artifact "+filepath.ToSlash(path)); err != nil {
+		return dim, err
+	}
+	if expectedW > 0 && expectedH > 0 && (dim.Width != expectedW || dim.Height != expectedH) {
+		return dim, fmt.Errorf("wrong screenshot dimensions for %s: got %dx%d expected %dx%d", path, dim.Width, dim.Height, expectedW, expectedH)
+	}
+	return dim, nil
+}
+
 func renderedRGBByteCount(width, height int, label string) (int64, error) {
 	if width <= 0 || height <= 0 {
 		return 0, fmt.Errorf("%s has invalid dimensions %dx%d", label, width, height)
@@ -4172,24 +4197,29 @@ func createMontage(outPath string, paths []string) (dimension, error) {
 	if len(paths) == 0 {
 		return dimension{}, errors.New("no PNG files for montage")
 	}
-	var imgs []image.Image
-	for _, p := range paths {
+	if len(paths) > maxMontageSlides {
+		return dimension{}, fmt.Errorf("too many PNG files for montage: %d > %d", len(paths), maxMontageSlides)
+	}
+	firstDim, err := renderedPNGDimensions(paths[0], 0, 0)
+	if err != nil {
+		return dimension{}, err
+	}
+	cols := int(math.Ceil(math.Sqrt(float64(len(paths)))))
+	rows := int(math.Ceil(float64(len(paths)) / float64(cols)))
+	thumbW := 480
+	thumbH := int(math.Round(float64(thumbW) * float64(firstDim.Height) / float64(firstDim.Width)))
+	gap := 24
+	canvasW, canvasH, err := montageCanvasSize(cols, rows, thumbW, thumbH, gap)
+	if err != nil {
+		return dimension{}, err
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, canvasW, canvasH))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.RGBA{R: 245, G: 247, B: 250, A: 255}}, image.Point{}, draw.Src)
+	for i, p := range paths {
 		img, _, err := decodeRenderedPNG(p, 0, 0)
 		if err != nil {
 			return dimension{}, err
 		}
-		imgs = append(imgs, img)
-	}
-	cols := int(math.Ceil(math.Sqrt(float64(len(imgs)))))
-	rows := int(math.Ceil(float64(len(imgs)) / float64(cols)))
-	thumbW := 480
-	thumbH := int(math.Round(float64(thumbW) * float64(imgs[0].Bounds().Dy()) / float64(imgs[0].Bounds().Dx())))
-	gap := 24
-	canvasW := cols*thumbW + (cols+1)*gap
-	canvasH := rows*thumbH + (rows+1)*gap
-	dst := image.NewRGBA(image.Rect(0, 0, canvasW, canvasH))
-	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.RGBA{R: 245, G: 247, B: 250, A: 255}}, image.Point{}, draw.Src)
-	for i, img := range imgs {
 		col := i % cols
 		row := i / cols
 		x := gap + col*(thumbW+gap)
@@ -4205,6 +4235,26 @@ func createMontage(outPath string, paths []string) (dimension, error) {
 		return dimension{}, err
 	}
 	return dimension{Width: canvasW, Height: canvasH}, nil
+}
+
+func montageCanvasSize(cols, rows, thumbW, thumbH, gap int) (int, int, error) {
+	if cols <= 0 || rows <= 0 || thumbW <= 0 || thumbH <= 0 || gap < 0 {
+		return 0, 0, fmt.Errorf("invalid montage geometry: cols=%d rows=%d thumb=%dx%d gap=%d", cols, rows, thumbW, thumbH, gap)
+	}
+	canvasW := int64(cols)*int64(thumbW) + int64(cols+1)*int64(gap)
+	canvasH := int64(rows)*int64(thumbH) + int64(rows+1)*int64(gap)
+	maxInt := int64(int(^uint(0) >> 1))
+	if canvasW > maxInt || canvasH > maxInt {
+		return 0, 0, fmt.Errorf("montage canvas dimensions exceed platform int size: %dx%d", canvasW, canvasH)
+	}
+	if canvasW > maxMontagePixels/canvasH {
+		return 0, 0, fmt.Errorf("montage canvas exceeds maximum pixel count: %dx%d > %d pixels", canvasW, canvasH, maxMontagePixels)
+	}
+	pixels := canvasW * canvasH
+	if pixels > maxMontagePixels {
+		return 0, 0, fmt.Errorf("montage canvas exceeds maximum pixel count: %dx%d > %d pixels", canvasW, canvasH, maxMontagePixels)
+	}
+	return int(canvasW), int(canvasH), nil
 }
 
 func scaleNearest(src image.Image, w, h int) image.Image {

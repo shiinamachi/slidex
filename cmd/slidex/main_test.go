@@ -3809,6 +3809,32 @@ func TestSecureWriteFileReplacesExistingFile(t *testing.T) {
 	}
 }
 
+func TestCreateMontageRejectsTooManySlides(t *testing.T) {
+	paths := make([]string, maxMontageSlides+1)
+	for i := range paths {
+		paths[i] = filepath.Join("missing", fmt.Sprintf("slide_%03d.png", i+1))
+	}
+
+	_, err := createMontage(filepath.Join(t.TempDir(), "qa_montage.png"), paths)
+	if err == nil || !strings.Contains(err.Error(), "too many PNG files") {
+		t.Fatalf("expected montage slide-count budget rejection, got %v", err)
+	}
+}
+
+func TestCreateMontageRejectsCanvasBudget(t *testing.T) {
+	pngPath := filepath.Join(t.TempDir(), "slide_01.png")
+	writeSolidPNGForTest(t, pngPath, color.RGBA{R: 255, A: 255})
+	paths := make([]string, maxMontageSlides)
+	for i := range paths {
+		paths[i] = pngPath
+	}
+
+	_, err := createMontage(filepath.Join(t.TempDir(), "qa_montage.png"), paths)
+	if err == nil || !strings.Contains(err.Error(), "montage canvas exceeds maximum pixel count") {
+		t.Fatalf("expected montage canvas budget rejection, got %v", err)
+	}
+}
+
 func TestDeliveryOutputsRejectSymlinkTargets(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "deck", "out")
