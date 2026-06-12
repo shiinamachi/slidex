@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"html"
 	"image/color"
 	"io/fs"
@@ -1877,6 +1879,43 @@ func TestWorkbenchBrowserEvidenceRejectsInvalidBrowserScreenshot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "decodable PNG or JPEG") {
 		t.Fatalf("invalid screenshot should fail, got %v", err)
 	}
+}
+
+func TestWorkbenchBrowserScreenshotRejectsDimensionBomb(t *testing.T) {
+	raw := pngHeaderForDimensionsForTest(t, uint32(workbenchScreenshotMaxPixels+1), 1)
+
+	_, _, _, err := inspectWorkbenchBrowserScreenshot(raw)
+	if err == nil || !strings.Contains(err.Error(), "maximum pixel count") {
+		t.Fatalf("expected screenshot dimension budget rejection, got %v", err)
+	}
+}
+
+func pngHeaderForDimensionsForTest(t *testing.T, width, height uint32) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	b.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	var ihdr [13]byte
+	binary.BigEndian.PutUint32(ihdr[0:4], width)
+	binary.BigEndian.PutUint32(ihdr[4:8], height)
+	ihdr[8] = 8
+	ihdr[9] = 2
+	writePNGChunkForTest(&b, "IHDR", ihdr[:])
+	writePNGChunkForTest(&b, "IEND", nil)
+	return b.Bytes()
+}
+
+func writePNGChunkForTest(b *bytes.Buffer, chunkType string, data []byte) {
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(data)))
+	b.Write(length[:])
+	b.WriteString(chunkType)
+	b.Write(data)
+	crc := crc32.NewIEEE()
+	_, _ = crc.Write([]byte(chunkType))
+	_, _ = crc.Write(data)
+	var sum [4]byte
+	binary.BigEndian.PutUint32(sum[:], crc.Sum32())
+	b.Write(sum[:])
 }
 
 func TestWorkbenchVerifyEvidenceDetectsStaleArtifacts(t *testing.T) {

@@ -45,6 +45,7 @@ const (
 	workbenchControlName         = ".workbench_control.json"
 	workbenchLockName            = "workbench.lock"
 	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
+	workbenchScreenshotMaxPixels = maxRenderedPNGPixels
 	workbenchBrowserOpenEnv      = "SLIDEX_BROWSER_OPEN"
 )
 
@@ -2956,24 +2957,20 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 	if err := rejectSymlinkAncestors(sourceAbs); err != nil {
 		return nil, fmt.Errorf("browser screenshot path contains a symlink: %w", err)
 	}
-	info, err := os.Stat(sourceAbs)
-	if err != nil {
-		return nil, fmt.Errorf("browser screenshot is missing or unreadable: %s: %w", filepath.ToSlash(sourceAbs), err)
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("browser screenshot is a directory: %s", filepath.ToSlash(sourceAbs))
-	}
 	ext := strings.ToLower(filepath.Ext(sourceAbs))
 	switch ext {
 	case ".png", ".jpg", ".jpeg":
 	default:
 		return nil, fmt.Errorf("browser screenshot must be .png, .jpg, or .jpeg: %s", filepath.ToSlash(sourceAbs))
 	}
-	f, err := os.Open(sourceAbs)
+	f, info, err := openRegularFileForRead(sourceAbs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("browser screenshot is missing or unreadable: %s: %w", filepath.ToSlash(sourceAbs), err)
 	}
 	defer f.Close()
+	if info.Size() > workbenchScreenshotMaxBytes {
+		return nil, fmt.Errorf("browser screenshot exceeds %d bytes: %s", workbenchScreenshotMaxBytes, filepath.ToSlash(sourceAbs))
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, workbenchScreenshotMaxBytes+1))
 	if err != nil {
 		return nil, err
@@ -2999,6 +2996,17 @@ func copyWorkbenchBrowserScreenshot(deckAbs, sourcePath string) (*artifact, erro
 }
 
 func inspectWorkbenchBrowserScreenshot(raw []byte) (dimension, bool, string, error) {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return dimension{}, false, "", err
+	}
+	if format != "png" && format != "jpeg" {
+		return dimension{}, false, format, fmt.Errorf("unsupported screenshot image format %q", format)
+	}
+	dim := dimension{Width: cfg.Width, Height: cfg.Height}
+	if err := validateWorkbenchScreenshotDimensions(dim); err != nil {
+		return dim, false, format, err
+	}
 	img, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return dimension{}, false, "", err
@@ -3007,11 +3015,26 @@ func inspectWorkbenchBrowserScreenshot(raw []byte) (dimension, bool, string, err
 		return dimension{}, false, format, fmt.Errorf("unsupported screenshot image format %q", format)
 	}
 	bounds := img.Bounds()
-	dim := dimension{Width: bounds.Dx(), Height: bounds.Dy()}
+	dim = dimension{Width: bounds.Dx(), Height: bounds.Dy()}
 	if dim.Width <= 0 || dim.Height <= 0 {
 		return dim, true, format, errors.New("screenshot image has empty dimensions")
 	}
 	return dim, isBlank(img), format, nil
+}
+
+func validateWorkbenchScreenshotDimensions(dim dimension) error {
+	if dim.Width <= 0 || dim.Height <= 0 {
+		return errors.New("screenshot image has empty dimensions")
+	}
+	w := int64(dim.Width)
+	h := int64(dim.Height)
+	if w > workbenchScreenshotMaxPixels/h {
+		return fmt.Errorf("screenshot image exceeds maximum pixel count: %dx%d > %d pixels", dim.Width, dim.Height, workbenchScreenshotMaxPixels)
+	}
+	if pixels := w * h; pixels > workbenchScreenshotMaxPixels {
+		return fmt.Errorf("screenshot image exceeds maximum pixel count: %dx%d > %d pixels", dim.Width, dim.Height, workbenchScreenshotMaxPixels)
+	}
+	return nil
 }
 
 func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScreenshot bool) (result workbenchBrowserEvidenceVerification, err error) {
@@ -3197,7 +3220,7 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScree
 			if actual.SHA256 == "" || actual.Size <= 0 {
 				addFinding("browser screenshot artifact is missing or empty: %s", filepath.ToSlash(screenshotPath))
 			} else {
-				raw, err := os.ReadFile(screenshotPath)
+				raw, err := readRegularFileWithMaxBytes(screenshotPath, workbenchScreenshotMaxBytes)
 				if err != nil {
 					addFinding("browser screenshot is missing or unreadable: %s: %v", filepath.ToSlash(screenshotPath), err)
 				} else if _, blank, _, err := inspectWorkbenchBrowserScreenshot(raw); err != nil {
