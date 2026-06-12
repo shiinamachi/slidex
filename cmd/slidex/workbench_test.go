@@ -2248,6 +2248,68 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	}
 }
 
+func TestMCPStdioAcceptsLargeJSONRequest(t *testing.T) {
+	req := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{"initialRequest": strings.Repeat("a", 70*1024)},
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := append(raw, '\n')
+	var out bytes.Buffer
+	if err := serveMCPStdio(bytes.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("stdio response lines = %d, want 1: %q", len(lines), out.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["id"].(float64) != 1 {
+		t.Fatalf("response id = %#v, want 1", resp["id"])
+	}
+	if _, ok := resp["result"].(map[string]any); !ok {
+		t.Fatalf("large initialize should return result, got %#v", resp)
+	}
+}
+
+func TestMCPStdioOversizedRequestReturnsErrorAndContinues(t *testing.T) {
+	valid := `{"jsonrpc":"2.0","id":2,"method":"initialize"}` + "\n"
+	input := strings.Repeat("x", 80) + "\n" + valid
+	var out bytes.Buffer
+	if err := serveMCPStdioWithLimit(strings.NewReader(input), &out, 64); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stdio response lines = %d, want 2: %q", len(lines), out.String())
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first["error"] == nil || !strings.Contains(fmt.Sprint(first["error"]), "MCP request exceeds maximum size") {
+		t.Fatalf("first response should be structured oversize error, got %#v", first)
+	}
+	var second map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatal(err)
+	}
+	if second["id"].(float64) != 2 {
+		t.Fatalf("second response id = %#v, want 2", second["id"])
+	}
+	if _, ok := second["result"].(map[string]any); !ok {
+		t.Fatalf("server should continue after oversize request, got %#v", second)
+	}
+}
+
 func TestMCPRenderToolSchemaExposesChromeOptions(t *testing.T) {
 	result, err := handleMCPRequest(map[string]any{"method": "tools/list"})
 	if err != nil {

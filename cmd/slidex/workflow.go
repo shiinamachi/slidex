@@ -37,11 +37,13 @@ const (
 	maxDeckTextReadBytes = 2 * 1024 * 1024
 	maxCodexSessionBytes = 512
 	maxCodexMessageBytes = 8 * 1024 * 1024
+	maxMCPRequestBytes   = 8 * 1024 * 1024
 )
 
 var (
 	reviewStartNegatedRiskPattern = regexp.MustCompile(`\b(?:no|none|without)\s+(?:known\s+|remaining\s+)?(?:blockers?|majors?)(?:(?:\s*/\s*|\s+(?:or|and)\s+(?:no\s+)?)(?:blockers?|majors?))?(?:\s+(?:issues?|findings?|risks?|remain|remaining|detected|found))?\b`)
 	reviewStartRiskTermPattern    = regexp.MustCompile(`\b(?:blockers?|majors?)\b`)
+	errMCPRequestTooLarge         = errors.New("MCP request exceeds maximum size")
 )
 
 type codedError struct {
@@ -4161,23 +4163,93 @@ func runMCPServer(args []string) error {
 	if !*stdio {
 		return exitCodeError(2, "--stdio is required")
 	}
-	scanner := bufio.NewScanner(os.Stdin)
-	enc := json.NewEncoder(os.Stdout)
-	for scanner.Scan() {
+	return serveMCPStdio(os.Stdin, os.Stdout)
+}
+
+func serveMCPStdio(in io.Reader, out io.Writer) error {
+	return serveMCPStdioWithLimit(in, out, maxMCPRequestBytes)
+}
+
+func serveMCPStdioWithLimit(in io.Reader, out io.Writer, maxBytes int64) error {
+	reader := bufio.NewReader(in)
+	enc := json.NewEncoder(out)
+	for {
+		line, err := readMCPRequestLine(reader, maxBytes)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if errors.Is(err, errMCPRequestTooLarge) {
+				_ = writeMCPError(enc, nil, -32000, "stdio", err.Error())
+				continue
+			}
+			return err
+		}
 		var req map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			_ = enc.Encode(map[string]any{"error": err.Error()})
+		if err := json.Unmarshal(line, &req); err != nil {
+			_ = writeMCPError(enc, nil, -32700, "", err.Error())
 			continue
 		}
 		method, _ := req["method"].(string)
 		result, err := handleMCPRequest(req)
 		if err != nil {
-			_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "error": map[string]any{"code": -32000, "message": err.Error(), "method": method}})
+			_ = writeMCPError(enc, req["id"], -32000, method, err.Error())
 			continue
 		}
 		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": result})
 	}
-	return scanner.Err()
+}
+
+func readMCPRequestLine(reader *bufio.Reader, maxBytes int64) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(chunk) > 0 {
+			if int64(len(line))+int64(len(chunk)) > maxBytes {
+				if errors.Is(err, bufio.ErrBufferFull) {
+					if discardErr := discardMCPRequestLine(reader); discardErr != nil {
+						return nil, discardErr
+					}
+				}
+				return nil, fmt.Errorf("%w: request is greater than %d bytes", errMCPRequestTooLarge, maxBytes)
+			}
+			line = append(line, chunk...)
+		}
+		if err == nil {
+			return line, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(line) == 0 {
+				return nil, io.EOF
+			}
+			return line, nil
+		}
+		return nil, err
+	}
+}
+
+func discardMCPRequestLine(reader *bufio.Reader) error {
+	for {
+		_, err := reader.ReadSlice('\n')
+		if err == nil || errors.Is(err, io.EOF) {
+			return nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return err
+	}
+}
+
+func writeMCPError(enc *json.Encoder, id any, code int, method, message string) error {
+	errObj := map[string]any{"code": code, "message": message}
+	if method != "" {
+		errObj["method"] = method
+	}
+	return enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": errObj})
 }
 
 func handleMCPRequest(req map[string]any) (any, error) {
