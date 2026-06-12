@@ -4827,6 +4827,53 @@ func TestCollectDependenciesRecordsImportedCSSAndSrcsets(t *testing.T) {
 	}
 }
 
+func TestCollectDependenciesRejectsCSSImportFileBudget(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	stylesDir := filepath.Join(deck, "styles")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stylesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		next := ""
+		if i < 2 {
+			next = fmt.Sprintf(`@import "%05d.css";`, i+1)
+		}
+		if err := os.WriteFile(filepath.Join(stylesDir, fmt.Sprintf("%05d.css", i)), []byte(next+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := `<!doctype html><link rel="stylesheet" href="../styles/00000.css">`
+	_, _, _, err := collectDependenciesWithBudget(htmlPath, src, "pretendard", renderResourcePreflightBudget{
+		MaxCSSFiles:    2,
+		MaxCSSBytes:    1 << 20,
+		MaxResourceRef: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum local stylesheet files") {
+		t.Fatalf("expected dependency collection CSS file budget rejection, got %v", err)
+	}
+}
+
+func TestCollectDependenciesRejectsResourceRefBudget(t *testing.T) {
+	htmlPath := filepath.Join(t.TempDir(), "final_deck.html")
+	src := `<!doctype html><style>
+.a{background:url("a.png")}
+.b{background:url("b.png")}
+.c{background:url("c.png")}
+</style>`
+	_, _, _, err := collectDependenciesWithBudget(htmlPath, src, "pretendard", renderResourcePreflightBudget{
+		MaxCSSFiles:    10,
+		MaxCSSBytes:    1 << 20,
+		MaxResourceRef: 2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum resource references") {
+		t.Fatalf("expected dependency collection resource reference budget rejection, got %v", err)
+	}
+}
+
 func TestVerifyManifestDependenciesDetectsImportedCSSMutation(t *testing.T) {
 	dir := t.TempDir()
 	htmlPath := filepath.Join(dir, "out", "final_deck.html")

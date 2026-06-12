@@ -2056,7 +2056,11 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	manifest.Version = toolVersion
 	manifest.RenderTimestamp = time.Now().UTC().Format(time.RFC3339)
 	manifest.SourceHTML = artifactFromPath(cfg.HTMLPath)
-	manifest.Stylesheets, manifest.Assets, manifest.Fonts = collectDependencies(cfg.HTMLPath, string(raw), cfg.FontPreset)
+	stylesheets, assets, fonts, dependencyErr := collectDependenciesWithBudget(cfg.HTMLPath, string(raw), cfg.FontPreset, defaultDependencyScanBudget())
+	if dependencyErr != nil {
+		return renderManifest{}, fmt.Errorf("collect render manifest dependencies: %w", dependencyErr)
+	}
+	manifest.Stylesheets, manifest.Assets, manifest.Fonts = stylesheets, assets, fonts
 	manifest.FontPreset = cfg.FontPreset
 	manifest.SlideSelector = cfg.Selector
 	manifest.ExpectedDimensions = dimension{Width: cfg.Width, Height: cfg.Height}
@@ -2854,12 +2858,33 @@ type renderResourcePreflightBudget struct {
 	MaxResourceRef int
 }
 
+type dependencyScanBudgetError struct {
+	message string
+}
+
+func (e *dependencyScanBudgetError) Error() string {
+	return e.message
+}
+
+func newDependencyScanBudgetError(format string, args ...any) error {
+	return &dependencyScanBudgetError{message: fmt.Sprintf(format, args...)}
+}
+
+func isDependencyScanBudgetError(err error) bool {
+	var budgetErr *dependencyScanBudgetError
+	return errors.As(err, &budgetErr)
+}
+
 func renderResourceRequestPreflight(htmlPath, src string) error {
-	return renderResourceRequestPreflightWithBudget(htmlPath, src, renderResourcePreflightBudget{
+	return renderResourceRequestPreflightWithBudget(htmlPath, src, defaultDependencyScanBudget())
+}
+
+func defaultDependencyScanBudget() renderResourcePreflightBudget {
+	return renderResourcePreflightBudget{
 		MaxCSSFiles:    maxRenderPreflightCSSFiles,
 		MaxCSSBytes:    maxRenderPreflightCSSBytes,
 		MaxResourceRef: maxRenderPreflightResourceRef,
-	})
+	}
 }
 
 func renderResourceRequestPreflightWithBudget(htmlPath, src string, budget renderResourcePreflightBudget) error {
@@ -3119,6 +3144,11 @@ func rawNodeText(n *xhtml.Node) string {
 }
 
 func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []dependency, []dependency) {
+	styles, assets, fonts, _ := collectDependenciesWithBudget(htmlPath, src, fontPreset, defaultDependencyScanBudget())
+	return styles, assets, fonts
+}
+
+func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget renderResourcePreflightBudget) ([]dependency, []dependency, []dependency, error) {
 	base := filepath.Dir(htmlPath)
 	var styles []dependency
 	var assets []dependency
@@ -3130,15 +3160,43 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 	styleAttrCount := 0
 	linkedStyleCount := 0
 	cssURLCount := 0
+	processedRefs := 0
+	cssFiles := 0
+	var cssBytes int64
+	countResourceRef := func() error {
+		processedRefs++
+		if budget.MaxResourceRef > 0 && processedRefs > budget.MaxResourceRef {
+			return newDependencyScanBudgetError("dependency collection exceeded maximum resource references: %d > %d", processedRefs, budget.MaxResourceRef)
+		}
+		return nil
+	}
+	readNestedStylesheet := func(path string) ([]byte, error) {
+		cssFiles++
+		if budget.MaxCSSFiles > 0 && cssFiles > budget.MaxCSSFiles {
+			return nil, newDependencyScanBudgetError("dependency collection exceeded maximum local stylesheet files: %d > %d", cssFiles, budget.MaxCSSFiles)
+		}
+		raw, err := readRegularFileForDependencyScan(path)
+		if err != nil {
+			return nil, err
+		}
+		cssBytes += int64(len(raw))
+		if budget.MaxCSSBytes > 0 && cssBytes > budget.MaxCSSBytes {
+			return nil, newDependencyScanBudgetError("dependency collection exceeded maximum local stylesheet bytes: %d > %d", cssBytes, budget.MaxCSSBytes)
+		}
+		return raw, nil
+	}
 	appendStylesheet := func(cssBase, ref, id string) dependency {
 		dep := dependency{ID: id, Kind: "stylesheet"}
 		fillDependencyWithPortableBase(&dep, cssBase, base, ref)
 		styles = appendDependencyIfNew(styles, styleSeen, dep)
 		return dep
 	}
-	var scanCSSDependencies func(cssBase, cssText, idPrefix string)
-	scanCSSDependencies = func(cssBase, cssText, idPrefix string) {
+	var scanCSSDependencies func(cssBase, cssText, idPrefix string) error
+	scanCSSDependencies = func(cssBase, cssText, idPrefix string) error {
 		for _, cssRef := range scanCSSResourceRefs(cssText, true) {
+			if err := countResourceRef(); err != nil {
+				return err
+			}
 			ref := normalizeCSSResourceRef(cssRef.Ref)
 			if shouldSkipCSSURLDependency(ref) {
 				continue
@@ -3151,11 +3209,16 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 					continue
 				}
 				seenCSS[dep.Path] = true
-				raw, err := readRegularFileForDependencyScan(dep.Path)
+				raw, err := readNestedStylesheet(dep.Path)
 				if err != nil {
+					if isDependencyScanBudgetError(err) {
+						return err
+					}
 					continue
 				}
-				scanCSSDependencies(filepath.Dir(dep.Path), string(raw), dep.ID)
+				if err := scanCSSDependencies(filepath.Dir(dep.Path), string(raw), dep.ID); err != nil {
+					return err
+				}
 			case "url", "image-set":
 				cssURLCount++
 				dep := dependency{ID: fmt.Sprintf("%s_url_%02d", idPrefix, cssURLCount), Kind: "asset"}
@@ -3163,11 +3226,16 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 				assets = appendDependencyIfNew(assets, assetSeen, dep)
 			}
 		}
+		return nil
 	}
 	doc, err := xhtml.Parse(strings.NewReader(src))
 	if err == nil {
+		var scanErr error
 		var walk func(*xhtml.Node)
 		walk = func(n *xhtml.Node) {
+			if scanErr != nil {
+				return
+			}
 			if n.Type == xhtml.ElementNode {
 				tag := strings.ToLower(n.Data)
 				if tag == "style" {
@@ -3179,7 +3247,10 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 						Kind:   "inline_css",
 						SHA256: sha256Bytes([]byte(css)),
 					})
-					scanCSSDependencies(base, css, id)
+					scanErr = scanCSSDependencies(base, css, id)
+					if scanErr != nil {
+						return
+					}
 				}
 				for _, attr := range n.Attr {
 					key := strings.ToLower(attr.Key)
@@ -3189,11 +3260,17 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 					value := strings.TrimSpace(attr.Val)
 					if key == "style" {
 						styleAttrCount++
-						scanCSSDependencies(base, value, fmt.Sprintf("style_attr_%02d", styleAttrCount))
+						scanErr = scanCSSDependencies(base, value, fmt.Sprintf("style_attr_%02d", styleAttrCount))
+						if scanErr != nil {
+							return
+						}
 						continue
 					}
 					if key == "srcset" && isSrcsetFetchElement(tag) {
 						for _, candidate := range splitSrcsetRefs(value) {
+							if scanErr = countResourceRef(); scanErr != nil {
+								return
+							}
 							dep := dependency{Kind: "asset"}
 							fillDependency(&dep, base, candidate)
 							assets = appendDependencyIfNew(assets, assetSeen, dep)
@@ -3202,6 +3279,9 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 					}
 					if key == "imagesrcset" && tag == "link" && linkRelPreloadsImage(n) {
 						for _, candidate := range splitSrcsetRefs(value) {
+							if scanErr = countResourceRef(); scanErr != nil {
+								return
+							}
 							dep := dependency{Kind: "asset"}
 							fillDependency(&dep, base, candidate)
 							assets = appendDependencyIfNew(assets, assetSeen, dep)
@@ -3211,13 +3291,21 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 					if !isFetchResourceAttr(tag, key) {
 						continue
 					}
+					if scanErr = countResourceRef(); scanErr != nil {
+						return
+					}
 					if tag == "link" && key == "href" && linkRelFetchesStylesheet(n) {
 						linkedStyleCount++
 						dep := appendStylesheet(base, value, fmt.Sprintf("linked_stylesheet_%02d", linkedStyleCount))
 						if dep.Path != "" && !seenCSS[dep.Path] {
 							seenCSS[dep.Path] = true
-							if raw, err := readRegularFileForDependencyScan(dep.Path); err == nil {
-								scanCSSDependencies(filepath.Dir(dep.Path), string(raw), dep.ID)
+							if raw, err := readNestedStylesheet(dep.Path); err == nil {
+								if scanErr = scanCSSDependencies(filepath.Dir(dep.Path), string(raw), dep.ID); scanErr != nil {
+									return
+								}
+							} else if isDependencyScanBudgetError(err) {
+								scanErr = err
+								return
 							}
 						}
 						continue
@@ -3232,6 +3320,9 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 			}
 		}
 		walk(doc)
+		if scanErr != nil {
+			return styles, assets, fonts, scanErr
+		}
 	}
 	fontURLRe := regexp.MustCompile(`(?is)@font-face\s*{.*?url\(\s*["']?([^'")]+)["']?\s*\).*?}`)
 	for i, m := range fontURLRe.FindAllStringSubmatch(src, -1) {
@@ -3239,12 +3330,15 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 		if ref == "" || strings.HasPrefix(ref, "data:") {
 			continue
 		}
+		if err := countResourceRef(); err != nil {
+			return styles, assets, fonts, err
+		}
 		dep := dependency{ID: fmt.Sprintf("font_face_%02d", i+1), Kind: "font_file"}
 		fillDependency(&dep, base, ref)
 		fonts = append(fonts, dep)
 	}
 	fonts = append(fonts, fontPresetDependency(fontPreset))
-	return styles, assets, fonts
+	return styles, assets, fonts, nil
 }
 
 func collectCSSURLDependencies(deps []dependency, seen map[string]bool, base, cssText, idPrefix string) []dependency {
@@ -4184,7 +4278,8 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 		if len(htmlSlides) == 0 {
 			result.Findings = append(result.Findings, fail("html.slides", "no .slide elements found", htmlPath))
 		}
-		htmlDeps := localDependencies(htmlPath, htmlString)
+		htmlDeps, htmlDependencyFindings := localDependenciesWithFindings(htmlPath, htmlString)
+		result.Findings = append(result.Findings, htmlDependencyFindings...)
 		for _, dep := range htmlDeps {
 			if dep.Risk != "" {
 				result.Findings = append(result.Findings, qaFinding{Severity: "warn", Check: "html.dependency", Message: dep.Risk, Path: dep.Path})
@@ -4295,8 +4390,17 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 }
 
 func localDependencies(htmlPath, src string) []dependency {
-	styles, assets, _ := collectDependencies(htmlPath, src, "pretendard")
-	return append(styles, assets...)
+	deps, _ := localDependenciesWithFindings(htmlPath, src)
+	return deps
+}
+
+func localDependenciesWithFindings(htmlPath, src string) ([]dependency, []qaFinding) {
+	styles, assets, _, err := collectDependenciesWithBudget(htmlPath, src, "pretendard", defaultDependencyScanBudget())
+	findings := []qaFinding{}
+	if err != nil {
+		findings = append(findings, fail("html.dependency_scan_budget", err.Error(), htmlPath))
+	}
+	return append(styles, assets...), findings
 }
 
 func writeQAReport(path string, result qaResult) error {
@@ -4813,8 +4917,14 @@ func slidesFromSpec(specPath string) []slideInfo {
 func compareHTMLMetadata(oldPath, oldHTML, newPath, newHTML string) []string {
 	var changes []string
 	if oldHTML != "" {
-		oldS, oldA, oldF := collectDependencies(oldPath, oldHTML, "unknown")
-		newS, newA, newF := collectDependencies(newPath, newHTML, "unknown")
+		oldS, oldA, oldF, oldErr := collectDependenciesWithBudget(oldPath, oldHTML, "unknown", defaultDependencyScanBudget())
+		newS, newA, newF, newErr := collectDependenciesWithBudget(newPath, newHTML, "unknown", defaultDependencyScanBudget())
+		if oldErr != nil {
+			changes = append(changes, "Baseline dependency scan exceeded safety budget: "+oldErr.Error())
+		}
+		if newErr != nil {
+			changes = append(changes, "Current HTML dependency scan exceeded safety budget: "+newErr.Error())
+		}
 		changes = append(changes, compareDependencySet("stylesheet", dependencySignatures(oldS), dependencySignatures(newS))...)
 		changes = append(changes, compareDependencySet("asset", dependencySignatures(oldA), dependencySignatures(newA))...)
 		changes = append(changes, compareDependencySet("font", dependencySignatures(oldF), dependencySignatures(newF))...)
@@ -4822,7 +4932,10 @@ func compareHTMLMetadata(oldPath, oldHTML, newPath, newHTML string) []string {
 			changes = append(changes, fmt.Sprintf("Removed QA-required elements: count changed from %d to %d.", oldCount, newCount))
 		}
 	} else {
-		_, assets, fonts := collectDependencies(newPath, newHTML, "unknown")
+		_, assets, fonts, newErr := collectDependenciesWithBudget(newPath, newHTML, "unknown", defaultDependencyScanBudget())
+		if newErr != nil {
+			changes = append(changes, "Current HTML dependency scan exceeded safety budget: "+newErr.Error())
+		}
 		if len(assets) > 0 {
 			changes = append(changes, fmt.Sprintf("Asset dependencies present in current HTML: %d.", len(assets)))
 		}
@@ -5180,10 +5293,14 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 				findings = append(findings, fail("package.runtime_chrome_version", "manifest must record an exact Chrome/Chromium version", manifestPath))
 			}
 			if currentHTML, err := readRegularFile(htmlPath); err == nil {
-				currentStyles, currentAssets, currentFonts := collectDependencies(htmlPath, string(currentHTML), manifest.FontPreset)
-				findings = append(findings, verifyManifestDependencies("stylesheet", manifest.Stylesheets, currentStyles, manifestPath)...)
-				findings = append(findings, verifyManifestDependencies("asset", manifest.Assets, currentAssets, manifestPath)...)
-				findings = append(findings, verifyManifestDependencies("font", manifest.Fonts, currentFonts, manifestPath)...)
+				currentStyles, currentAssets, currentFonts, dependencyErr := collectDependenciesWithBudget(htmlPath, string(currentHTML), manifest.FontPreset, defaultDependencyScanBudget())
+				if dependencyErr != nil {
+					findings = append(findings, fail("package.dependency_scan_budget", dependencyErr.Error(), htmlPath))
+				} else {
+					findings = append(findings, verifyManifestDependencies("stylesheet", manifest.Stylesheets, currentStyles, manifestPath)...)
+					findings = append(findings, verifyManifestDependencies("asset", manifest.Assets, currentAssets, manifestPath)...)
+					findings = append(findings, verifyManifestDependencies("font", manifest.Fonts, currentFonts, manifestPath)...)
+				}
 			} else {
 				findings = append(findings, fail("package.html_read", err.Error(), htmlPath))
 			}
