@@ -51,6 +51,10 @@ var (
 const (
 	chromeVersionTimeout = 8 * time.Second
 	chromeCommandTimeout = 45 * time.Second
+
+	maxRenderedPNGBytes  = int64(128 << 20)
+	maxRenderedPNGPixels = int64(64_000_000)
+	maxRenderedPDFBytes  = int64(512 << 20)
 )
 
 func isReleaseBaseVersion(version string) bool {
@@ -1472,7 +1476,7 @@ func verifyPDFPNGVisualParity(pdfPath string, images []renderedImage) []qaFindin
 }
 
 func extractPDFImageStreams(pdfPath string) ([]pdfImageStream, error) {
-	raw, err := os.ReadFile(pdfPath)
+	raw, err := readRegularFileWithMaxBytes(pdfPath, maxRenderedPDFBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -1504,14 +1508,21 @@ func extractPDFImageStreams(pdfPath string) ([]pdfImageStream, error) {
 		if !ok {
 			return nil, errors.New("PDF image stream missing Height")
 		}
+		maxStreamBytes, err := renderedRGBByteCount(width, height, "PDF image stream")
+		if err != nil {
+			return nil, err
+		}
 		reader, err := zlib.NewReader(bytes.NewReader(obj[streamStart:streamEnd]))
 		if err != nil {
 			return nil, err
 		}
-		data, err := io.ReadAll(reader)
+		data, err := readAllWithMaxBytes(reader, maxStreamBytes, fmt.Sprintf("PDF image stream %dx%d", width, height))
 		_ = reader.Close()
 		if err != nil {
 			return nil, err
+		}
+		if int64(len(data)) != maxStreamBytes {
+			return nil, fmt.Errorf("PDF image stream decoded length %d does not match expected RGB byte count %d", len(data), maxStreamBytes)
 		}
 		images = append(images, pdfImageStream{Width: width, Height: height, Data: data})
 	}
@@ -2745,22 +2756,58 @@ func editorialGridClippingError(slideID string, issues []string) error {
 }
 
 func validatePNG(path string, expectedW, expectedH int) (dimension, bool, error) {
-	f, err := os.Open(path)
+	img, dim, err := decodeRenderedPNG(path, expectedW, expectedH)
 	if err != nil {
 		return dimension{}, false, err
-	}
-	defer f.Close()
-	img, err := png.Decode(f)
-	if err != nil {
-		return dimension{}, false, err
-	}
-	b := img.Bounds()
-	dim := dimension{Width: b.Dx(), Height: b.Dy()}
-	if dim.Width != expectedW || dim.Height != expectedH {
-		return dim, false, fmt.Errorf("wrong screenshot dimensions for %s: got %dx%d expected %dx%d", path, dim.Width, dim.Height, expectedW, expectedH)
 	}
 	blank := isBlank(img)
 	return dim, blank, nil
+}
+
+func decodeRenderedPNG(path string, expectedW, expectedH int) (image.Image, dimension, error) {
+	f, info, err := openRegularFileForRead(path)
+	if err != nil {
+		return nil, dimension{}, err
+	}
+	defer f.Close()
+	if info.Size() > maxRenderedPNGBytes {
+		return nil, dimension{}, fmt.Errorf("PNG artifact exceeds maximum allowed size: %s is %d bytes > %d", filepath.ToSlash(path), info.Size(), maxRenderedPNGBytes)
+	}
+	cfg, err := png.DecodeConfig(f)
+	if err != nil {
+		return nil, dimension{}, err
+	}
+	dim := dimension{Width: cfg.Width, Height: cfg.Height}
+	if _, err := renderedRGBByteCount(dim.Width, dim.Height, "PNG artifact "+filepath.ToSlash(path)); err != nil {
+		return nil, dim, err
+	}
+	if expectedW > 0 && expectedH > 0 && (dim.Width != expectedW || dim.Height != expectedH) {
+		return nil, dim, fmt.Errorf("wrong screenshot dimensions for %s: got %dx%d expected %dx%d", path, dim.Width, dim.Height, expectedW, expectedH)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, dim, err
+	}
+	img, err := png.Decode(f)
+	if err != nil {
+		return nil, dim, err
+	}
+	return img, dim, nil
+}
+
+func renderedRGBByteCount(width, height int, label string) (int64, error) {
+	if width <= 0 || height <= 0 {
+		return 0, fmt.Errorf("%s has invalid dimensions %dx%d", label, width, height)
+	}
+	w := int64(width)
+	h := int64(height)
+	if w > maxRenderedPNGPixels/h {
+		return 0, fmt.Errorf("%s exceeds maximum pixel count: %dx%d > %d pixels", label, width, height, maxRenderedPNGPixels)
+	}
+	pixels := w * h
+	if pixels > maxRenderedPNGPixels {
+		return 0, fmt.Errorf("%s exceeds maximum pixel count: %dx%d > %d pixels", label, width, height, maxRenderedPNGPixels)
+	}
+	return pixels * 3, nil
 }
 
 func isBlank(img image.Image) bool {
@@ -4066,24 +4113,23 @@ func pngToCompressedRGB(path string) ([]byte, int, int, error) {
 }
 
 func pngToRawRGB(path string) ([]byte, int, int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	defer f.Close()
-	img, err := png.Decode(f)
+	img, dim, err := decodeRenderedPNG(path, 0, 0)
 	if err != nil {
 		return nil, 0, 0, err
 	}
 	b := img.Bounds()
-	raw := make([]byte, 0, b.Dx()*b.Dy()*3)
+	rawBytes, err := renderedRGBByteCount(b.Dx(), b.Dy(), "PNG artifact "+filepath.ToSlash(path))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	raw := make([]byte, 0, int(rawBytes))
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			r, g, bl, _ := img.At(x, y).RGBA()
 			raw = append(raw, byte(r>>8), byte(g>>8), byte(bl>>8))
 		}
 	}
-	return raw, b.Dx(), b.Dy(), nil
+	return raw, dim.Width, dim.Height, nil
 }
 
 func streamObject(dict string, data []byte) []byte {
@@ -4128,12 +4174,7 @@ func createMontage(outPath string, paths []string) (dimension, error) {
 	}
 	var imgs []image.Image
 	for _, p := range paths {
-		f, err := os.Open(p)
-		if err != nil {
-			return dimension{}, err
-		}
-		img, err := png.Decode(f)
-		f.Close()
+		img, _, err := decodeRenderedPNG(p, 0, 0)
 		if err != nil {
 			return dimension{}, err
 		}
@@ -5784,7 +5825,7 @@ func pngPaths(images []renderedImage) []string {
 }
 
 func countPDFPages(path string) (int, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxRenderedPDFBytes)
 	if err != nil {
 		return 0, err
 	}

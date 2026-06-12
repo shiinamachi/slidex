@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -1009,6 +1010,47 @@ func TestVerifyPDFPNGVisualParityDetectsMismatch(t *testing.T) {
 	mismatched := []renderedImage{{SlideID: "slide_01", Path: pngB, SHA256: mustSHA256(pngB), Dimensions: dimension{Width: 2, Height: 2}}}
 	if findings := verifyPDFPNGVisualParity(pdfPath, mismatched); !hasFindingCheck(findings, "ED-RENDER-004") {
 		t.Fatalf("mismatched PDF/PNG parity should fail ED-RENDER-004: %#v", findings)
+	}
+}
+
+func TestValidatePNGRejectsSymlinkArtifact(t *testing.T) {
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real.png")
+	linkPath := filepath.Join(dir, "slide_01.png")
+	writeSolidPNGForTest(t, realPath, color.RGBA{R: 255, A: 255})
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, _, err := validatePNG(linkPath, 2, 2)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink PNG rejection, got %v", err)
+	}
+}
+
+func TestExtractPDFImageStreamsRejectsOversizedDimensions(t *testing.T) {
+	var compressed bytes.Buffer
+	zw := zlib.NewWriter(&compressed)
+	if _, err := zw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var pdf bytes.Buffer
+	pdf.WriteString("%PDF-1.4\n1 0 obj\n")
+	fmt.Fprintf(&pdf, "<< /Type /XObject /Subtype /Image /Width %d /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\n", maxRenderedPNGPixels+1, compressed.Len())
+	pdf.WriteString("stream\n")
+	pdf.Write(compressed.Bytes())
+	pdf.WriteString("\nendstream\nendobj\n")
+	path := filepath.Join(t.TempDir(), "final_deck.pdf")
+	if err := os.WriteFile(path, pdf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := extractPDFImageStreams(path)
+	if err == nil || !strings.Contains(err.Error(), "maximum pixel count") {
+		t.Fatalf("expected PDF image stream dimension budget rejection, got %v", err)
 	}
 }
 
