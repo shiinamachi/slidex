@@ -4833,6 +4833,69 @@ func TestCollectDependenciesFlagsProtocolRelativeURLs(t *testing.T) {
 	}
 }
 
+func TestRenderResourcePreflightRejectsRemoteFetches(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := `<!doctype html><html><head>
+<link rel="stylesheet" href="http://127.0.0.1:8765/probe.css">
+<style>
+@import url("//cdn.example.com/import.css");
+.hero{background-image:url("https://cdn.example.com/hero.png")}
+</style>
+</head><body>
+<section class="slide">
+  <img srcset="local.png 1x, http://127.0.0.1:8765/beacon.png 2x">
+</section>
+</body></html>`
+
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil {
+		t.Fatal("remote render resources should fail preflight")
+	}
+	msg := err.Error()
+	for _, want := range []string{"http://127.0.0.1:8765/probe.css", "//cdn.example.com/import.css", "https://cdn.example.com/hero.png", "http://127.0.0.1:8765/beacon.png"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("preflight error missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestRenderResourcePreflightRejectsExternalLocalFiles(t *testing.T) {
+	root := t.TempDir()
+	deck := filepath.Join(root, "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	external := filepath.Join(root, "external.png")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(external, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := fmt.Sprintf(`<!doctype html><section class="slide"><img src="%s"></section>`, fileURLFromPath(external))
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil || !strings.Contains(err.Error(), "outside the deck workspace") {
+		t.Fatalf("external local file should fail render preflight, got %v", err)
+	}
+}
+
+func TestRenderHTMLRejectsRemoteResourcesBeforeChrome(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(htmlPath, []byte(`<!doctype html><section class="slide"><img src="http://127.0.0.1:8765/beacon.png"></section>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := renderHTML(renderConfig{HTMLPath: htmlPath, Selector: ".slide"})
+	if err == nil || !strings.Contains(err.Error(), "render resource preflight") {
+		t.Fatalf("renderHTML should fail on unsafe resources before resolving Chrome, got %v", err)
+	}
+}
+
 func findDependencyByPath(deps []dependency, path string) (dependency, bool) {
 	for _, dep := range deps {
 		if dep.Path == path {

@@ -31,6 +31,9 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if err != nil {
 		return nil, "", err
 	}
+	if err := renderResourceRequestPreflight(htmlPath, string(raw)); err != nil {
+		return nil, "", err
+	}
 	probeNonce := newProbeNonce()
 	probeHTML := stripExecutableHTMLForProbe(string(raw))
 	injected := injectDocumentBase(injectSlideEnumerationScript(probeHTML, probeNonce), documentBaseHrefForHTMLPath(htmlPath))

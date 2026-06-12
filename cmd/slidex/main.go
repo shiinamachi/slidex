@@ -31,6 +31,7 @@ import (
 	slidexmeta "slidex"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	xhtml "golang.org/x/net/html"
 )
 
 const (
@@ -2013,6 +2014,9 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err != nil {
 		return renderManifest{}, err
 	}
+	if err := renderResourceRequestPreflight(cfg.HTMLPath, string(raw)); err != nil {
+		return renderManifest{}, err
+	}
 	probeHTML := stripExecutableHTMLForProbe(string(raw))
 	chromePath, err := resolveChrome(cfg.ChromePath)
 	if err != nil {
@@ -2819,10 +2823,225 @@ func cleanRenderedSlides(outDir string) error {
 
 var (
 	cssURLRe         = regexp.MustCompile(`(?is)url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")\s][^)]*?))\s*\)`)
+	cssImportRe      = regexp.MustCompile(`(?is)@import\s+(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^'")\s;]+))`)
 	styleAttributeRe = regexp.MustCompile(`(?is)\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 )
 
 const maxDependencyScanBytes = 2 * 1024 * 1024
+
+type renderResourceRef struct {
+	Context   string
+	Base      string
+	Ref       string
+	LinkedCSS bool
+}
+
+func renderResourceRequestPreflight(htmlPath, src string) error {
+	base := filepath.Dir(htmlPath)
+	root := localDependencyPortableRoot(base)
+	refs, err := collectHTMLRenderResourceRefs(base, src)
+	if err != nil {
+		return fmt.Errorf("render resource preflight could not parse HTML: %w", err)
+	}
+	problems := make([]string, 0)
+	seenCSS := map[string]bool{}
+	queue := refs
+	for len(queue) > 0 {
+		ref := queue[0]
+		queue = queue[1:]
+		risk, localPath := renderResourceRequestRisk(ref.Base, root, ref.Ref)
+		if risk != "" {
+			problems = append(problems, fmt.Sprintf("%s %q: %s", ref.Context, ref.Ref, risk))
+			continue
+		}
+		if !ref.LinkedCSS || localPath == "" || seenCSS[localPath] {
+			continue
+		}
+		seenCSS[localPath] = true
+		raw, err := readRegularFileForDependencyScan(localPath)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s %q: local stylesheet could not be scanned before render: %v", ref.Context, ref.Ref, err))
+			continue
+		}
+		queue = append(queue, collectCSSRenderResourceRefs(filepath.Dir(localPath), string(raw), "linked stylesheet "+filepath.ToSlash(localPath))...)
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	if len(problems) > 8 {
+		problems = append(problems[:8], fmt.Sprintf("%d more unsafe resource references", len(problems)-8))
+	}
+	return fmt.Errorf("render resource preflight blocked potentially unsafe resource requests before Chrome render: %s", strings.Join(problems, "; "))
+}
+
+func collectHTMLRenderResourceRefs(base, src string) ([]renderResourceRef, error) {
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]renderResourceRef, 0)
+	var walk func(*xhtml.Node)
+	walk = func(n *xhtml.Node) {
+		if n.Type == xhtml.ElementNode {
+			tag := strings.ToLower(n.Data)
+			if tag == "style" {
+				refs = append(refs, collectCSSRenderResourceRefs(base, rawNodeText(n), "inline style")...)
+			}
+			for _, attr := range n.Attr {
+				key := strings.ToLower(attr.Key)
+				if attr.Namespace != "" {
+					key = strings.ToLower(attr.Namespace + ":" + attr.Key)
+				}
+				value := strings.TrimSpace(attr.Val)
+				if key == "style" {
+					refs = append(refs, collectCSSRenderResourceRefs(base, value, tag+" style attribute")...)
+					continue
+				}
+				if key == "srcset" && isSrcsetFetchElement(tag) {
+					for _, candidate := range splitSrcsetRefs(value) {
+						refs = append(refs, renderResourceRef{Context: tag + " srcset", Base: base, Ref: candidate})
+					}
+					continue
+				}
+				if isFetchResourceAttr(tag, key) {
+					refs = append(refs, renderResourceRef{
+						Context:   tag + " " + key,
+						Base:      base,
+						Ref:       value,
+						LinkedCSS: tag == "link" && key == "href" && linkRelFetchesStylesheet(n),
+					})
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return refs, nil
+}
+
+func collectCSSRenderResourceRefs(base, cssText, context string) []renderResourceRef {
+	refs := make([]renderResourceRef, 0)
+	for _, m := range cssURLRe.FindAllStringSubmatch(cssText, -1) {
+		ref := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
+		if shouldSkipCSSURLDependency(ref) {
+			continue
+		}
+		refs = append(refs, renderResourceRef{Context: context + " url()", Base: base, Ref: ref})
+	}
+	for _, m := range cssImportRe.FindAllStringSubmatch(cssText, -1) {
+		ref := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
+		if shouldSkipCSSURLDependency(ref) {
+			continue
+		}
+		refs = append(refs, renderResourceRef{Context: context + " @import", Base: base, Ref: ref, LinkedCSS: true})
+	}
+	return refs
+}
+
+func renderResourceRequestRisk(base, root, ref string) (string, string) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.HasPrefix(ref, "#") || strings.HasPrefix(strings.ToLower(ref), "data:") {
+		return "", ""
+	}
+	if u, err := url.Parse(ref); err == nil {
+		if u.Host != "" && u.Scheme == "" {
+			return "protocol-relative URL would allow page-initiated network fetches during render", ""
+		}
+		if u.Scheme != "" && !windowsDriveURLScheme(u.Scheme) {
+			switch strings.ToLower(u.Scheme) {
+			case "http", "https":
+				return "remote URL would allow page-initiated network fetches during render", ""
+			case "file":
+				path, err := fileURLDependencyPath(u)
+				if err != nil {
+					return err.Error(), ""
+				}
+				return renderLocalResourceRisk(root, path)
+			default:
+				return "unsupported URL scheme could trigger unsafe render-time resource handling: " + u.Scheme, ""
+			}
+		}
+	}
+	path, err := localDependencyPath(base, ref)
+	if err != nil {
+		return err.Error(), ""
+	}
+	return renderLocalResourceRisk(root, path)
+}
+
+func renderLocalResourceRisk(root, path string) (string, string) {
+	if root == "" || path == "" {
+		return "", path
+	}
+	if filepath.VolumeName(root) != filepath.VolumeName(path) || !pathWithin(root, path) {
+		return "local resource path is outside the deck workspace", ""
+	}
+	if err := rejectSymlinkEscape(root, path, true); err != nil {
+		return "local resource path is unsafe: " + err.Error(), ""
+	}
+	return "", path
+}
+
+func isFetchResourceAttr(tag, key string) bool {
+	switch key {
+	case "src":
+		return in(tag, []string{"audio", "embed", "iframe", "img", "image", "input", "script", "source", "track", "video"})
+	case "href", "xlink:href":
+		return in(tag, []string{"feimage", "image", "link", "use"})
+	case "poster":
+		return tag == "video"
+	case "data":
+		return tag == "object"
+	default:
+		return false
+	}
+}
+
+func isSrcsetFetchElement(tag string) bool {
+	return tag == "img" || tag == "source"
+}
+
+func splitSrcsetRefs(srcset string) []string {
+	refs := make([]string, 0)
+	for _, part := range strings.Split(srcset, ",") {
+		fields := strings.Fields(strings.TrimSpace(part))
+		if len(fields) > 0 {
+			refs = append(refs, fields[0])
+		}
+	}
+	return refs
+}
+
+func linkRelFetchesStylesheet(n *xhtml.Node) bool {
+	rel := strings.ToLower(nodeAttr(n, "rel"))
+	for _, token := range strings.Fields(rel) {
+		if token == "stylesheet" || token == "preload" || token == "modulepreload" || token == "import" {
+			return true
+		}
+	}
+	return false
+}
+
+func rawNodeText(n *xhtml.Node) string {
+	if n == nil {
+		return ""
+	}
+	var b strings.Builder
+	var walk func(*xhtml.Node)
+	walk = func(cur *xhtml.Node) {
+		if cur.Type == xhtml.TextNode {
+			b.WriteString(cur.Data)
+			return
+		}
+		for child := cur.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(n)
+	return b.String()
+}
 
 func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []dependency, []dependency) {
 	base := filepath.Dir(htmlPath)
