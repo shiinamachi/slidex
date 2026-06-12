@@ -343,6 +343,12 @@ func runUpdateApply(args []string) error {
 			err := exitCodeError(2, "--target-version is required with --archive")
 			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
+		canonicalVersion, canonicalTag, err := canonicalUpdateTargetInputs(*targetVersion, *targetTag)
+		if err != nil {
+			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
+		}
+		*targetVersion = canonicalVersion
+		*targetTag = canonicalTag
 		if err := verifyArchiveCandidateSHA256(*archive, *checksums); err != nil {
 			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
@@ -361,6 +367,12 @@ func runUpdateApply(args []string) error {
 			*targetTag = metadata.Tag
 		}
 	}
+	canonicalVersion, canonicalTag, err := canonicalUpdateTargetInputs(*targetVersion, *targetTag)
+	if err != nil {
+		return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
+	}
+	*targetVersion = canonicalVersion
+	*targetTag = canonicalTag
 	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag)
 	if *jsonOut {
 		if printErr := printJSON(result); printErr != nil && err == nil {
@@ -863,11 +875,15 @@ func markPluginRestartRequired(installRoot, targetVersion, targetTag string) err
 	if installRoot == "" {
 		installRoot = defaultInstallRoot()
 	}
+	canonicalVersion, canonicalTag, err := canonicalUpdateTargetInputs(targetVersion, targetTag)
+	if err != nil {
+		return err
+	}
 	return writeUpdateState(installRoot, updateState{
 		CurrentVersion:      toolVersion,
-		TargetVersion:       targetVersion,
-		TargetTag:           targetTag,
-		Channel:             channelFromPackageVersion(targetVersion),
+		TargetVersion:       canonicalVersion,
+		TargetTag:           canonicalTag,
+		Channel:             channelFromPackageVersion(canonicalVersion),
 		RestartRequired:     true,
 		RestartReason:       "bundled Codex plugin content may have changed during slidex bundle update",
 		PluginUpdatedAt:     time.Now().UTC().Format(time.RFC3339),
@@ -975,13 +991,9 @@ func updateInternalStageDir(installRoot, kind, targetVersion string) (string, er
 }
 
 func safeUpdateTargetVersionSegment(targetVersion string) (string, error) {
-	version := strings.TrimSpace(targetVersion)
-	if version == "" {
-		return "", errors.New("target version is required")
-	}
-	channel := channelFromPackageVersion(version)
-	if channel != updateChannelProduction && channel != updateChannelCanary {
-		return "", fmt.Errorf("target version must be a stable or canary package version, got %q", targetVersion)
+	version, err := canonicalUpdateTargetVersion(targetVersion)
+	if err != nil {
+		return "", err
 	}
 	if filepath.IsAbs(version) ||
 		filepath.VolumeName(version) != "" ||
@@ -993,6 +1005,37 @@ func safeUpdateTargetVersionSegment(targetVersion string) (string, error) {
 		return "", fmt.Errorf("target version must be a safe path segment, got %q", targetVersion)
 	}
 	return version, nil
+}
+
+func canonicalUpdateTargetVersion(targetVersion string) (string, error) {
+	version := strings.TrimPrefix(strings.TrimSpace(targetVersion), "v")
+	if version == "" {
+		return "", errors.New("target version is required")
+	}
+	channel := channelFromPackageVersion(version)
+	if channel != updateChannelProduction && channel != updateChannelCanary {
+		return "", fmt.Errorf("target version must be a stable or canary package version, got %q", targetVersion)
+	}
+	return version, nil
+}
+
+func canonicalUpdateTargetInputs(targetVersion, targetTag string) (string, string, error) {
+	version, err := canonicalUpdateTargetVersion(targetVersion)
+	if err != nil {
+		return "", "", err
+	}
+	tag := strings.TrimSpace(targetTag)
+	if tag == "" {
+		return version, "", nil
+	}
+	tagVersion, err := releasePackageVersionFromTag(tag)
+	if err != nil {
+		return "", "", fmt.Errorf("target tag %q is not a valid release tag: %w", targetTag, err)
+	}
+	if tagVersion != version {
+		return "", "", fmt.Errorf("target tag %q resolves to %s, want %s", targetTag, tagVersion, version)
+	}
+	return version, tag, nil
 }
 
 func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL string) (candidateRoot, targetVersion, targetTag string, err error) {
@@ -1293,6 +1336,11 @@ func singleExtractedRoot(dest string) string {
 }
 
 func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, targetTag string) (updateApplyResult, error) {
+	canonicalVersion, canonicalTag, targetErr := canonicalUpdateTargetInputs(targetVersion, targetTag)
+	if targetErr == nil {
+		targetVersion = canonicalVersion
+		targetTag = canonicalTag
+	}
 	result := updateApplyResult{
 		ToolName:                 toolName,
 		CurrentVersion:           status.CurrentVersion,
@@ -1303,6 +1351,10 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		Status:                   "candidate-invalid",
 		PluginVerificationStatus: status.PluginVerificationStatus,
 		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
+	}
+	if targetErr != nil {
+		result.CandidateValidation = append(result.CandidateValidation, fail("update.target_identity", targetErr.Error(), filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
+		return result, nil
 	}
 	result.CandidateValidation = validateCandidateBundle(candidateRoot, targetVersion)
 	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, targetVersion, filepath.Join(candidateRoot, ".slidex", "install.json"))...)
@@ -1440,12 +1492,16 @@ func readPendingUpdate(installRoot string) (*pendingUpdate, string, error) {
 }
 
 func writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, targetTag string) (string, error) {
+	canonicalVersion, canonicalTag, err := canonicalUpdateTargetInputs(targetVersion, targetTag)
+	if err != nil {
+		return "", err
+	}
 	path := pendingUpdatePath(installRoot)
 	pending := pendingUpdate{
 		SchemaVersion:     pendingUpdateSchemaVersion,
 		ToolName:          toolName,
-		TargetVersion:     targetVersion,
-		TargetTag:         targetTag,
+		TargetVersion:     canonicalVersion,
+		TargetTag:         canonicalTag,
 		InstallRoot:       filepath.ToSlash(installRoot),
 		StagedRoot:        filepath.ToSlash(stagedRoot),
 		ActivatorPath:     filepath.ToSlash(activatorPath),
@@ -1488,6 +1544,16 @@ func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.pending_handoff", err.Error(), filepath.ToSlash(pendingUpdatePath(status.InstallRoot))))
 		return result, nil
 	}
+	canonicalVersion, canonicalTag, err := canonicalUpdateTargetInputs(pending.TargetVersion, pending.TargetTag)
+	if err != nil {
+		result.Status = "pending-invalid"
+		result.CandidateValidation = append(result.CandidateValidation, fail("update.pending_handoff", err.Error(), filepath.ToSlash(pendingUpdatePath(status.InstallRoot))))
+		return result, nil
+	}
+	pending.TargetVersion = canonicalVersion
+	pending.TargetTag = canonicalTag
+	result.TargetVersion = canonicalVersion
+	result.TargetTag = canonicalTag
 	result.CandidateValidation = validateCandidateBundle(filepath.FromSlash(pending.StagedRoot), pending.TargetVersion)
 	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, pending.TargetVersion, filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))...)
 	if metadata, err := readInstallMetadata(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
@@ -1587,6 +1653,10 @@ func activateStagedInstallRoot(installRoot, stagedRoot, targetVersion string) (b
 }
 
 func updateInstallMetadataAfterActivation(installRoot, targetVersion, targetTag, channel string) error {
+	canonicalVersion, canonicalTag, err := canonicalUpdateTargetInputs(targetVersion, targetTag)
+	if err != nil {
+		return err
+	}
 	path := installMetadataPath(installRoot)
 	metadata, err := readInstallMetadata(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1597,10 +1667,10 @@ func updateInstallMetadataAfterActivation(installRoot, targetVersion, targetTag,
 	}
 	metadata.SchemaVersion = installMetadataSchemaVersion
 	metadata.ToolName = toolName
-	metadata.Version = targetVersion
+	metadata.Version = canonicalVersion
 	metadata.Channel = channel
-	if targetTag != "" {
-		metadata.Tag = targetTag
+	if canonicalTag != "" {
+		metadata.Tag = canonicalTag
 	}
 	metadata.InstallRoot = filepath.ToSlash(installRoot)
 	metadata.InstalledAt = time.Now().UTC().Format(time.RFC3339)

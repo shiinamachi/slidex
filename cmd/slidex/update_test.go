@@ -864,7 +864,7 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0")
+	result, err := applyCandidateBundle(status, candidate, "v0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -906,6 +906,64 @@ func TestApplyCandidateBundleReplacesInstallRootAndMarksRestart(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, metadata.InstalledAt); err != nil {
 		t.Fatalf("install metadata installedAt must be RFC3339, got %q: %v", metadata.InstalledAt, err)
+	}
+}
+
+func TestApplyCandidateBundleRejectsMismatchedTargetTag(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v9.9.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.target_identity") {
+		t.Fatalf("mismatched target tag should be candidate-invalid: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("mismatched target tag should not activate install root, VERSION = %q", got)
+	}
+}
+
+func TestRunUpdateApplyRejectsMismatchedTargetTagBeforeActivation(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	err := runUpdateApply([]string{
+		"--install-root", installRoot,
+		"--metadata", installMetadataPath(installRoot),
+		"--candidate", candidate,
+		"--target-version", "0.2.0",
+		"--target-tag", "v9.9.9",
+		"--yes",
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolves to 9.9.9") {
+		t.Fatalf("expected mismatched target tag failure, got %v", err)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("mismatched target tag should not activate install root, VERSION = %q", got)
 	}
 }
 
@@ -1387,7 +1445,7 @@ func TestRunUpdateApplyCandidateReportsJSON(t *testing.T) {
 			"--install-root", installRoot,
 			"--metadata", installMetadataPath(installRoot),
 			"--candidate", candidate,
-			"--target-version", "0.2.0",
+			"--target-version", "v0.2.0",
 			"--yes",
 			"--json",
 		})
@@ -1405,6 +1463,9 @@ func TestRunUpdateApplyCandidateReportsJSON(t *testing.T) {
 	if result.Status != "applied" && result.Status != "pending-restart" {
 		t.Fatalf("candidate apply result status = %#v", result)
 	}
+	if result.TargetVersion != "0.2.0" || result.TargetTag != "v0.2.0" {
+		t.Fatalf("candidate apply target identity should be canonical: %#v", result)
+	}
 }
 
 func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
@@ -1416,7 +1477,7 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
-	stagedRoot, pendingPath, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
+	stagedRoot, pendingPath, err := stagePendingUpdateHandoff(installRoot, candidate, "v0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1445,7 +1506,7 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if !strings.Contains(status.PendingActivationCommand, filepath.ToSlash(status.PendingUpdate.ActivatorPath)) {
 		t.Fatalf("pending activation command should use activator path: %s", status.PendingActivationCommand)
 	}
-	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" || status.TargetVersion != "0.2.0" {
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" || status.TargetVersion != "0.2.0" || status.TargetTag != "v0.2.0" {
 		t.Fatalf("pending handoff update status = %#v", status)
 	}
 	if !findingCheckPresent(updateVerificationFindings(status), "update.pending_activation") {
@@ -1885,7 +1946,7 @@ func TestUpdateStatusHumanAndJSONReportPendingActivation(t *testing.T) {
 	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
 	candidate := filepath.Join(t.TempDir(), "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
-	_, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
+	_, _, err := stagePendingUpdateHandoff(installRoot, candidate, "v0.2.0", "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}
