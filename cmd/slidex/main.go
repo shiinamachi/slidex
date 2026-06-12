@@ -2847,7 +2847,7 @@ func renderResourceRequestPreflight(htmlPath, src string) error {
 	for len(queue) > 0 {
 		ref := queue[0]
 		queue = queue[1:]
-		risk, localPath := renderResourceRequestRisk(ref.Base, root, ref.Ref)
+		risk, localPath := renderResourceRequestRisk(ref.Base, root, ref.Ref, ref.LinkedCSS)
 		if risk != "" {
 			problems = append(problems, fmt.Sprintf("%s %q: %s", ref.Context, ref.Ref, risk))
 			continue
@@ -2929,7 +2929,7 @@ func collectCSSRenderResourceRefs(base, cssText, context string) []renderResourc
 	refs := make([]renderResourceRef, 0)
 	for _, cssRef := range scanCSSResourceRefs(cssText, true) {
 		ref := normalizeCSSResourceRef(cssRef.Ref)
-		if shouldSkipCSSURLDependency(ref) {
+		if shouldSkipCSSRenderResourceRef(ref, cssRef.Kind) {
 			continue
 		}
 		suffix := " url()"
@@ -2946,9 +2946,15 @@ func collectCSSRenderResourceRefs(base, cssText, context string) []renderResourc
 	return refs
 }
 
-func renderResourceRequestRisk(base, root, ref string) (string, string) {
+func renderResourceRequestRisk(base, root, ref string, linkedCSS bool) (string, string) {
 	ref = strings.TrimSpace(ref)
-	if ref == "" || strings.HasPrefix(ref, "#") || strings.HasPrefix(strings.ToLower(ref), "data:") {
+	if ref == "" || strings.HasPrefix(ref, "#") {
+		return "", ""
+	}
+	if strings.HasPrefix(strings.ToLower(ref), "data:") {
+		if linkedCSS {
+			return "data stylesheet could contain nested render-time resource fetches", ""
+		}
 		return "", ""
 	}
 	if u, err := url.Parse(ref); err == nil {
@@ -3171,6 +3177,13 @@ func shouldSkipCSSURLDependency(ref string) bool {
 		return true
 	}
 	return strings.HasPrefix(strings.ToLower(ref), "data:")
+}
+
+func shouldSkipCSSRenderResourceRef(ref, kind string) bool {
+	if ref == "" || strings.HasPrefix(ref, "#") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(ref), "data:") && kind != "import"
 }
 
 type cssResourceRef struct {

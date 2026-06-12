@@ -4985,6 +4985,26 @@ func TestRenderResourcePreflightRejectsCSSImageSetStringURLs(t *testing.T) {
 	}
 }
 
+func TestRenderResourcePreflightRejectsDataCSSNestedFetches(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	src := `<!doctype html><html><head>
+<link rel="stylesheet" href='data:text/css,%40import%20url(%22http%3A%2F%2F127.0.0.1%3A8765%2Fprobe.css%22)%3B'>
+<style>@import url("data:text/css,%40import%20url(%22http%3A%2F%2F127.0.0.1%3A8765%2Finline.css%22)%3B");</style>
+</head><body><section class="slide">OK</section></body></html>`
+
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil {
+		t.Fatal("data:text/css stylesheets with nested fetches should fail preflight")
+	}
+	msg := err.Error()
+	for _, want := range []string{"data:text/css", "data stylesheet"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("preflight error missing data stylesheet evidence %q:\n%s", want, msg)
+		}
+	}
+}
+
 func TestRenderResourcePreflightRejectsLinkImagePreloadSrcsetRemote(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	htmlPath := filepath.Join(deck, "out", "final_deck.html")
