@@ -397,11 +397,12 @@ func runUpdateVerify(args []string) error {
 	installRoot := fs.String("install-root", "", "install root")
 	candidate := fs.String("candidate", "", "extracted candidate bundle root")
 	targetVersion := fs.String("target-version", "", "expected candidate version")
+	executeCandidateChecks := fs.Bool("execute-candidate-checks", false, "execute candidate CLI dynamic validation checks")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return exitCodeError(2, "usage: slidex update verify [--json] [--metadata FILE] [--install-root DIR] [--candidate DIR --target-version VERSION]")
+		return exitCodeError(2, "usage: slidex update verify [--json] [--metadata FILE] [--install-root DIR] [--candidate DIR --target-version VERSION [--execute-candidate-checks]]")
 	}
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -411,7 +412,10 @@ func runUpdateVerify(args []string) error {
 		if *targetVersion == "" {
 			return exitCodeError(2, "--target-version is required with --candidate")
 		}
-		status.CandidateValidation = validateCandidateBundle(*candidate, *targetVersion)
+		status.CandidateValidation = validateCandidateBundleStatic(*candidate, *targetVersion)
+		if *executeCandidateChecks && !hasFailures(status.CandidateValidation) {
+			status.CandidateValidation = append(status.CandidateValidation, validateCandidateBundleDynamicChecks(*candidate, *targetVersion)...)
+		}
 		if hasFailures(status.CandidateValidation) {
 			status.Status = "candidate-invalid"
 		} else {
@@ -1356,10 +1360,13 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.target_identity", targetErr.Error(), filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
 		return result, nil
 	}
-	result.CandidateValidation = validateCandidateBundle(candidateRoot, targetVersion)
+	result.CandidateValidation = validateCandidateBundleStatic(candidateRoot, targetVersion)
 	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, targetVersion, filepath.Join(candidateRoot, ".slidex", "install.json"))...)
 	if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
+	}
+	if !hasFailures(result.CandidateValidation) {
+		result.CandidateValidation = append(result.CandidateValidation, validateCandidateBundleDynamicChecks(candidateRoot, targetVersion)...)
 	}
 	if hasFailures(result.CandidateValidation) {
 		return result, nil
@@ -1554,10 +1561,14 @@ func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
 	pending.TargetTag = canonicalTag
 	result.TargetVersion = canonicalVersion
 	result.TargetTag = canonicalTag
-	result.CandidateValidation = validateCandidateBundle(filepath.FromSlash(pending.StagedRoot), pending.TargetVersion)
+	stagedRoot := filepath.FromSlash(pending.StagedRoot)
+	result.CandidateValidation = validateCandidateBundleStatic(stagedRoot, pending.TargetVersion)
 	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, pending.TargetVersion, filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))...)
 	if metadata, err := readInstallMetadata(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))))
+	}
+	if !hasFailures(result.CandidateValidation) {
+		result.CandidateValidation = append(result.CandidateValidation, validateCandidateBundleDynamicChecks(stagedRoot, pending.TargetVersion)...)
 	}
 	if hasFailures(result.CandidateValidation) {
 		result.Status = "candidate-invalid"
@@ -2387,6 +2398,14 @@ func parseBSDChecksumLine(line, assetName string) (string, bool) {
 }
 
 func validateCandidateBundle(root, expectedVersion string) []qaFinding {
+	findings := validateCandidateBundleStatic(root, expectedVersion)
+	if hasFailures(findings) {
+		return findings
+	}
+	return append(findings, validateCandidateBundleDynamicChecks(root, expectedVersion)...)
+}
+
+func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 	root = filepath.Clean(root)
 	expectedVersion = strings.TrimPrefix(strings.TrimSpace(expectedVersion), "v")
 	expectedBaseVersion := releaseBaseVersion(expectedVersion)
@@ -2504,18 +2523,46 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		binary = "slidex.exe"
 	}
 	binaryPath := filepath.Join(root, binary)
-	if _, err := os.Stat(binaryPath); err != nil {
+	if info, err := os.Lstat(binaryPath); err != nil {
 		findings = append(findings, fail("update.candidate_binary", "missing candidate CLI binary: "+err.Error(), filepath.ToSlash(binaryPath)))
-	} else if version, err := candidateBinaryVersion(binaryPath); err != nil {
-		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version command failed: "+err.Error(), filepath.ToSlash(binaryPath)))
-	} else if version != expectedBaseVersion {
-		findings = append(findings, fail("update.candidate_binary_version", "candidate CLI version must be "+expectedBaseVersion+", got "+version, filepath.ToSlash(binaryPath)))
-	} else if doctorStatus, err := candidateDoctorStatus(root, binaryPath); err != nil {
-		findings = append(findings, fail("update.candidate_doctor", "candidate doctor failed: "+err.Error(), filepath.ToSlash(binaryPath)))
-	} else if doctorStatus != "pass" {
-		findings = append(findings, fail("update.candidate_doctor", "candidate doctor status must be pass, got "+doctorStatus, filepath.ToSlash(binaryPath)))
+	} else if isSymlinkOrReparsePoint(binaryPath, info) {
+		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must not be a symlink or reparse point", filepath.ToSlash(binaryPath)))
+	} else if !info.Mode().IsRegular() {
+		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must be a regular file", filepath.ToSlash(binaryPath)))
 	}
 	return findings
+}
+
+func validateCandidateBundleDynamicChecks(root, expectedVersion string) []qaFinding {
+	root = filepath.Clean(root)
+	expectedVersion = strings.TrimPrefix(strings.TrimSpace(expectedVersion), "v")
+	expectedBaseVersion := releaseBaseVersion(expectedVersion)
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	binaryPath := filepath.Join(root, binary)
+	info, err := os.Lstat(binaryPath)
+	if err != nil {
+		return []qaFinding{fail("update.candidate_binary", "missing candidate CLI binary: "+err.Error(), filepath.ToSlash(binaryPath))}
+	}
+	if isSymlinkOrReparsePoint(binaryPath, info) {
+		return []qaFinding{fail("update.candidate_binary", "candidate CLI binary must not be a symlink or reparse point", filepath.ToSlash(binaryPath))}
+	}
+	if !info.Mode().IsRegular() {
+		return []qaFinding{fail("update.candidate_binary", "candidate CLI binary must be a regular file", filepath.ToSlash(binaryPath))}
+	}
+	if version, err := candidateBinaryVersion(binaryPath); err != nil {
+		return []qaFinding{fail("update.candidate_binary_version", "candidate CLI version command failed: "+err.Error(), filepath.ToSlash(binaryPath))}
+	} else if version != expectedBaseVersion {
+		return []qaFinding{fail("update.candidate_binary_version", "candidate CLI version must be "+expectedBaseVersion+", got "+version, filepath.ToSlash(binaryPath))}
+	}
+	if doctorStatus, err := candidateDoctorStatus(root, binaryPath); err != nil {
+		return []qaFinding{fail("update.candidate_doctor", "candidate doctor failed: "+err.Error(), filepath.ToSlash(binaryPath))}
+	} else if doctorStatus != "pass" {
+		return []qaFinding{fail("update.candidate_doctor", "candidate doctor status must be pass, got "+doctorStatus, filepath.ToSlash(binaryPath))}
+	}
+	return nil
 }
 
 func candidateBinaryVersion(path string) (string, error) {

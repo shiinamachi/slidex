@@ -686,6 +686,70 @@ func TestValidateCandidateBundleChecksDoctorStatus(t *testing.T) {
 	}
 }
 
+func TestRunUpdateVerifyCandidateDoesNotExecuteBinaryByDefault(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := t.TempDir()
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	sentinel := filepath.Join(t.TempDir(), "executed")
+	writeCandidateBinaryForTestWithSideEffect(t, filepath.Join(candidate, binary), "0.2.0", "pass", sentinel)
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath, "--candidate", candidate, "--target-version", "0.2.0", "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("static candidate verify should pass: %v\n%s", runErr, output)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("candidate binary should not execute by default, sentinel stat err=%v", err)
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid candidate verify JSON: %v\n%s", err, output)
+	}
+	if status.Status != "candidate-valid" {
+		t.Fatalf("static candidate verify status = %#v", status)
+	}
+
+	output = captureStdoutForTest(t, func() {
+		runErr = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath, "--candidate", candidate, "--target-version", "0.2.0", "--execute-candidate-checks", "--json"})
+	})
+	if runErr != nil {
+		t.Fatalf("dynamic candidate verify should pass: %v\n%s", runErr, output)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("candidate binary should execute with explicit dynamic checks: %v", err)
+	}
+}
+
+func TestValidateCandidateBundleStaticRejectsSymlinkedBinary(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	binaryPath := filepath.Join(root, binary)
+	outside := filepath.Join(t.TempDir(), binary)
+	writeCandidateBinaryForTest(t, outside, "0.2.0")
+	if err := os.Remove(binaryPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, binaryPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	findings := validateCandidateBundleStatic(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_binary") {
+		t.Fatalf("symlinked candidate binary should fail static validation: %#v", findings)
+	}
+}
+
 func TestValidateCandidateBundleChecksInstallMetadataFields(t *testing.T) {
 	root := t.TempDir()
 	writeCandidateBundleForTest(t, root, "0.2.0")
@@ -2266,8 +2330,20 @@ func writeCandidateBinaryForTest(t *testing.T, path, version string) {
 
 func writeCandidateBinaryForTestWithDoctorStatus(t *testing.T, path, version, doctorStatus string) {
 	t.Helper()
+	writeCandidateBinaryForTestWithSideEffect(t, path, version, doctorStatus, "")
+}
+
+func writeCandidateBinaryForTestWithSideEffect(t *testing.T, path, version, doctorStatus, sentinel string) {
+	t.Helper()
 	dir := t.TempDir()
 	source := filepath.Join(dir, "main.go")
+	sideEffect := ""
+	if sentinel != "" {
+		sideEffect = `if err := os.WriteFile(` + fmt.Sprintf("%q", sentinel) + `, []byte("executed\n"), 0o600); err != nil {
+		panic(err)
+	}
+	`
+	}
 	code := `package main
 
 import (
@@ -2276,6 +2352,7 @@ import (
 )
 
 func main() {
+	` + sideEffect + `
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Println("slidex ` + version + `")
 		return
