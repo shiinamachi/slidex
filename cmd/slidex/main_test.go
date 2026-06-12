@@ -3277,6 +3277,19 @@ func TestChromeDiscoveryIncludesManagedLinuxCache(t *testing.T) {
 	}
 }
 
+func TestWindowsChromeExecutableExtensionRejectsBatchWrappers(t *testing.T) {
+	for _, path := range []string{`C:\Program Files\Google\Chrome\Application\chrome.exe`, `C:\Chrome\chrome.com`} {
+		if !windowsChromeExecutableExtensionSupported(path) {
+			t.Fatalf("expected Windows Chrome executable path to be accepted: %s", path)
+		}
+	}
+	for _, path := range []string{`C:\Tools\chrome.cmd`, `C:\Tools\chrome.bat`, `C:\Tools\chrome.ps1`, `C:\Tools\chrome`} {
+		if windowsChromeExecutableExtensionSupported(path) {
+			t.Fatalf("expected Windows Chrome wrapper path to be rejected: %s", path)
+		}
+	}
+}
+
 func TestResolveChromeAcceptsMacOSAppBundle(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("macOS app bundle executability is not represented on Windows")

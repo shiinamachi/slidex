@@ -2325,7 +2325,9 @@ func resolveChrome(explicit string) (string, error) {
 			continue
 		}
 		if path, err := exec.LookPath(candidate); err == nil {
-			return path, nil
+			if resolved, err := resolveChromeExecutablePath(path); err == nil {
+				return resolved, nil
+			}
 		}
 	}
 	return "", errors.New("Chrome/Chromium binary not found")
@@ -2370,17 +2372,24 @@ func chromeExecutableFromAppBundle(bundlePath string) (string, error) {
 
 func requireExecutableChromeFile(path string, info os.FileInfo) error {
 	if runtime.GOOS == "windows" {
-		switch strings.ToLower(filepath.Ext(path)) {
-		case ".exe", ".com", ".cmd", ".bat":
+		if windowsChromeExecutableExtensionSupported(path) {
 			return nil
-		default:
-			return fmt.Errorf("chrome binary has an unsupported Windows executable extension: %s", path)
 		}
+		return fmt.Errorf("chrome binary has an unsupported Windows executable extension: %s", path)
 	}
 	if info.Mode()&0o111 == 0 {
 		return fmt.Errorf("chrome binary is not executable: %s", path)
 	}
 	return nil
+}
+
+func windowsChromeExecutableExtensionSupported(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".exe", ".com":
+		return true
+	default:
+		return false
+	}
 }
 
 func chromeEnvironmentVariables() []string {
