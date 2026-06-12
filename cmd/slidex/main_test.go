@@ -4963,6 +4963,28 @@ func TestRenderResourcePreflightRejectsEscapedCSSTokens(t *testing.T) {
 	}
 }
 
+func TestRenderResourcePreflightRejectsCSSImageSetStringURLs(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	src := `<!doctype html><html><head><style>
+.slide {
+  background-image: image-set("http://127.0.0.1:8765/beacon.png" 1x);
+  border-image-source: -webkit-\69 mage-set("https\3a //127.0.0.1:8765/escaped-webkit.png" 1x);
+}
+</style></head><body><section class="slide">OK</section></body></html>`
+
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil {
+		t.Fatal("CSS image-set string URLs should fail preflight")
+	}
+	msg := err.Error()
+	for _, want := range []string{"http://127.0.0.1:8765/beacon.png", "https://127.0.0.1:8765/escaped-webkit.png"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("preflight error missing image-set string URL %q:\n%s", want, msg)
+		}
+	}
+}
+
 func TestRenderResourcePreflightRejectsLinkImagePreloadSrcsetRemote(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	htmlPath := filepath.Join(deck, "out", "final_deck.html")

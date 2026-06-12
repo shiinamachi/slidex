@@ -2934,9 +2934,12 @@ func collectCSSRenderResourceRefs(base, cssText, context string) []renderResourc
 		}
 		suffix := " url()"
 		linkedCSS := false
-		if cssRef.Kind == "import" {
+		switch cssRef.Kind {
+		case "import":
 			suffix = " @import"
 			linkedCSS = true
+		case "image-set":
+			suffix = " image-set()"
 		}
 		refs = append(refs, renderResourceRef{Context: context + suffix, Base: base, Ref: ref, LinkedCSS: linkedCSS})
 	}
@@ -3129,7 +3132,7 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 func collectCSSURLDependencies(deps []dependency, seen map[string]bool, base, cssText, idPrefix string) []dependency {
 	i := 0
 	for _, cssRef := range scanCSSResourceRefs(cssText, false) {
-		if cssRef.Kind != "url" {
+		if cssRef.Kind != "url" && cssRef.Kind != "image-set" {
 			continue
 		}
 		i++
@@ -3212,7 +3215,47 @@ func scanCSSResourceRefs(cssText string, includeImports bool) []cssResourceRef {
 				}
 			}
 		}
+		if isCSSImageSetFunctionName(name) {
+			open := skipCSSComments(cssText, next)
+			if open < len(cssText) && cssText[open] == '(' {
+				refs = append(refs, scanCSSImageSetStringRefs(cssText, open+1)...)
+			}
+		}
 		i = next
+	}
+	return refs
+}
+
+func isCSSImageSetFunctionName(name string) bool {
+	return strings.EqualFold(name, "image-set") || strings.EqualFold(name, "-webkit-image-set")
+}
+
+func scanCSSImageSetStringRefs(cssText string, i int) []cssResourceRef {
+	refs := make([]cssResourceRef, 0)
+	depth := 1
+	for i < len(cssText) && depth > 0 {
+		if i+1 < len(cssText) && cssText[i] == '/' && cssText[i+1] == '*' {
+			i = skipCSSComment(cssText, i)
+			continue
+		}
+		if cssText[i] == '"' || cssText[i] == '\'' {
+			ref, next, ok := consumeCSSQuotedString(cssText, i)
+			if ok && depth == 1 {
+				refs = append(refs, cssResourceRef{Kind: "image-set", Ref: ref})
+			}
+			if !ok {
+				return refs
+			}
+			i = next
+			continue
+		}
+		switch cssText[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		i++
 	}
 	return refs
 }
