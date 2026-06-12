@@ -5115,6 +5115,63 @@ func TestRenderResourcePreflightRejectsLinkImagePreloadSrcsetRemote(t *testing.T
 	}
 }
 
+func TestRenderResourcePreflightRejectsCSSImportFileBudget(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	styles := filepath.Join(deck, "styles")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(styles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		next := ""
+		if i < 2 {
+			next = fmt.Sprintf(`@import "%05d.css";`, i+1)
+		}
+		if err := os.WriteFile(filepath.Join(styles, fmt.Sprintf("%05d.css", i)), []byte(next+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := `<!doctype html><link rel="stylesheet" href="../styles/00000.css"><section class="slide">OK</section>`
+	err := renderResourceRequestPreflightWithBudget(htmlPath, src, renderResourcePreflightBudget{
+		MaxCSSFiles:    2,
+		MaxCSSBytes:    1 << 20,
+		MaxResourceRef: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum local stylesheet files") {
+		t.Fatalf("expected CSS file budget rejection, got %v", err)
+	}
+}
+
+func TestRenderResourcePreflightRejectsCSSImportByteBudget(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	styles := filepath.Join(deck, "styles")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(styles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(styles, "base.css"), []byte(`@import "theme.css";`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(styles, "theme.css"), []byte(strings.Repeat("a", 32)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `<!doctype html><link rel="stylesheet" href="../styles/base.css"><section class="slide">OK</section>`
+	err := renderResourceRequestPreflightWithBudget(htmlPath, src, renderResourcePreflightBudget{
+		MaxCSSFiles:    10,
+		MaxCSSBytes:    16,
+		MaxResourceRef: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum local stylesheet bytes") {
+		t.Fatalf("expected CSS byte budget rejection, got %v", err)
+	}
+}
+
 func TestRenderResourcePreflightAllowsLargeImagePreload(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	htmlPath := filepath.Join(deck, "out", "final_deck.html")

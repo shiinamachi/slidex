@@ -24,9 +24,6 @@ type chromeEnumeratedSlide struct {
 }
 
 func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
-	if selector != ".slide" {
-		return nil, "", fmt.Errorf("unsupported selector for Chrome enumeration: %s", selector)
-	}
 	raw, err := readRegularFile(htmlPath)
 	if err != nil {
 		return nil, "", err
@@ -34,8 +31,15 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 	if err := renderResourceRequestPreflight(htmlPath, string(raw)); err != nil {
 		return nil, "", err
 	}
+	return extractSlidesWithChromeFromHTML(chromePath, htmlPath, string(raw), selector, chromeNoSandbox)
+}
+
+func extractSlidesWithChromeFromHTML(chromePath, htmlPath, src, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
+	if selector != ".slide" {
+		return nil, "", fmt.Errorf("unsupported selector for Chrome enumeration: %s", selector)
+	}
 	probeNonce := newProbeNonce()
-	probeHTML := stripExecutableHTMLForProbe(string(raw))
+	probeHTML := stripExecutableHTMLForProbe(src)
 	injected := injectDocumentBase(injectSlideEnumerationScript(probeHTML, probeNonce), documentBaseHrefForHTMLPath(htmlPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-dom-enum-*")
 	if err != nil {

@@ -2025,7 +2025,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if cfg.Selector != ".slide" {
 		return renderManifest{}, errors.New("only .slide selector is currently supported")
 	}
-	slides, enumMethod, enumErr := extractSlidesWithChrome(chromePath, cfg.HTMLPath, cfg.Selector, cfg.ChromeNoSandbox)
+	slides, enumMethod, enumErr := extractSlidesWithChromeFromHTML(chromePath, cfg.HTMLPath, string(raw), cfg.Selector, cfg.ChromeNoSandbox)
 	if enumErr != nil || len(slides) == 0 {
 		parserSlides := extractSlides(probeHTML)
 		if len(parserSlides) == 0 {
@@ -2825,7 +2825,12 @@ var (
 	styleAttributeRe = regexp.MustCompile(`(?is)\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 )
 
-const maxDependencyScanBytes = 2 * 1024 * 1024
+const (
+	maxDependencyScanBytes        = 2 * 1024 * 1024
+	maxRenderPreflightCSSFiles    = 1000
+	maxRenderPreflightCSSBytes    = 16 * 1024 * 1024
+	maxRenderPreflightResourceRef = 10000
+)
 
 type renderResourceRef struct {
 	Context   string
@@ -2834,7 +2839,21 @@ type renderResourceRef struct {
 	LinkedCSS bool
 }
 
+type renderResourcePreflightBudget struct {
+	MaxCSSFiles    int
+	MaxCSSBytes    int64
+	MaxResourceRef int
+}
+
 func renderResourceRequestPreflight(htmlPath, src string) error {
+	return renderResourceRequestPreflightWithBudget(htmlPath, src, renderResourcePreflightBudget{
+		MaxCSSFiles:    maxRenderPreflightCSSFiles,
+		MaxCSSBytes:    maxRenderPreflightCSSBytes,
+		MaxResourceRef: maxRenderPreflightResourceRef,
+	})
+}
+
+func renderResourceRequestPreflightWithBudget(htmlPath, src string, budget renderResourcePreflightBudget) error {
 	base := filepath.Dir(htmlPath)
 	root := localDependencyPortableRoot(base)
 	refs, err := collectHTMLRenderResourceRefs(base, src)
@@ -2844,9 +2863,16 @@ func renderResourceRequestPreflight(htmlPath, src string) error {
 	problems := make([]string, 0)
 	seenCSS := map[string]bool{}
 	queue := refs
+	processedRefs := 0
+	cssFiles := 0
+	var cssBytes int64
 	for len(queue) > 0 {
 		ref := queue[0]
 		queue = queue[1:]
+		processedRefs++
+		if budget.MaxResourceRef > 0 && processedRefs > budget.MaxResourceRef {
+			return fmt.Errorf("render resource preflight exceeded maximum resource references: %d > %d", processedRefs, budget.MaxResourceRef)
+		}
 		risk, localPath := renderResourceRequestRisk(ref.Base, root, ref.Ref, ref.LinkedCSS)
 		if risk != "" {
 			problems = append(problems, fmt.Sprintf("%s %q: %s", ref.Context, ref.Ref, risk))
@@ -2856,10 +2882,18 @@ func renderResourceRequestPreflight(htmlPath, src string) error {
 			continue
 		}
 		seenCSS[localPath] = true
+		cssFiles++
+		if budget.MaxCSSFiles > 0 && cssFiles > budget.MaxCSSFiles {
+			return fmt.Errorf("render resource preflight exceeded maximum local stylesheet files: %d > %d", cssFiles, budget.MaxCSSFiles)
+		}
 		raw, err := readRegularFileForDependencyScan(localPath)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s %q: local stylesheet could not be scanned before render: %v", ref.Context, ref.Ref, err))
 			continue
+		}
+		cssBytes += int64(len(raw))
+		if budget.MaxCSSBytes > 0 && cssBytes > budget.MaxCSSBytes {
+			return fmt.Errorf("render resource preflight exceeded maximum local stylesheet bytes: %d > %d", cssBytes, budget.MaxCSSBytes)
 		}
 		queue = append(queue, collectCSSRenderResourceRefs(filepath.Dir(localPath), string(raw), "linked stylesheet "+filepath.ToSlash(localPath))...)
 	}
