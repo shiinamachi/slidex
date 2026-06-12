@@ -753,6 +753,101 @@ func TestExtractZipArchiveRejectsUnderstatedCentralDirectoryEntryCountBeforeOpen
 	}
 }
 
+func TestValidateArchiveRelativePathRejectsPortableHazards(t *testing.T) {
+	for _, name := range []string{
+		"candidate/file.txt",
+		"candidate/",
+		"candidate/.agents/hook.sh",
+		"candidate/.slidex/state.json",
+	} {
+		if err := validateArchiveRelativePath(name); err != nil {
+			t.Fatalf("expected archive path %q to be accepted: %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"",
+		"/candidate/file.txt",
+		"C:/candidate/file.txt",
+		`candidate\file.txt`,
+		"candidate//file.txt",
+		"candidate/./file.txt",
+		"candidate/../file.txt",
+		"candidate/NUL",
+		"candidate/CON.txt",
+		"candidate/slidex.exe:stream",
+		"candidate/dir. /file.txt",
+		"candidate/trailing-space /file.txt",
+		"candidate/trailing-dot./file.txt",
+	} {
+		if err := validateArchiveRelativePath(name); err == nil {
+			t.Fatalf("expected archive path %q to be rejected", name)
+		}
+	}
+}
+
+func TestExtractZipArchiveRejectsUnsafeArchiveEntryPath(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("candidate/NUL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := zw.Close()
+	fileErr := f.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if fileErr != nil {
+		t.Fatal(fileErr)
+	}
+
+	err = extractZipArchive(archivePath, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "unsafe archive entry path") {
+		t.Fatalf("expected unsafe ZIP entry path rejection, got %v", err)
+	}
+}
+
+func TestExtractTarGzArchiveRejectsUnsafeArchiveEntryPath(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	header := &tar.Header{Name: "candidate/slidex.exe:stream", Mode: 0o644, Size: 7}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := tw.Close()
+	gzErr := gz.Close()
+	fileErr := f.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if gzErr != nil {
+		t.Fatal(gzErr)
+	}
+	if fileErr != nil {
+		t.Fatal(fileErr)
+	}
+
+	err = extractTarGzArchive(archivePath, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "unsafe archive entry path") {
+		t.Fatalf("expected unsafe tar entry path rejection, got %v", err)
+	}
+}
+
 func writeCentralDirectoryOnlyZip(t *testing.T, archivePath string, entries, declaredEntries int, declaredDirectorySize uint32) int {
 	t.Helper()
 	var archive []byte
@@ -868,7 +963,7 @@ func TestExtractArchiveCandidateCleansStageOnFailure(t *testing.T) {
 	}
 
 	_, err = extractArchiveCandidate(archivePath, "0.2.0", installRoot)
-	if err == nil || !strings.Contains(err.Error(), "escapes extraction root") {
+	if err == nil || !strings.Contains(err.Error(), "unsafe archive entry path") {
 		t.Fatalf("expected extraction failure, got %v", err)
 	}
 	stagedRoot := filepath.Join(installRoot, ".slidex", "staged")

@@ -1274,6 +1274,9 @@ func extractTarGzArchiveWithBudget(archivePath, dest string, budget *updateArchi
 		if err != nil {
 			return err
 		}
+		if err := validateArchiveRelativePath(header.Name); err != nil {
+			return err
+		}
 		if err := budget.addEntry(header.Name); err != nil {
 			return err
 		}
@@ -1320,6 +1323,9 @@ func extractZipArchiveWithBudget(archivePath, dest string, budget *updateArchive
 	}
 	defer zr.Close()
 	for _, file := range zr.File {
+		if err := validateArchiveRelativePath(file.Name); err != nil {
+			return err
+		}
 		if err := budget.addEntry(file.Name); err != nil {
 			return err
 		}
@@ -1370,6 +1376,42 @@ func extractZipArchiveWithBudget(archivePath, dest string, budget *updateArchive
 		}
 		if closeErr != nil {
 			return closeErr
+		}
+	}
+	return nil
+}
+
+func validateArchiveRelativePath(name string) error {
+	if name == "" {
+		return fmt.Errorf("unsafe archive entry path: empty path")
+	}
+	if strings.Contains(name, "\x00") {
+		return fmt.Errorf("unsafe archive entry path %q: NUL byte is not allowed", name)
+	}
+	if strings.Contains(name, `\`) {
+		return fmt.Errorf("unsafe archive entry path %q: backslash separators are not portable", name)
+	}
+	if strings.HasPrefix(name, "/") || filepath.IsAbs(name) || isWindowsDrivePath(name) {
+		return fmt.Errorf("unsafe archive entry path %q: absolute paths are not allowed", name)
+	}
+	checkName := strings.TrimSuffix(name, "/")
+	if checkName == "" {
+		return fmt.Errorf("unsafe archive entry path %q: empty, dot, and dot-dot path segments are not allowed", name)
+	}
+	parts := strings.Split(checkName, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf("unsafe archive entry path %q: empty, dot, and dot-dot path segments are not allowed", name)
+		}
+		if strings.Contains(part, ":") {
+			return fmt.Errorf("unsafe archive entry path %q: colon is not allowed in path segments", name)
+		}
+		if strings.HasSuffix(part, " ") || strings.HasSuffix(part, ".") {
+			return fmt.Errorf("unsafe archive entry path %q: trailing spaces and dots are not portable", name)
+		}
+		stem := strings.TrimRight(part, " .")
+		if isWindowsReservedFilenameStem(stem) {
+			return fmt.Errorf("unsafe archive entry path %q: Windows reserved device names are not allowed", name)
 		}
 	}
 	return nil
