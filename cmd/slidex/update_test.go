@@ -722,6 +722,77 @@ func TestExtractZipArchiveRejectsCentralDirectoryBudgetBeforeOpen(t *testing.T) 
 	}
 }
 
+func TestExtractZipArchiveRejectsUnderstatedCentralDirectorySizeBeforeOpen(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	writeCentralDirectoryOnlyZip(t, archivePath, 2, 1, 0)
+
+	err := extractZipArchiveWithBudget(archivePath, t.TempDir(), &updateArchiveExtractionBudget{
+		maxEntries:          10,
+		maxFileSize:         10,
+		maxTotal:            10,
+		maxCentralDirectory: 1 << 20,
+	})
+	if err == nil || !strings.Contains(err.Error(), "central directory size does not match metadata before opening ZIP") {
+		t.Fatalf("expected central directory size mismatch before zip.OpenReader, got %v", err)
+	}
+}
+
+func TestExtractZipArchiveRejectsUnderstatedCentralDirectoryEntryCountBeforeOpen(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	actualDirectorySize := writeCentralDirectoryOnlyZip(t, archivePath, 2, 1, 0)
+	rewriteZipEOCDCentralDirectorySize(t, archivePath, actualDirectorySize)
+
+	err := extractZipArchiveWithBudget(archivePath, t.TempDir(), &updateArchiveExtractionBudget{
+		maxEntries:          10,
+		maxFileSize:         10,
+		maxTotal:            10,
+		maxCentralDirectory: 1 << 20,
+	})
+	if err == nil || !strings.Contains(err.Error(), "central directory entry count does not match metadata before opening ZIP") {
+		t.Fatalf("expected central directory entry-count mismatch before zip.OpenReader, got %v", err)
+	}
+}
+
+func writeCentralDirectoryOnlyZip(t *testing.T, archivePath string, entries, declaredEntries int, declaredDirectorySize uint32) int {
+	t.Helper()
+	var archive []byte
+	for i := 0; i < entries; i++ {
+		name := []byte(fmt.Sprintf("f%05d", i))
+		header := make([]byte, zipCentralDirectoryHeaderMinSize)
+		binary.LittleEndian.PutUint32(header[0:4], zipCentralDirectoryHeaderSignature)
+		binary.LittleEndian.PutUint16(header[28:30], uint16(len(name)))
+		archive = append(archive, header...)
+		archive = append(archive, name...)
+	}
+	actualDirectorySize := len(archive)
+	eocd := make([]byte, zipEndOfCentralDirectoryMinSize)
+	binary.LittleEndian.PutUint32(eocd[0:4], zipEndOfCentralDirectorySignature)
+	binary.LittleEndian.PutUint16(eocd[8:10], uint16(declaredEntries))
+	binary.LittleEndian.PutUint16(eocd[10:12], uint16(declaredEntries))
+	binary.LittleEndian.PutUint32(eocd[12:16], declaredDirectorySize)
+	if err := os.WriteFile(archivePath, append(archive, eocd...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return actualDirectorySize
+}
+
+func rewriteZipEOCDCentralDirectorySize(t *testing.T, archivePath string, declaredDirectorySize int) {
+	t.Helper()
+	f, err := os.OpenFile(archivePath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(-zipEndOfCentralDirectoryMinSize+12, io.SeekEnd); err != nil {
+		t.Fatal(err)
+	}
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], uint32(declaredDirectorySize))
+	if _, err := f.Write(buf[:]); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExtractTarGzArchiveRejectsExtractionBudget(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "candidate.tar.gz")
 	f, err := os.Create(archivePath)

@@ -58,8 +58,10 @@ const (
 	maxUpdateZipCentralDirBytes     = int64(64 << 20)
 
 	zipEndOfCentralDirectorySignature       = uint32(0x06054b50)
+	zipCentralDirectoryHeaderSignature      = uint32(0x02014b50)
 	zip64EndOfCentralDirectorySignature     = uint32(0x06064b50)
 	zip64EndOfCentralDirectoryLocSignature  = uint32(0x07064b50)
+	zipCentralDirectoryHeaderMinSize        = 46
 	zipEndOfCentralDirectoryMinSize         = 22
 	zipMaxCommentSize                       = 65535
 	zip64EndOfCentralDirectoryLocatorSize   = 20
@@ -1377,6 +1379,7 @@ type zipArchiveDirectoryMetadata struct {
 	entries                uint64
 	centralDirectorySize   uint64
 	centralDirectoryOffset uint64
+	centralDirectoryEnd    uint64
 }
 
 func validateZipArchiveDirectoryBudget(archivePath string, budget *updateArchiveExtractionBudget) error {
@@ -1389,6 +1392,9 @@ func validateZipArchiveDirectoryBudget(archivePath string, budget *updateArchive
 	}
 	if budget.maxCentralDirectory > 0 && metadata.centralDirectorySize > uint64(budget.maxCentralDirectory) {
 		return fmt.Errorf("ZIP central directory exceeds maximum size before opening ZIP: %d bytes > %d", metadata.centralDirectorySize, budget.maxCentralDirectory)
+	}
+	if err := validateZipArchiveDirectoryContents(archivePath, metadata, budget); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1452,6 +1458,7 @@ func readZipArchiveDirectoryMetadata(archivePath string) (zipArchiveDirectoryMet
 			entries:                uint64(totalEntries),
 			centralDirectorySize:   uint64(centralDirectorySize32),
 			centralDirectoryOffset: uint64(centralDirectoryOffset32),
+			centralDirectoryEnd:    uint64(eocdOffset),
 		}
 	}
 	if err := validateZipArchiveDirectoryBounds(metadata, eocdOffset, archivePath); err != nil {
@@ -1505,15 +1512,62 @@ func readZip64ArchiveDirectoryMetadata(f *os.File, archiveSize, eocdOffset int64
 		entries:                totalEntries,
 		centralDirectorySize:   binary.LittleEndian.Uint64(record[40:48]),
 		centralDirectoryOffset: binary.LittleEndian.Uint64(record[48:56]),
+		centralDirectoryEnd:    zip64DirectoryOffset,
 	}, nil
 }
 
 func validateZipArchiveDirectoryBounds(metadata zipArchiveDirectoryMetadata, eocdOffset int64, archivePath string) error {
-	if metadata.centralDirectoryOffset > uint64(eocdOffset) {
+	if metadata.centralDirectoryEnd > uint64(eocdOffset) || metadata.centralDirectoryOffset > metadata.centralDirectoryEnd {
 		return fmt.Errorf("ZIP central directory exceeds archive bounds: %s", filepath.ToSlash(archivePath))
 	}
-	if metadata.centralDirectorySize > uint64(eocdOffset)-metadata.centralDirectoryOffset {
+	if metadata.centralDirectorySize > metadata.centralDirectoryEnd-metadata.centralDirectoryOffset {
 		return fmt.Errorf("ZIP central directory exceeds archive bounds: %s", filepath.ToSlash(archivePath))
+	}
+	return nil
+}
+
+func validateZipArchiveDirectoryContents(archivePath string, metadata zipArchiveDirectoryMetadata, budget *updateArchiveExtractionBudget) error {
+	actualSize := metadata.centralDirectoryEnd - metadata.centralDirectoryOffset
+	if metadata.centralDirectorySize != actualSize {
+		return fmt.Errorf("ZIP central directory size does not match metadata before opening ZIP: %d bytes != %d", actualSize, metadata.centralDirectorySize)
+	}
+	if budget.maxCentralDirectory > 0 && actualSize > uint64(budget.maxCentralDirectory) {
+		return fmt.Errorf("ZIP central directory exceeds maximum size before opening ZIP: %d bytes > %d", actualSize, budget.maxCentralDirectory)
+	}
+	f, _, err := openRegularFileForRead(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var count uint64
+	offset := metadata.centralDirectoryOffset
+	for offset < metadata.centralDirectoryEnd {
+		remaining := metadata.centralDirectoryEnd - offset
+		if remaining < zipCentralDirectoryHeaderMinSize {
+			return fmt.Errorf("ZIP central directory entry exceeds archive bounds before opening ZIP")
+		}
+		var header [zipCentralDirectoryHeaderMinSize]byte
+		if _, err := f.ReadAt(header[:], int64(offset)); err != nil {
+			return err
+		}
+		if binary.LittleEndian.Uint32(header[0:4]) != zipCentralDirectoryHeaderSignature {
+			return fmt.Errorf("ZIP central directory contains an invalid entry before opening ZIP")
+		}
+		nameLen := uint64(binary.LittleEndian.Uint16(header[28:30]))
+		extraLen := uint64(binary.LittleEndian.Uint16(header[30:32]))
+		commentLen := uint64(binary.LittleEndian.Uint16(header[32:34]))
+		entrySize := uint64(zipCentralDirectoryHeaderMinSize) + nameLen + extraLen + commentLen
+		if entrySize > remaining {
+			return fmt.Errorf("ZIP central directory entry exceeds archive bounds before opening ZIP")
+		}
+		count++
+		if budget.maxEntries > 0 && count > uint64(budget.maxEntries) {
+			return fmt.Errorf("archive contains too many entries before opening ZIP: %d > %d", count, budget.maxEntries)
+		}
+		offset += entrySize
+	}
+	if count != metadata.entries {
+		return fmt.Errorf("ZIP central directory entry count does not match metadata before opening ZIP: %d != %d", count, metadata.entries)
 	}
 	return nil
 }
