@@ -1028,6 +1028,46 @@ func TestValidatePNGRejectsSymlinkArtifact(t *testing.T) {
 	}
 }
 
+func TestMCPStateReadRejectsSymlinkStateFile(t *testing.T) {
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"outside":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(outDir, "slidex_state.json")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := callMCPTool("state/read", map[string]any{"deck": deck})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected MCP state/read symlink rejection, got %v", err)
+	}
+}
+
+func TestMCPStateReadRejectsSymlinkDeck(t *testing.T) {
+	realDeck := t.TempDir()
+	outDir := filepath.Join(realDeck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "slidex_state.json"), []byte(`{"schemaVersion":"slidex.state.v1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkDeck := filepath.Join(t.TempDir(), "deck-link")
+	if err := os.Symlink(realDeck, linkDeck); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := callMCPTool("state/read", map[string]any{"deck": linkDeck})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected MCP state/read deck symlink rejection, got %v", err)
+	}
+}
+
 func TestExtractPDFImageStreamsRejectsOversizedDimensions(t *testing.T) {
 	var compressed bytes.Buffer
 	zw := zlib.NewWriter(&compressed)

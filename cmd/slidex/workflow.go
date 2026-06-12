@@ -4316,21 +4316,53 @@ func callMCPTool(name string, args map[string]any) (any, error) {
 		includeLogs, _ := args["includeLogs"].(bool)
 		return packageDeck(deck, includeLogs)
 	case "state/read":
-		if deck == "" {
-			return nil, errors.New("deck argument is required")
-		}
-		raw, err := os.ReadFile(filepath.Join(mustAbs(deck), "out", "slidex_state.json"))
-		if err != nil {
-			return nil, err
-		}
-		var state map[string]any
-		if err := json.Unmarshal(raw, &state); err != nil {
-			return nil, err
-		}
-		return state, nil
+		return readMCPState(deck)
 	default:
 		return nil, fmt.Errorf("unsupported tool: %s", name)
 	}
+}
+
+func readMCPState(deck string) (map[string]any, error) {
+	deckAbs, err := resolveMCPDeckDir(deck)
+	if err != nil {
+		return nil, err
+	}
+	statePath := filepath.Join(deckAbs, "out", "slidex_state.json")
+	raw, err := readRegularFileLimited(statePath, maxDeckTextReadBytes)
+	if err != nil {
+		return nil, err
+	}
+	var state map[string]any
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func resolveMCPDeckDir(deck string) (string, error) {
+	deck = strings.TrimSpace(deck)
+	if deck == "" {
+		return "", errors.New("deck argument is required")
+	}
+	deckAbs, err := filepath.Abs(deck)
+	if err != nil {
+		return "", err
+	}
+	deckAbs = filepath.Clean(deckAbs)
+	if err := rejectSymlinkAncestors(filepath.Dir(deckAbs)); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(deckAbs)
+	if err != nil {
+		return "", err
+	}
+	if isSymlinkOrReparsePoint(deckAbs, info) {
+		return "", fmt.Errorf("deck path must not be a symlink or reparse point: %s", filepath.ToSlash(deckAbs))
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("deck path must be a directory: %s", filepath.ToSlash(deckAbs))
+	}
+	return deckAbs, nil
 }
 
 func authoringArtifactCandidates(deckAbs, stage string) []string {
