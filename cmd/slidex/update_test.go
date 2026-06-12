@@ -1031,6 +1031,46 @@ func TestRunUpdateApplyRejectsMismatchedTargetTagBeforeActivation(t *testing.T) 
 	}
 }
 
+func TestRunUpdateApplyDoesNotExecuteCandidateBinary(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	sentinel := filepath.Join(t.TempDir(), "executed")
+	writeCandidateBinaryForTestWithSideEffect(t, filepath.Join(candidate, binary), "0.2.0", "pass", sentinel)
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", metadataPath,
+			"--candidate", candidate,
+			"--target-version", "0.2.0",
+			"--target-tag", "v0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("update apply should pass static candidate checks: %v\n%s", runErr, output)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("candidate binary should not execute during apply, sentinel stat err=%v", err)
+	}
+}
+
 func TestActivateStagedInstallRootRollsBackWhenActivationFails(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
@@ -1688,6 +1728,44 @@ func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, metadata.InstalledAt); err != nil {
 		t.Fatalf("pending activation metadata installedAt must be RFC3339, got %q: %v", metadata.InstalledAt, err)
+	}
+}
+
+func TestActivatePendingUpdateDoesNotExecuteStagedCandidateBinary(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	sentinel := filepath.Join(t.TempDir(), "executed")
+	writeCandidateBinaryForTestWithSideEffect(t, filepath.Join(candidate, binary), "0.2.0", "pass", sentinel)
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := activatePendingUpdate(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "applied" {
+		t.Fatalf("activate pending result = %#v", result)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("staged candidate binary should not execute during pending activation, sentinel stat err=%v", err)
 	}
 }
 

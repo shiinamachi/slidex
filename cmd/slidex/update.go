@@ -1365,9 +1365,6 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 	if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
 	}
-	if !hasFailures(result.CandidateValidation) {
-		result.CandidateValidation = append(result.CandidateValidation, validateCandidateBundleDynamicChecks(candidateRoot, targetVersion)...)
-	}
 	if hasFailures(result.CandidateValidation) {
 		return result, nil
 	}
@@ -1566,9 +1563,6 @@ func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
 	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, pending.TargetVersion, filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))...)
 	if metadata, err := readInstallMetadata(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))))
-	}
-	if !hasFailures(result.CandidateValidation) {
-		result.CandidateValidation = append(result.CandidateValidation, validateCandidateBundleDynamicChecks(stagedRoot, pending.TargetVersion)...)
 	}
 	if hasFailures(result.CandidateValidation) {
 		result.Status = "candidate-invalid"
