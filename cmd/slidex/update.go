@@ -48,6 +48,12 @@ const (
 	updateInstallMetadataEnv = "SLIDEX_INSTALL_METADATA"
 	updateAPIURLEnv          = "SLIDEX_UPDATE_API_URL"
 	updateAutoEnv            = "SLIDEX_AUTO_UPDATE"
+
+	maxUpdateArchiveCompressedBytes = int64(512 << 20)
+	maxUpdateChecksumBytes          = int64(4 << 20)
+	maxUpdateArchiveEntries         = 20000
+	maxUpdateArchiveFileBytes       = int64(256 << 20)
+	maxUpdateArchiveExpandedBytes   = int64(1024 << 20)
 )
 
 var (
@@ -956,11 +962,11 @@ func updateStatePackageIdentity(installRoot string) (version, tag string) {
 }
 
 func verifyArchiveCandidateSHA256(archivePath, checksumsPath string) error {
-	payload, err := os.ReadFile(archivePath)
+	payload, err := readRegularFileWithMaxBytes(archivePath, maxUpdateArchiveCompressedBytes)
 	if err != nil {
 		return err
 	}
-	checksumText, err := os.ReadFile(checksumsPath)
+	checksumText, err := readRegularFileWithMaxBytes(checksumsPath, maxUpdateChecksumBytes)
 	if err != nil {
 		return err
 	}
@@ -978,7 +984,38 @@ func extractArchiveCandidate(archivePath, targetVersion, installRoot string) (st
 	if err := ensureSecureDir(stageParent); err != nil {
 		return "", err
 	}
-	return extractReleaseArchive(archivePath, stageParent)
+	candidateRoot, err := extractReleaseArchive(archivePath, stageParent)
+	if err != nil {
+		_ = os.RemoveAll(stageParent)
+		return "", err
+	}
+	return candidateRoot, nil
+}
+
+func readRegularFileWithMaxBytes(path string, maxBytes int64) ([]byte, error) {
+	f, info, err := openRegularFileForRead(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if maxBytes > 0 && info.Size() > maxBytes {
+		return nil, fmt.Errorf("file exceeds maximum allowed size: %s is %d bytes > %d", filepath.ToSlash(path), info.Size(), maxBytes)
+	}
+	return readAllWithMaxBytes(f, maxBytes, filepath.ToSlash(path))
+}
+
+func readAllWithMaxBytes(r io.Reader, maxBytes int64, label string) ([]byte, error) {
+	if maxBytes <= 0 {
+		return io.ReadAll(r)
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("payload exceeds maximum allowed size: %s is greater than %d bytes", label, maxBytes)
+	}
+	return raw, nil
 }
 
 func updateInternalStageDir(installRoot, kind, targetVersion string) (string, error) {
@@ -1063,11 +1100,11 @@ func downloadAndStageSelectedRelease(ctx context.Context, status updateStatus, r
 	if err != nil {
 		return "", "", "", err
 	}
-	archivePayload, err := downloadUpdateAsset(ctx, archive)
+	archivePayload, err := downloadUpdateAsset(ctx, archive, maxUpdateArchiveCompressedBytes)
 	if err != nil {
 		return "", "", "", err
 	}
-	checksumPayload, err := downloadUpdateAsset(ctx, checksum)
+	checksumPayload, err := downloadUpdateAsset(ctx, checksum, maxUpdateChecksumBytes)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1082,7 +1119,7 @@ func downloadAndStageSelectedRelease(ctx context.Context, status updateStatus, r
 	return candidateRoot, contract.Version, release.TagName, nil
 }
 
-func downloadUpdateAsset(ctx context.Context, asset updateAsset) ([]byte, error) {
+func downloadUpdateAsset(ctx context.Context, asset updateAsset, maxBytes int64) ([]byte, error) {
 	if asset.BrowserDownloadURL == "" {
 		return nil, fmt.Errorf("release asset %s is missing browser_download_url", asset.Name)
 	}
@@ -1101,7 +1138,7 @@ func downloadUpdateAsset(ctx context.Context, asset updateAsset) ([]byte, error)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("download %s returned %s: %s", asset.Name, resp.Status, strings.TrimSpace(string(body)))
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 512<<20))
+	return readAllWithMaxBytes(resp.Body, maxBytes, asset.Name)
 }
 
 func stageDownloadedReleaseArchive(installRoot, targetVersion string, archive updateAsset, archivePayload []byte, checksum updateAsset, checksumPayload []byte) (stageParent, archivePath string, err error) {
@@ -1134,7 +1171,50 @@ func extractDownloadedReleaseArchive(stageParent, archivePath string) (candidate
 	if err := ensureSecureDir(extractRoot); err != nil {
 		return "", err
 	}
-	return extractReleaseArchive(archivePath, extractRoot)
+	candidateRoot, err = extractReleaseArchive(archivePath, extractRoot)
+	if err != nil {
+		_ = os.RemoveAll(stageParent)
+		return "", err
+	}
+	return candidateRoot, nil
+}
+
+type updateArchiveExtractionBudget struct {
+	maxEntries  int
+	maxFileSize int64
+	maxTotal    int64
+	entries     int
+	total       int64
+}
+
+func defaultUpdateArchiveExtractionBudget() *updateArchiveExtractionBudget {
+	return &updateArchiveExtractionBudget{
+		maxEntries:  maxUpdateArchiveEntries,
+		maxFileSize: maxUpdateArchiveFileBytes,
+		maxTotal:    maxUpdateArchiveExpandedBytes,
+	}
+}
+
+func (b *updateArchiveExtractionBudget) addEntry(name string) error {
+	b.entries++
+	if b.maxEntries > 0 && b.entries > b.maxEntries {
+		return fmt.Errorf("archive contains too many entries: %d > %d at %s", b.entries, b.maxEntries, name)
+	}
+	return nil
+}
+
+func (b *updateArchiveExtractionBudget) reserveFile(name string, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("archive entry has negative size: %s", name)
+	}
+	if b.maxFileSize > 0 && size > b.maxFileSize {
+		return fmt.Errorf("archive entry exceeds maximum uncompressed size: %s is %d bytes > %d", name, size, b.maxFileSize)
+	}
+	if b.maxTotal > 0 && b.total > b.maxTotal-size {
+		return fmt.Errorf("archive exceeds maximum expanded size at %s: %d bytes > %d", name, b.total+size, b.maxTotal)
+	}
+	b.total += size
+	return nil
 }
 
 func extractReleaseArchive(archivePath, dest string) (string, error) {
@@ -1154,6 +1234,13 @@ func extractReleaseArchive(archivePath, dest string) (string, error) {
 }
 
 func extractTarGzArchive(archivePath, dest string) error {
+	return extractTarGzArchiveWithBudget(archivePath, dest, defaultUpdateArchiveExtractionBudget())
+}
+
+func extractTarGzArchiveWithBudget(archivePath, dest string, budget *updateArchiveExtractionBudget) error {
+	if budget == nil {
+		budget = defaultUpdateArchiveExtractionBudget()
+	}
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -1173,6 +1260,9 @@ func extractTarGzArchive(archivePath, dest string) error {
 		if err != nil {
 			return err
 		}
+		if err := budget.addEntry(header.Name); err != nil {
+			return err
+		}
 		target := filepath.Join(dest, filepath.Clean(header.Name))
 		if !pathWithin(dest, target) {
 			return fmt.Errorf("archive entry escapes extraction root: %s", header.Name)
@@ -1183,10 +1273,13 @@ func extractTarGzArchive(archivePath, dest string) error {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
+			if err := budget.reserveFile(header.Name, header.Size); err != nil {
+				return err
+			}
 			if err := ensureSecureDirMode(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			if err := writeStreamFile(target, tr, os.FileMode(header.Mode)&0o777); err != nil {
+			if err := writeStreamFileLimited(target, tr, os.FileMode(header.Mode)&0o777, header.Size); err != nil {
 				return err
 			}
 		default:
@@ -1197,12 +1290,22 @@ func extractTarGzArchive(archivePath, dest string) error {
 }
 
 func extractZipArchive(archivePath, dest string) error {
+	return extractZipArchiveWithBudget(archivePath, dest, defaultUpdateArchiveExtractionBudget())
+}
+
+func extractZipArchiveWithBudget(archivePath, dest string, budget *updateArchiveExtractionBudget) error {
+	if budget == nil {
+		budget = defaultUpdateArchiveExtractionBudget()
+	}
 	zr, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return err
 	}
 	defer zr.Close()
 	for _, file := range zr.File {
+		if err := budget.addEntry(file.Name); err != nil {
+			return err
+		}
 		target := filepath.Join(dest, filepath.Clean(file.Name))
 		if !pathWithin(dest, target) {
 			return fmt.Errorf("archive entry escapes extraction root: %s", file.Name)
@@ -1217,6 +1320,24 @@ func extractZipArchive(archivePath, dest string) error {
 			}
 			continue
 		}
+		if file.UncompressedSize64 > uint64(1<<63-1) {
+			return fmt.Errorf("archive entry size is too large to validate: %s", file.Name)
+		}
+		uncompressedSize := int64(file.UncompressedSize64)
+		if err := budget.reserveFile(file.Name, uncompressedSize); err != nil {
+			return err
+		}
+	}
+	for _, file := range zr.File {
+		target := filepath.Join(dest, filepath.Clean(file.Name))
+		mode := file.FileInfo().Mode()
+		if file.FileInfo().IsDir() {
+			if err := ensureSecureDirMode(target, archiveDirMode(mode)); err != nil {
+				return err
+			}
+			continue
+		}
+		uncompressedSize := int64(file.UncompressedSize64)
 		rc, err := file.Open()
 		if err != nil {
 			return err
@@ -1225,7 +1346,7 @@ func extractZipArchive(archivePath, dest string) error {
 			_ = rc.Close()
 			return err
 		}
-		err = writeStreamFile(target, rc, mode&0o777)
+		err = writeStreamFileLimited(target, rc, mode&0o777, uncompressedSize)
 		closeErr := rc.Close()
 		if err != nil {
 			return err
@@ -1238,6 +1359,10 @@ func extractZipArchive(archivePath, dest string) error {
 }
 
 func writeStreamFile(path string, r io.Reader, mode os.FileMode) error {
+	return writeStreamFileLimited(path, r, mode, -1)
+}
+
+func writeStreamFileLimited(path string, r io.Reader, mode os.FileMode, maxBytes int64) error {
 	if mode == 0 {
 		mode = 0o644
 	}
@@ -1267,7 +1392,7 @@ func writeStreamFile(path string, r io.Reader, mode os.FileMode) error {
 		_ = tmp.Close()
 		return err
 	}
-	if _, err := io.Copy(tmp, r); err != nil {
+	if err := copyStreamWithMaxBytes(tmp, r, maxBytes, filepath.ToSlash(path)); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -1287,6 +1412,21 @@ func writeStreamFile(path string, r io.Reader, mode os.FileMode) error {
 		return err
 	}
 	cleanup = false
+	return nil
+}
+
+func copyStreamWithMaxBytes(w io.Writer, r io.Reader, maxBytes int64, label string) error {
+	if maxBytes < 0 {
+		_, err := io.Copy(w, r)
+		return err
+	}
+	n, err := io.Copy(w, io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return err
+	}
+	if n > maxBytes {
+		return fmt.Errorf("archive entry exceeds declared extraction budget: %s is greater than %d bytes", label, maxBytes)
+	}
 	return nil
 }
 

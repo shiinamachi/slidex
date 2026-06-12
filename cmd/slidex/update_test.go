@@ -626,6 +626,146 @@ func TestExtractZipArchiveRejectsSymlinkDestinationDirectory(t *testing.T) {
 	}
 }
 
+func TestExtractZipArchiveRejectsExtractionBudgetBeforeWriting(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for _, entry := range []string{"candidate/one.txt", "candidate/two.txt"} {
+		w, err := zw.Create(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("1234")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closeErr := zw.Close()
+	fileErr := f.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if fileErr != nil {
+		t.Fatal(fileErr)
+	}
+
+	extractRoot := t.TempDir()
+	err = extractZipArchiveWithBudget(archivePath, extractRoot, &updateArchiveExtractionBudget{
+		maxEntries:  10,
+		maxFileSize: 10,
+		maxTotal:    5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum expanded size") {
+		t.Fatalf("expected expanded-size budget rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extractRoot, "candidate", "one.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("zip preflight should reject before writing files, stat err=%v", err)
+	}
+
+	entryLimitRoot := t.TempDir()
+	err = extractZipArchiveWithBudget(archivePath, entryLimitRoot, &updateArchiveExtractionBudget{
+		maxEntries:  1,
+		maxFileSize: 10,
+		maxTotal:    100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "too many entries") {
+		t.Fatalf("expected entry-count budget rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(entryLimitRoot, "candidate", "one.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("zip entry-count preflight should reject before writing files, stat err=%v", err)
+	}
+}
+
+func TestExtractTarGzArchiveRejectsExtractionBudget(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "candidate.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	header := &tar.Header{Name: "candidate/file.txt", Mode: 0o644, Size: 6}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("123456")); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := tw.Close()
+	gzErr := gz.Close()
+	fileErr := f.Close()
+	for _, err := range []error{closeErr, gzErr, fileErr} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	extractRoot := t.TempDir()
+	err = extractTarGzArchiveWithBudget(archivePath, extractRoot, &updateArchiveExtractionBudget{
+		maxEntries:  10,
+		maxFileSize: 5,
+		maxTotal:    10,
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum uncompressed size") {
+		t.Fatalf("expected file-size budget rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extractRoot, "candidate", "file.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("tar budget should reject before writing file, stat err=%v", err)
+	}
+}
+
+func TestReadRegularFileWithMaxBytesRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "candidate.zip")
+	if err := os.WriteFile(path, []byte("123456"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readRegularFileWithMaxBytes(path, 5)
+	if err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected read size cap rejection, got %v", err)
+	}
+}
+
+func TestExtractArchiveCandidateCleansStageOnFailure(t *testing.T) {
+	installRoot := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "candidate.zip")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("../escape.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("escape\n")); err != nil {
+		t.Fatal(err)
+	}
+	closeErr := zw.Close()
+	fileErr := f.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if fileErr != nil {
+		t.Fatal(fileErr)
+	}
+
+	_, err = extractArchiveCandidate(archivePath, "0.2.0", installRoot)
+	if err == nil || !strings.Contains(err.Error(), "escapes extraction root") {
+		t.Fatalf("expected extraction failure, got %v", err)
+	}
+	stagedRoot := filepath.Join(installRoot, ".slidex", "staged")
+	entries, readErr := os.ReadDir(stagedRoot)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed extraction should remove staged candidate dirs: %#v", entries)
+	}
+}
+
 func TestValidateCandidateBundleChecksBundledRuntimeContracts(t *testing.T) {
 	root := t.TempDir()
 	writeCandidateBundleForTest(t, root, "0.2.0")
