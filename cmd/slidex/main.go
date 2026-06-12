@@ -2171,7 +2171,11 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err := writePDFFromPNGs(cfg.PDFPath, renderManifestImagePaths(manifestBase, manifest.PNGFiles), pageW, pageH); err != nil {
 		return manifest, err
 	}
-	manifest.PDF = artifactFromPathRelativeWithMaxBytes(cfg.PDFPath, manifestBase, maxRenderedPDFBytes)
+	pdfArtifact, err := artifactFromPathRelativeWithMaxBytesStrict(cfg.PDFPath, manifestBase, maxRenderedPDFBytes)
+	if err != nil {
+		return manifest, err
+	}
+	manifest.PDF = pdfArtifact
 	manifest.PDFPageCount = len(manifest.PNGFiles)
 	manifest.PDFPageSizePoints = dimension{Width: int(math.Round(pageW)), Height: int(math.Round(pageH))}
 
@@ -4235,44 +4239,194 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+type pdfWriteBudget struct {
+	MaxImageStreams     int
+	MaxImageStreamBytes int64
+	MaxImageStreamTotal int64
+	MaxObjectBytes      int64
+	MaxFinalBytes       int64
+}
+
+func defaultPDFWriteBudget() pdfWriteBudget {
+	return pdfWriteBudget{
+		MaxImageStreams:     maxPDFImageStreams,
+		MaxImageStreamBytes: maxPDFImageBytes,
+		MaxImageStreamTotal: maxPDFImageBytes,
+		MaxObjectBytes:      maxPDFImageBytes,
+		MaxFinalBytes:       maxRenderedPDFBytes,
+	}
+}
+
 func writePDFFromPNGs(pdfPath string, paths []string, pageW, pageH float64) error {
+	return writePDFFromPNGsWithBudget(pdfPath, paths, pageW, pageH, defaultPDFWriteBudget())
+}
+
+func writePDFFromPNGsWithBudget(pdfPath string, paths []string, pageW, pageH float64, budget pdfWriteBudget) error {
 	if len(paths) == 0 {
 		return errors.New("no PNG files for PDF")
 	}
-	if err := os.MkdirAll(filepath.Dir(pdfPath), 0o755); err != nil {
+	if budget.MaxImageStreams > 0 && len(paths) > budget.MaxImageStreams {
+		return fmt.Errorf("too many PDF image streams: %d > %d", len(paths), budget.MaxImageStreams)
+	}
+	dir := filepath.Dir(pdfPath)
+	if err := ensureSecureDir(dir); err != nil {
 		return err
 	}
-	var objects [][]byte
-	objects = append(objects, []byte("<< /Type /Catalog /Pages 2 0 R >>"))
+	if err := rejectSecureWriteTarget(pdfPath); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(pdfPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := applyPlatformFileMode(tmpPath, 0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := writePDFObjectsFromPNGs(tmp, paths, pageW, pageH, budget); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if budget.MaxFinalBytes > 0 {
+		info, err := regularFileInfoForRead(tmpPath)
+		if err != nil {
+			return err
+		}
+		if info.Size() > budget.MaxFinalBytes {
+			return fmt.Errorf("PDF exceeds maximum size: %s is %d bytes > %d", filepath.ToSlash(pdfPath), info.Size(), budget.MaxFinalBytes)
+		}
+	}
+	if err := rejectSymlinkAncestors(dir); err != nil {
+		return err
+	}
+	if err := rejectSecureWriteTarget(pdfPath); err != nil {
+		return err
+	}
+	if err := replaceFile(tmpPath, pdfPath); err != nil {
+		return err
+	}
+	if err := applyPlatformFileMode(pdfPath, 0o644); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func writePDFObjectsFromPNGs(out io.Writer, paths []string, pageW, pageH float64, budget pdfWriteBudget) error {
+	writer := &maxBytesWriter{w: out, maxBytes: budget.MaxFinalBytes, label: "PDF"}
+	if _, err := writer.Write([]byte("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n")); err != nil {
+		return err
+	}
+	objectCount := 2 + len(paths)*3
+	offsets := make([]int64, objectCount+1)
+	if err := writePDFObject(writer, offsets, 1, budget, func(w io.Writer) error {
+		_, err := io.WriteString(w, "<< /Type /Catalog /Pages 2 0 R >>")
+		return err
+	}); err != nil {
+		return err
+	}
 	kids := make([]string, len(paths))
 	for i := range paths {
 		kids[i] = fmt.Sprintf("%d 0 R", 3+i*3)
 	}
-	objects = append(objects, []byte(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(paths))))
+	if err := writePDFObject(writer, offsets, 2, budget, func(w io.Writer) error {
+		_, err := fmt.Fprintf(w, "<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(paths))
+		return err
+	}); err != nil {
+		return err
+	}
+	var totalImageStreamBytes int64
 	for i, path := range paths {
 		pageObjID := 3 + i*3
 		imageObjID := pageObjID + 1
 		contentObjID := pageObjID + 2
-		rgb, w, h, err := pngToCompressedRGB(path)
+		rgb, width, height, err := pngToCompressedRGBWithMaxBytes(path, budget.MaxImageStreamBytes)
 		if err != nil {
 			return err
 		}
-		page := fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.3f %.3f] /Resources << /XObject << /Im0 %d 0 R >> >> /Contents %d 0 R >>", pageW, pageH, imageObjID, contentObjID)
-		imageObj := streamObject(fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>", w, h, len(rgb)), rgb)
+		totalImageStreamBytes += int64(len(rgb))
+		if budget.MaxImageStreamTotal > 0 && totalImageStreamBytes > budget.MaxImageStreamTotal {
+			return fmt.Errorf("PDF image stream budget exceeded at %s: %d bytes > %d", filepath.ToSlash(path), totalImageStreamBytes, budget.MaxImageStreamTotal)
+		}
+		if err := writePDFObject(writer, offsets, pageObjID, budget, func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.3f %.3f] /Resources << /XObject << /Im0 %d 0 R >> >> /Contents %d 0 R >>", pageW, pageH, imageObjID, contentObjID)
+			return err
+		}); err != nil {
+			return err
+		}
+		if err := writePDFObject(writer, offsets, imageObjID, budget, func(w io.Writer) error {
+			dict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>", width, height, len(rgb))
+			return writePDFStreamObject(w, dict, rgb)
+		}); err != nil {
+			return err
+		}
 		content := []byte(fmt.Sprintf("q\n%.3f 0 0 %.3f 0 0 cm\n/Im0 Do\nQ\n", pageW, pageH))
-		contentObj := streamObject(fmt.Sprintf("<< /Length %d >>", len(content)), content)
-		objects = append(objects, []byte(page), imageObj, contentObj)
+		if err := writePDFObject(writer, offsets, contentObjID, budget, func(w io.Writer) error {
+			return writePDFStreamObject(w, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+		}); err != nil {
+			return err
+		}
 	}
-	return writePDFObjects(pdfPath, objects)
+	xref := writer.n
+	if _, err := fmt.Fprintf(writer, "xref\n0 %d\n", objectCount+1); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(writer, "0000000000 65535 f \n"); err != nil {
+		return err
+	}
+	for i := 1; i <= objectCount; i++ {
+		if _, err := fmt.Fprintf(writer, "%010d 00000 n \n", offsets[i]); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(writer, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", objectCount+1, xref)
+	return err
+}
+
+type maxBytesWriter struct {
+	w        io.Writer
+	n        int64
+	maxBytes int64
+	label    string
+}
+
+func (w *maxBytesWriter) Write(p []byte) (int, error) {
+	if w.maxBytes > 0 && w.n+int64(len(p)) > w.maxBytes {
+		return 0, fmt.Errorf("%s exceeds maximum size: %d bytes > %d", w.label, w.n+int64(len(p)), w.maxBytes)
+	}
+	n, err := w.w.Write(p)
+	w.n += int64(n)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }
 
 func pngToCompressedRGB(path string) ([]byte, int, int, error) {
+	return pngToCompressedRGBWithMaxBytes(path, 0)
+}
+
+func pngToCompressedRGBWithMaxBytes(path string, maxCompressedBytes int64) ([]byte, int, int, error) {
 	raw, width, height, err := pngToRawRGB(path)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	var compressed bytes.Buffer
-	zw := zlib.NewWriter(&compressed)
+	compressed := &boundedBytesBuffer{maxBytes: maxCompressedBytes, label: "PDF image stream"}
+	zw := zlib.NewWriter(compressed)
 	if _, err := zw.Write(raw); err != nil {
 		return nil, 0, 0, err
 	}
@@ -4280,6 +4434,27 @@ func pngToCompressedRGB(path string) ([]byte, int, int, error) {
 		return nil, 0, 0, err
 	}
 	return compressed.Bytes(), width, height, nil
+}
+
+type boundedBytesBuffer struct {
+	bytes.Buffer
+	maxBytes int64
+	label    string
+}
+
+func (b *boundedBytesBuffer) Write(p []byte) (int, error) {
+	if b.maxBytes <= 0 {
+		return b.Buffer.Write(p)
+	}
+	remaining := b.maxBytes - int64(b.Buffer.Len())
+	if remaining <= 0 {
+		return 0, fmt.Errorf("%s exceeds maximum size: greater than %d bytes", b.label, b.maxBytes)
+	}
+	if int64(len(p)) > remaining {
+		n, _ := b.Buffer.Write(p[:int(remaining)])
+		return n, fmt.Errorf("%s exceeds maximum size: greater than %d bytes", b.label, b.maxBytes)
+	}
+	return b.Buffer.Write(p)
 }
 
 func pngToRawRGB(path string) ([]byte, int, int, error) {
@@ -4309,6 +4484,38 @@ func streamObject(dict string, data []byte) []byte {
 	b.Write(data)
 	b.WriteString("\nendstream")
 	return b.Bytes()
+}
+
+func writePDFObject(w *maxBytesWriter, offsets []int64, objectID int, budget pdfWriteBudget, writeContent func(io.Writer) error) error {
+	offsets[objectID] = w.n
+	start := w.n
+	if _, err := fmt.Fprintf(w, "%d 0 obj\n", objectID); err != nil {
+		return err
+	}
+	if err := writeContent(w); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, "\nendobj\n"); err != nil {
+		return err
+	}
+	if budget.MaxObjectBytes > 0 && w.n-start > budget.MaxObjectBytes {
+		return fmt.Errorf("PDF object %d exceeds maximum size: %d bytes > %d", objectID, w.n-start, budget.MaxObjectBytes)
+	}
+	return nil
+}
+
+func writePDFStreamObject(w io.Writer, dict string, data []byte) error {
+	if _, err := io.WriteString(w, dict); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, "\nstream\n"); err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "\nendstream")
+	return err
 }
 
 func writePDFObjects(path string, objects [][]byte) error {
@@ -5918,6 +6125,18 @@ func artifactFromPathWithMaxBytes(path string, maxBytes int64) artifact {
 	return artifact{Path: path, SHA256: mustSHA256WithMaxBytes(path, maxBytes), Size: info.Size()}
 }
 
+func artifactFromPathWithMaxBytesStrict(path string, maxBytes int64) (artifact, error) {
+	info, err := regularFileInfoForRead(path)
+	if err != nil {
+		return artifact{Path: path}, err
+	}
+	hash, err := sha256FileWithMaxBytes(path, maxBytes)
+	if err != nil {
+		return artifact{Path: path, Size: info.Size()}, err
+	}
+	return artifact{Path: path, SHA256: hash, Size: info.Size()}, nil
+}
+
 func artifactFromPathRelative(path, base string) artifact {
 	artifact := artifactFromPath(path)
 	artifact.Path = portableManifestPath(base, path)
@@ -5928,6 +6147,12 @@ func artifactFromPathRelativeWithMaxBytes(path, base string, maxBytes int64) art
 	artifact := artifactFromPathWithMaxBytes(path, maxBytes)
 	artifact.Path = portableManifestPath(base, path)
 	return artifact
+}
+
+func artifactFromPathRelativeWithMaxBytesStrict(path, base string, maxBytes int64) (artifact, error) {
+	artifact, err := artifactFromPathWithMaxBytesStrict(path, maxBytes)
+	artifact.Path = portableManifestPath(base, path)
+	return artifact, err
 }
 
 func renderManifestBaseDir(manifestPath string) string {

@@ -1268,6 +1268,81 @@ func writeSolidPNGForTest(t *testing.T, path string, c color.RGBA) {
 	}
 }
 
+func TestWritePDFFromPNGsWithBudgetRejectsTooManyImages(t *testing.T) {
+	err := writePDFFromPNGsWithBudget(
+		filepath.Join(t.TempDir(), "final_deck.pdf"),
+		[]string{"slide_01.png", "slide_02.png"},
+		540,
+		304,
+		pdfWriteBudget{MaxImageStreams: 1, MaxFinalBytes: 1 << 20},
+	)
+	if err == nil || !strings.Contains(err.Error(), "too many PDF image streams") {
+		t.Fatalf("expected image stream count rejection, got %v", err)
+	}
+}
+
+func TestWritePDFFromPNGsWithBudgetRejectsImageStreamCap(t *testing.T) {
+	dir := t.TempDir()
+	pngPath := filepath.Join(dir, "slide_01.png")
+	writeSolidPNGForTest(t, pngPath, color.RGBA{R: 255, A: 255})
+	err := writePDFFromPNGsWithBudget(
+		filepath.Join(dir, "final_deck.pdf"),
+		[]string{pngPath},
+		540,
+		304,
+		pdfWriteBudget{
+			MaxImageStreams:     1,
+			MaxImageStreamBytes: 1,
+			MaxImageStreamTotal: 1 << 20,
+			MaxObjectBytes:      1 << 20,
+			MaxFinalBytes:       1 << 20,
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "PDF image stream") {
+		t.Fatalf("expected image stream size rejection, got %v", err)
+	}
+}
+
+func TestWritePDFFromPNGsWithBudgetRejectsFinalPDFCap(t *testing.T) {
+	dir := t.TempDir()
+	pngPath := filepath.Join(dir, "slide_01.png")
+	writeSolidPNGForTest(t, pngPath, color.RGBA{B: 255, A: 255})
+	err := writePDFFromPNGsWithBudget(
+		filepath.Join(dir, "final_deck.pdf"),
+		[]string{pngPath},
+		540,
+		304,
+		pdfWriteBudget{
+			MaxImageStreams:     1,
+			MaxImageStreamBytes: 1 << 20,
+			MaxImageStreamTotal: 1 << 20,
+			MaxObjectBytes:      1 << 20,
+			MaxFinalBytes:       64,
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "PDF exceeds maximum size") {
+		t.Fatalf("expected final PDF size rejection, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "final_deck.pdf")); !os.IsNotExist(statErr) {
+		t.Fatalf("over-budget PDF should not be installed, stat err=%v", statErr)
+	}
+}
+
+func TestArtifactFromPathRelativeWithMaxBytesStrictRejectsOversizedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "final_deck.pdf")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 32)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := artifactFromPathRelativeWithMaxBytesStrict(path, dir, 16)
+	if err == nil || !strings.Contains(err.Error(), "maximum hash size") {
+		t.Fatalf("expected strict artifact hash rejection, got artifact=%#v err=%v", artifact, err)
+	}
+	if artifact.SHA256 != "" {
+		t.Fatalf("strict artifact should not invent hash on failure: %#v", artifact)
+	}
+}
+
 func TestRunIntakeInteractiveAppliesAnswers(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()
