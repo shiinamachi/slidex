@@ -56,6 +56,9 @@ const (
 	maxUpdateArchiveFileBytes       = int64(256 << 20)
 	maxUpdateArchiveExpandedBytes   = int64(1024 << 20)
 	maxUpdateZipCentralDirBytes     = int64(64 << 20)
+	maxUpdateMetadataBytes          = int64(1 << 20)
+	maxUpdateCandidateJSONBytes     = int64(4 << 20)
+	maxUpdateVersionBytes           = int64(64 << 10)
 	updateReleaseFetchTimeout       = 30 * time.Second
 	updateAssetDownloadTimeout      = 2 * time.Minute
 	updateHTTPClientTimeout         = 2 * time.Minute
@@ -1903,7 +1906,7 @@ func pendingUpdatePath(installRoot string) string {
 
 func readPendingUpdate(installRoot string) (*pendingUpdate, string, error) {
 	path := pendingUpdatePath(installRoot)
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxUpdateMetadataBytes)
 	if err != nil {
 		return nil, path, err
 	}
@@ -2279,7 +2282,7 @@ func validateRawJSONAgainstBundledSchema(raw []byte, schemaName string) error {
 }
 
 func readInstallMetadata(path string) (*installMetadata, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxUpdateMetadataBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -2299,7 +2302,7 @@ func readInstallMetadata(path string) (*installMetadata, error) {
 
 func readUpdateState(installRoot string) (*updateState, string, error) {
 	path := updateStatePath(installRoot)
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxUpdateMetadataBytes)
 	if err != nil {
 		return nil, path, err
 	}
@@ -2882,9 +2885,12 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 			findings = append(findings, fail("update.candidate_runtime", "missing candidate runtime path: "+err.Error(), filepath.ToSlash(path)))
 		}
 	}
-	version := strings.TrimSpace(readFileOrEmpty(filepath.Join(root, "VERSION")))
-	if version != expectedBaseVersion {
-		findings = append(findings, fail("update.candidate_version", fmt.Sprintf("candidate VERSION must be %s, got %s", expectedBaseVersion, firstNonEmpty(version, "missing")), filepath.ToSlash(filepath.Join(root, "VERSION"))))
+	versionPath := filepath.Join(root, "VERSION")
+	versionRaw, versionErr := readRegularFileWithMaxBytes(versionPath, maxUpdateVersionBytes)
+	if versionErr != nil {
+		findings = append(findings, fail("update.candidate_version", "candidate VERSION could not be read safely: "+versionErr.Error(), filepath.ToSlash(versionPath)))
+	} else if version := strings.TrimSpace(string(versionRaw)); version != expectedBaseVersion {
+		findings = append(findings, fail("update.candidate_version", fmt.Sprintf("candidate VERSION must be %s, got %s", expectedBaseVersion, firstNonEmpty(version, "missing")), filepath.ToSlash(versionPath)))
 	}
 	metadataPath := filepath.Join(root, ".slidex", "install.json")
 	if metadata, err := readInstallMetadata(metadataPath); err != nil {
@@ -3043,7 +3049,7 @@ func candidateDoctorStatus(root, binaryPath string) (string, error) {
 }
 
 func readCandidateJSON(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxUpdateCandidateJSONBytes)
 	if err != nil {
 		return nil, err
 	}

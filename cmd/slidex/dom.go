@@ -23,6 +23,12 @@ type chromeEnumeratedSlide struct {
 	Headline  string `json:"headline"`
 }
 
+type chromeSlideEnumerationReport struct {
+	Slides      []chromeEnumeratedSlide `json:"slides"`
+	TotalSlides int                     `json:"totalSlides"`
+	Error       string                  `json:"error,omitempty"`
+}
+
 func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
 	raw, err := readRegularFile(htmlPath)
 	if err != nil {
@@ -40,7 +46,10 @@ func extractSlidesWithChromeFromHTML(chromePath, htmlPath, src, selector string,
 	}
 	probeNonce := newProbeNonce()
 	probeHTML := stripExecutableHTMLForProbe(src)
-	injected := injectDocumentBase(injectSlideEnumerationScript(probeHTML, probeNonce), documentBaseHrefForHTMLPath(htmlPath))
+	if _, err := extractSlidesHTMLParserWithLimit(probeHTML, maxRenderSlides); err != nil {
+		return nil, "", err
+	}
+	injected := injectDocumentBase(injectSlideEnumerationScript(probeHTML, probeNonce, maxRenderSlides, maxSlideEnumerationOuterHTMLBytes, maxSlideEnumerationTotalHTMLBytes), documentBaseHrefForHTMLPath(htmlPath))
 	tmpDir, err := os.MkdirTemp("", "slidex-dom-enum-*")
 	if err != nil {
 		return nil, "", err
@@ -68,8 +77,8 @@ func extractSlidesWithChromeFromHTML(chromePath, htmlPath, src, selector string,
 	if !found {
 		return nil, "", errorsNew("slide enumeration data missing from dumped DOM")
 	}
-	var enumerated []chromeEnumeratedSlide
-	if err := json.Unmarshal([]byte(payload), &enumerated); err != nil {
+	enumerated, err := decodeChromeSlideEnumeration(payload)
+	if err != nil {
 		return nil, "", err
 	}
 	slides := make([]slideInfo, 0, len(enumerated))
@@ -94,6 +103,27 @@ func extractSlidesWithChromeFromHTML(chromePath, htmlPath, src, selector string,
 		return nil, "", errorsNew("Chrome DOM enumeration found no .slide elements")
 	}
 	return slides, "chrome-dom", nil
+}
+
+func decodeChromeSlideEnumeration(payload string) ([]chromeEnumeratedSlide, error) {
+	var report chromeSlideEnumerationReport
+	if err := json.Unmarshal([]byte(payload), &report); err == nil && (report.Slides != nil || report.Error != "" || report.TotalSlides != 0) {
+		if report.Error != "" {
+			return nil, errorsNew(report.Error)
+		}
+		if err := enforceRenderSlideLimit(report.TotalSlides); err != nil {
+			return nil, err
+		}
+		return report.Slides, nil
+	}
+	var slides []chromeEnumeratedSlide
+	if err := json.Unmarshal([]byte(payload), &slides); err != nil {
+		return nil, err
+	}
+	if err := enforceRenderSlideLimit(len(slides)); err != nil {
+		return nil, err
+	}
+	return slides, nil
 }
 
 func documentBaseHrefForHTMLPath(htmlPath string) string {
@@ -303,7 +333,7 @@ func isElementNamed(node *xhtml.Node, name string) bool {
 	return node != nil && node.Type == xhtml.ElementNode && strings.EqualFold(node.Data, name)
 }
 
-func injectSlideEnumerationScript(src, probeNonce string) string {
+func injectSlideEnumerationScript(src, probeNonce string, maxSlides int, maxOuterHTMLBytes, maxTotalOuterHTMLBytes int64) string {
 	script := fmt.Sprintf(`<script>
 (function() {
   function textOf(el) { return (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(); }
@@ -313,17 +343,37 @@ func injectSlideEnumerationScript(src, probeNonce string) string {
   }
   function idOf(el, index) { return el.getAttribute('data-slide-id') || el.id || ('slide_' + String(index + 1).padStart(2, '0')); }
   function emit() {
-    const slides = Array.from(document.querySelectorAll('.slide')).map((el, index) => ({
-      id: idOf(el, index),
-      outerHTML: el.outerHTML,
-      text: textOf(el),
-      headline: headlineOf(el)
-    }));
+    const nodes = Array.from(document.querySelectorAll('.slide'));
+    const payload = { slides: [], totalSlides: nodes.length };
+    let totalOuterHTML = 0;
+    if (nodes.length > %d) {
+      payload.error = 'too many slides to render: ' + nodes.length + ' > %d';
+    } else {
+      for (let index = 0; index < nodes.length; index++) {
+        const el = nodes[index];
+        const outerHTML = el.outerHTML || '';
+        if (outerHTML.length > %d) {
+          payload.error = 'slide enumeration outerHTML exceeds maximum size for slide ' + idOf(el, index);
+          break;
+        }
+        totalOuterHTML += outerHTML.length;
+        if (totalOuterHTML > %d) {
+          payload.error = 'slide enumeration payload exceeds maximum size';
+          break;
+        }
+        payload.slides.push({
+          id: idOf(el, index),
+          outerHTML: outerHTML,
+          text: textOf(el),
+          headline: headlineOf(el)
+        });
+      }
+    }
     const report = document.createElement('script');
     report.id = 'slidex-slide-enumeration';
     report.type = 'application/json';
     report.setAttribute('data-slidex-probe', %s);
-    report.textContent = JSON.stringify(slides);
+    report.textContent = JSON.stringify(payload);
     document.body.appendChild(report);
   }
   if (document.readyState === 'loading') {
@@ -332,7 +382,7 @@ func injectSlideEnumerationScript(src, probeNonce string) string {
     emit();
   }
 })();
-</script>`, jsStringLiteral(probeNonce))
+</script>`, maxSlides, maxSlides, maxOuterHTMLBytes, maxTotalOuterHTMLBytes, jsStringLiteral(probeNonce))
 	lower := strings.ToLower(src)
 	if idx := strings.LastIndex(lower, "</body>"); idx >= 0 {
 		return src[:idx] + script + src[idx:]
@@ -486,15 +536,27 @@ func isExecutableURLAttrForProbe(key string) bool {
 }
 
 func extractSlidesHTMLParser(src string) []slideInfo {
+	slides, _ := extractSlidesHTMLParserWithLimit(src, 0)
+	return slides
+}
+
+func extractSlidesHTMLParserWithLimit(src string, maxSlides int) ([]slideInfo, error) {
 	doc, err := xhtml.Parse(strings.NewReader(src))
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var slides []slideInfo
+	var limitErr error
 	var walk func(*xhtml.Node)
 	walk = func(n *xhtml.Node) {
+		if limitErr != nil {
+			return
+		}
 		if n.Type == xhtml.ElementNode && hasNodeClass(n, "slide") {
 			slides = append(slides, slideInfoFromNode(n))
+			if maxSlides > 0 && len(slides) > maxSlides {
+				limitErr = fmt.Errorf("too many slides to render: %d > %d", len(slides), maxSlides)
+			}
 			return
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -502,7 +564,10 @@ func extractSlidesHTMLParser(src string) []slideInfo {
 		}
 	}
 	walk(doc)
-	return slides
+	if limitErr != nil {
+		return slides, limitErr
+	}
+	return slides, nil
 }
 
 func slideInfoFromNode(n *xhtml.Node) slideInfo {

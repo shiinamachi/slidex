@@ -2096,6 +2096,35 @@ func TestReadPendingUpdateRejectsAdditionalProperties(t *testing.T) {
 	}
 }
 
+func TestReadPendingUpdateRejectsSymlink(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "pending_update.json")
+	if err := os.WriteFile(outside, []byte(`{"schemaVersion":"slidex.pendingUpdate.v1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, pendingUpdatePath(installRoot)); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	_, _, err := readPendingUpdate(installRoot)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection, got %v", err)
+	}
+}
+
+func TestReadCandidateJSONRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugin.json")
+	if err := os.WriteFile(path, []byte(`{"padding":"`+strings.Repeat("x", int(maxUpdateCandidateJSONBytes)+1)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCandidateJSON(path); err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected oversized candidate JSON rejection, got %v", err)
+	}
+}
+
 func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")

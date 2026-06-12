@@ -4604,6 +4604,105 @@ func TestReadHashesRejectSymlinkTargets(t *testing.T) {
 	}
 }
 
+func TestSHA256FileWithMaxBytesRejectsOversizedRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.bin")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 32)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sha256FileWithMaxBytes(path, 16); err == nil || !strings.Contains(err.Error(), "maximum hash size") {
+		t.Fatalf("expected bounded hash rejection, got %v", err)
+	}
+}
+
+func TestLocalDependenciesDoNotHashOutsideDeckWorkspace(t *testing.T) {
+	root := t.TempDir()
+	deck := filepath.Join(root, "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	htmlPath := filepath.Join(outDir, "final_deck.html")
+	deps, findings := localDependenciesWithFindings(htmlPath, `<img src="../../outside.txt">`)
+	if len(findings) != 0 {
+		t.Fatalf("dependency scan findings = %#v", findings)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected one dependency, got %#v", deps)
+	}
+	if deps[0].SHA256 != "" {
+		t.Fatalf("outside dependency should not be hashed: %#v", deps[0])
+	}
+	if !strings.Contains(deps[0].Risk, "outside the deck workspace") {
+		t.Fatalf("outside dependency risk missing: %#v", deps[0])
+	}
+}
+
+func TestVerifyManifestDependenciesRejectsOutsidePathBeforeHash(t *testing.T) {
+	root := t.TempDir()
+	deck := filepath.Join(root, "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256Bytes([]byte("outside"))
+	findings := verifyManifestDependencies("asset", []dependency{{Kind: "asset", Path: outside, SHA256: hash}}, nil, filepath.Join(outDir, "render_manifest.json"))
+	if !findingCheckPresent(findings, "package.asset_dependency") {
+		t.Fatalf("outside manifest dependency finding missing: %#v", findings)
+	}
+	if !strings.Contains(findings[0].Message, "outside the deck workspace") {
+		t.Fatalf("outside dependency message missing: %#v", findings)
+	}
+}
+
+func TestRenderConfigRejectsOversizedViewport(t *testing.T) {
+	_, err := renderConfigFromFlags("deck/out/final_deck.html", "", "", "", "paginated", ".slide", int(maxRenderedPNGPixels)+1, 1, "pretendard", "", false)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum pixel count") {
+		t.Fatalf("expected oversized viewport rejection, got %v", err)
+	}
+}
+
+func TestExtractSlidesWithChromeRejectsTooManySlidesBeforeChrome(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<!doctype html><html><body>`)
+	for i := 0; i < maxRenderSlides+1; i++ {
+		fmt.Fprintf(&b, `<section class="slide" id="slide_%03d"><h1>Slide</h1></section>`, i)
+	}
+	b.WriteString(`</body></html>`)
+	_, _, err := extractSlidesWithChromeFromHTML(filepath.Join(t.TempDir(), "missing-chrome"), filepath.Join(t.TempDir(), "final_deck.html"), b.String(), ".slide", false)
+	if err == nil || !strings.Contains(err.Error(), "too many slides") {
+		t.Fatalf("expected slide limit before Chrome, got %v", err)
+	}
+}
+
+func TestRunChromeCommandRejectsOversizedOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell helper script is Unix-specific")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-chrome")
+	body := "#!/bin/sh\n" +
+		"i=0\n" +
+		"while [ \"$i\" -lt 2048 ]; do printf x; i=$((i+1)); done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runChromeCommandWithMaxOutput(time.Second, 128, script)
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+		t.Fatalf("expected bounded chrome output error, got %v", err)
+	}
+	if len(out) > 128 {
+		t.Fatalf("bounded output retained %d bytes", len(out))
+	}
+}
+
 func TestHTMLFreshnessFindingsFailClosedOnHashErrors(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "outside.html")
 	if err := os.WriteFile(target, []byte("outside\n"), 0o644); err != nil {
@@ -5240,8 +5339,8 @@ func TestCollectDependenciesFlagsExternalLocalFiles(t *testing.T) {
 	if !ok {
 		t.Fatalf("external dependency not collected: %#v", assets)
 	}
-	if dep.SHA256 == "" {
-		t.Fatalf("external dependency should still record hash: %#v", dep)
+	if dep.SHA256 != "" {
+		t.Fatalf("external dependency should not be hashed: %#v", dep)
 	}
 	if !strings.Contains(dep.Risk, "outside the deck workspace") {
 		t.Fatalf("external dependency should record portability risk: %#v", dep)

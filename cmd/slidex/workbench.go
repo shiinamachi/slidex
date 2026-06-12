@@ -2859,7 +2859,7 @@ func localPluginVersion() string {
 	if path == "" {
 		path = filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxUpdateCandidateJSONBytes)
 	if err != nil {
 		return ""
 	}

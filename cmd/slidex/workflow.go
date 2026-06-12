@@ -7752,11 +7752,14 @@ func packageHasStaleFinding(findings []qaFinding) bool {
 func hashFileSet(glob string) string {
 	paths, _ := filepath.Glob(glob)
 	sort.Strings(paths)
+	if len(paths) > maxRenderSlides {
+		return sha256Bytes([]byte(fmt.Sprintf("ERROR:too many files for hash set: %d > %d", len(paths), maxRenderSlides)))
+	}
 	var b strings.Builder
 	for _, path := range paths {
 		b.WriteString(filepath.ToSlash(path))
 		b.WriteString(" ")
-		hash, err := sha256File(path)
+		hash, err := sha256FileWithMaxBytes(path, maxRenderedPNGBytes)
 		if err != nil {
 			hash = "ERROR:" + err.Error()
 		}
@@ -8119,7 +8122,7 @@ func nullOrRaw(s string) []byte {
 }
 
 func readFileOrEmpty(path string) string {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckTextArtifactBytes)
 	if err != nil {
 		return ""
 	}

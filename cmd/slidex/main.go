@@ -52,19 +52,26 @@ const (
 	chromeVersionTimeout = 8 * time.Second
 	chromeCommandTimeout = 45 * time.Second
 
-	maxRenderedPNGBytes  = int64(128 << 20)
-	maxRenderedPNGPixels = int64(64_000_000)
-	maxRenderedPDFBytes  = int64(512 << 20)
-	maxMontageSlides     = 500
-	maxMontagePixels     = maxRenderedPNGPixels
-	maxPDFImageStreams   = maxMontageSlides
-	maxPDFImageBytes     = maxRenderedPDFBytes
+	maxRenderedPNGBytes               = int64(128 << 20)
+	maxRenderedPNGPixels              = int64(64_000_000)
+	maxRenderedPDFBytes               = int64(512 << 20)
+	maxMontageSlides                  = 500
+	maxMontagePixels                  = maxRenderedPNGPixels
+	maxPDFImageStreams                = maxMontageSlides
+	maxPDFImageBytes                  = maxRenderedPDFBytes
+	maxRenderSlides                   = maxMontageSlides
+	maxSlideEnumerationOuterHTMLBytes = int64(16 << 20)
 
-	maxDeckJSONBytes         = int64(16 << 20)
-	maxDeckMarkdownBytes     = int64(16 << 20)
-	maxDeckLogBytes          = int64(16 << 20)
-	maxDeckHTMLBytes         = int64(64 << 20)
-	maxDeckTextArtifactBytes = maxDeckHTMLBytes
+	maxDeckJSONBytes                  = int64(16 << 20)
+	maxDeckMarkdownBytes              = int64(16 << 20)
+	maxDeckLogBytes                   = int64(16 << 20)
+	maxDeckHTMLBytes                  = int64(64 << 20)
+	maxDeckTextArtifactBytes          = maxDeckHTMLBytes
+	maxSlideEnumerationTotalHTMLBytes = maxDeckHTMLBytes
+	maxChromeOutputBytes              = maxDeckHTMLBytes
+	maxHashFileBytes                  = maxRenderedPDFBytes
+	maxDependencyHashBytes            = maxRenderedPNGBytes
+	maxDependencyHashTotal            = maxRenderedPDFBytes
 )
 
 func isReleaseBaseVersion(version string) bool {
@@ -1416,7 +1423,7 @@ func editorialRenderFindings(htmlSlides []slideInfo, pngs []string, manifest ren
 		findings = append(findings, fail("ED-STRUCT-001", "slide, PNG, PDF, and manifest counts do not reconcile: "+formatCountMap(counts), manifestPath))
 	}
 	for _, img := range manifest.PNGFiles {
-		if hash, err := sha256File(img.Path); err != nil {
+		if hash, err := sha256FileWithMaxBytes(img.Path, maxRenderedPNGBytes); err != nil {
 			findings = append(findings, fail("ED-RENDER-001", "manifest PNG is missing: "+err.Error(), img.Path))
 		} else if hash != img.SHA256 {
 			findings = append(findings, fail("ED-RENDER-001", "manifest PNG hash does not match current file", img.Path))
@@ -1426,7 +1433,7 @@ func editorialRenderFindings(htmlSlides []slideInfo, pngs []string, manifest ren
 		findings = append(findings, fail("ED-RENDER-001", fmt.Sprintf("manifest PNG count %d does not match rendered slide files %d", len(manifest.PNGFiles), len(pngs)), renderedDir))
 	}
 	if manifest.PDF.Path != "" {
-		if hash, err := sha256File(manifest.PDF.Path); err != nil {
+		if hash, err := sha256FileWithMaxBytes(manifest.PDF.Path, maxRenderedPDFBytes); err != nil {
 			findings = append(findings, fail("ED-RENDER-002", "manifest PDF is missing: "+err.Error(), manifest.PDF.Path))
 		} else if hash != manifest.PDF.SHA256 {
 			findings = append(findings, fail("ED-RENDER-002", "manifest PDF hash does not match current file", manifest.PDF.Path))
@@ -1595,11 +1602,11 @@ func formatCountMap(counts map[string]int) string {
 }
 
 func verifyHTMLEditSync(htmlPath, baselinePath string) []qaFinding {
-	htmlHash, htmlErr := sha256File(htmlPath)
+	htmlHash, htmlErr := sha256FileWithMaxBytes(htmlPath, maxDeckHTMLBytes)
 	if htmlErr != nil {
 		return []qaFinding{fail("ED-RENDER-003", "could not hash final_deck.html: "+htmlErr.Error(), htmlPath)}
 	}
-	baselineHash, baselineErr := sha256File(baselinePath)
+	baselineHash, baselineErr := sha256FileWithMaxBytes(baselinePath, maxDeckHTMLBytes)
 	if baselineErr != nil {
 		return []qaFinding{fail("ED-RENDER-003", "could not hash final_deck.generated_baseline.html: "+baselineErr.Error(), baselinePath)}
 	}
@@ -2012,6 +2019,9 @@ func renderConfigFromFlags(htmlPath, outDir, pdfPath, manifestPath, pdfMode, sel
 	if width <= 0 || height <= 0 {
 		return renderConfig{}, errors.New("--width and --height must be positive")
 	}
+	if _, err := renderedRGBByteCount(width, height, "render viewport"); err != nil {
+		return renderConfig{}, err
+	}
 	htmlAbs, err := filepath.Abs(htmlPath)
 	if err != nil {
 		return renderConfig{}, err
@@ -2070,6 +2080,9 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		slides = parserSlides
 		enumMethod = "go-html-parser-fallback"
 	}
+	if err := enforceRenderSlideLimit(len(slides)); err != nil {
+		return renderManifest{}, err
+	}
 	if err := prepareRenderedSlidesDir(cfg.OutDir); err != nil {
 		return renderManifest{}, err
 	}
@@ -2088,7 +2101,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	manifest.ToolName = toolName
 	manifest.Version = toolVersion
 	manifest.RenderTimestamp = time.Now().UTC().Format(time.RFC3339)
-	manifest.SourceHTML = artifactFromPath(cfg.HTMLPath)
+	manifest.SourceHTML = artifactFromPathWithMaxBytes(cfg.HTMLPath, maxDeckHTMLBytes)
 	stylesheets, assets, fonts, dependencyErr := collectDependenciesWithBudget(cfg.HTMLPath, string(raw), cfg.FontPreset, defaultDependencyScanBudget())
 	if dependencyErr != nil {
 		return renderManifest{}, fmt.Errorf("collect render manifest dependencies: %w", dependencyErr)
@@ -2146,7 +2159,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		img := renderedImage{
 			SlideID:    slide.ID,
 			Path:       portableManifestPath(manifestBase, pngPath),
-			SHA256:     mustSHA256(pngPath),
+			SHA256:     mustSHA256WithMaxBytes(pngPath, maxRenderedPNGBytes),
 			Dimensions: dim,
 			Blank:      blank,
 		}
@@ -2158,7 +2171,7 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err := writePDFFromPNGs(cfg.PDFPath, renderManifestImagePaths(manifestBase, manifest.PNGFiles), pageW, pageH); err != nil {
 		return manifest, err
 	}
-	manifest.PDF = artifactFromPathRelative(cfg.PDFPath, manifestBase)
+	manifest.PDF = artifactFromPathRelativeWithMaxBytes(cfg.PDFPath, manifestBase, maxRenderedPDFBytes)
 	manifest.PDFPageCount = len(manifest.PNGFiles)
 	manifest.PDFPageSizePoints = dimension{Width: int(math.Round(pageW)), Height: int(math.Round(pageH))}
 
@@ -2166,9 +2179,9 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if err != nil {
 		return manifest, err
 	}
-	manifest.QAMontage = artifactFromPathRelative(cfg.MontagePath, manifestBase)
+	manifest.QAMontage = artifactFromPathRelativeWithMaxBytes(cfg.MontagePath, manifestBase, maxRenderedPNGBytes)
 	manifest.QAMontageDimensions = montageDim
-	manifest.SourceHTML = artifactFromPathRelative(cfg.HTMLPath, manifestBase)
+	manifest.SourceHTML = artifactFromPathRelativeWithMaxBytes(cfg.HTMLPath, manifestBase, maxDeckHTMLBytes)
 
 	if err := os.MkdirAll(filepath.Dir(cfg.ManifestPath), 0o755); err != nil {
 		return manifest, err
@@ -2177,6 +2190,13 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		return manifest, err
 	}
 	return resolveRenderManifestPaths(cfg.ManifestPath, manifest), nil
+}
+
+func enforceRenderSlideLimit(count int) error {
+	if count > maxRenderSlides {
+		return fmt.Errorf("too many slides to render: %d > %d", count, maxRenderSlides)
+	}
+	return nil
 }
 
 func extractSlides(src string) []slideInfo {
@@ -2582,14 +2602,58 @@ func chromeVersion(chromePath string) string {
 	return version
 }
 
+type limitedOutputBuffer struct {
+	buf       bytes.Buffer
+	maxBytes  int64
+	truncated bool
+}
+
+func (b *limitedOutputBuffer) Write(p []byte) (int, error) {
+	if b.maxBytes <= 0 {
+		_, err := b.buf.Write(p)
+		return len(p), err
+	}
+	remaining := b.maxBytes - int64(b.buf.Len())
+	if remaining > 0 {
+		n := len(p)
+		if int64(n) > remaining {
+			n = int(remaining)
+		}
+		if n > 0 {
+			if _, err := b.buf.Write(p[:n]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if int64(len(p)) > remaining {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *limitedOutputBuffer) Bytes() []byte {
+	return b.buf.Bytes()
+}
+
+func (b *limitedOutputBuffer) Err(label string) error {
+	if !b.truncated {
+		return nil
+	}
+	return fmt.Errorf("%s output exceeded maximum allowed size: greater than %d bytes", label, b.maxBytes)
+}
+
 func runChromeCommand(timeout time.Duration, chromePath string, args ...string) ([]byte, error) {
+	return runChromeCommandWithMaxOutput(timeout, maxChromeOutputBytes, chromePath, args...)
+}
+
+func runChromeCommandWithMaxOutput(timeout time.Duration, maxOutputBytes int64, chromePath string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.Command(chromePath, args...)
 	configureProcessGroupCommand(cmd)
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	output := &limitedOutputBuffer{maxBytes: maxOutputBytes}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
 		return output.Bytes(), err
 	}
@@ -2599,6 +2663,12 @@ func runChromeCommand(timeout time.Duration, chromePath string, args ...string) 
 	}()
 	select {
 	case err := <-done:
+		if outputErr := output.Err("chrome"); outputErr != nil {
+			if err != nil {
+				return output.Bytes(), fmt.Errorf("%w; %v", err, outputErr)
+			}
+			return output.Bytes(), outputErr
+		}
 		return output.Bytes(), err
 	case <-ctx.Done():
 		if cmd.Process != nil {
@@ -2607,6 +2677,9 @@ func runChromeCommand(timeout time.Duration, chromePath string, args ...string) 
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
+		}
+		if outputErr := output.Err("chrome"); outputErr != nil {
+			return output.Bytes(), fmt.Errorf("chrome timed out after %s; %v", timeout, outputErr)
 		}
 		return output.Bytes(), fmt.Errorf("chrome timed out after %s", timeout)
 	}
@@ -2945,13 +3018,49 @@ type renderResourceRef struct {
 }
 
 type renderResourcePreflightBudget struct {
-	MaxCSSFiles    int
-	MaxCSSBytes    int64
-	MaxResourceRef int
+	MaxCSSFiles            int
+	MaxCSSBytes            int64
+	MaxResourceRef         int
+	MaxDependencyHashBytes int64
+	MaxDependencyHashTotal int64
 }
 
 type dependencyScanBudgetError struct {
 	message string
+}
+
+type dependencyHashBudget struct {
+	root     string
+	perFile  int64
+	maxTotal int64
+	total    int64
+}
+
+func (b *dependencyHashBudget) hash(path string) (string, error) {
+	if b == nil {
+		return sha256FileWithMaxBytes(path, maxDependencyHashBytes)
+	}
+	if b.root != "" {
+		if filepath.VolumeName(b.root) != filepath.VolumeName(path) || !pathWithin(b.root, path) {
+			return "", fmt.Errorf("local dependency is outside the deck workspace and will not be hashed: %s", filepath.ToSlash(path))
+		}
+	}
+	info, err := regularFileInfoForRead(path)
+	if err != nil {
+		return "", err
+	}
+	if b.perFile > 0 && info.Size() > b.perFile {
+		return "", fmt.Errorf("dependency file exceeds maximum hash size: %s is %d bytes > %d", filepath.ToSlash(path), info.Size(), b.perFile)
+	}
+	if b.maxTotal > 0 && b.total+info.Size() > b.maxTotal {
+		return "", fmt.Errorf("dependency hash budget exceeded at %s: %d bytes > %d", filepath.ToSlash(path), b.total+info.Size(), b.maxTotal)
+	}
+	hash, err := sha256FileWithMaxBytes(path, b.perFile)
+	if err != nil {
+		return "", err
+	}
+	b.total += info.Size()
+	return hash, nil
 }
 
 func (e *dependencyScanBudgetError) Error() string {
@@ -2973,9 +3082,11 @@ func renderResourceRequestPreflight(htmlPath, src string) error {
 
 func defaultDependencyScanBudget() renderResourcePreflightBudget {
 	return renderResourcePreflightBudget{
-		MaxCSSFiles:    maxRenderPreflightCSSFiles,
-		MaxCSSBytes:    maxRenderPreflightCSSBytes,
-		MaxResourceRef: maxRenderPreflightResourceRef,
+		MaxCSSFiles:            maxRenderPreflightCSSFiles,
+		MaxCSSBytes:            maxRenderPreflightCSSBytes,
+		MaxResourceRef:         maxRenderPreflightResourceRef,
+		MaxDependencyHashBytes: maxDependencyHashBytes,
+		MaxDependencyHashTotal: maxDependencyHashTotal,
 	}
 }
 
@@ -3242,6 +3353,11 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 
 func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget renderResourcePreflightBudget) ([]dependency, []dependency, []dependency, error) {
 	base := filepath.Dir(htmlPath)
+	hashBudget := &dependencyHashBudget{
+		root:     localDependencyPortableRoot(base),
+		perFile:  budget.MaxDependencyHashBytes,
+		maxTotal: budget.MaxDependencyHashTotal,
+	}
 	var styles []dependency
 	var assets []dependency
 	var fonts []dependency
@@ -3279,7 +3395,7 @@ func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget rend
 	}
 	appendStylesheet := func(cssBase, ref, id string) dependency {
 		dep := dependency{ID: id, Kind: "stylesheet"}
-		fillDependencyWithPortableBase(&dep, cssBase, base, ref)
+		fillDependencyWithPortableBaseAndBudget(&dep, cssBase, base, ref, hashBudget)
 		styles = appendDependencyIfNew(styles, styleSeen, dep)
 		return dep
 	}
@@ -3314,7 +3430,7 @@ func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget rend
 			case "url", "image-set":
 				cssURLCount++
 				dep := dependency{ID: fmt.Sprintf("%s_url_%02d", idPrefix, cssURLCount), Kind: "asset"}
-				fillDependencyWithPortableBase(&dep, cssBase, base, ref)
+				fillDependencyWithPortableBaseAndBudget(&dep, cssBase, base, ref, hashBudget)
 				assets = appendDependencyIfNew(assets, assetSeen, dep)
 			}
 		}
@@ -3364,7 +3480,7 @@ func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget rend
 								return
 							}
 							dep := dependency{Kind: "asset"}
-							fillDependency(&dep, base, candidate)
+							fillDependencyWithBudget(&dep, base, candidate, hashBudget)
 							assets = appendDependencyIfNew(assets, assetSeen, dep)
 						}
 						continue
@@ -3375,7 +3491,7 @@ func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget rend
 								return
 							}
 							dep := dependency{Kind: "asset"}
-							fillDependency(&dep, base, candidate)
+							fillDependencyWithBudget(&dep, base, candidate, hashBudget)
 							assets = appendDependencyIfNew(assets, assetSeen, dep)
 						}
 						continue
@@ -3403,7 +3519,7 @@ func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget rend
 						continue
 					}
 					dep := dependency{Kind: "asset"}
-					fillDependency(&dep, base, value)
+					fillDependencyWithBudget(&dep, base, value, hashBudget)
 					assets = appendDependencyIfNew(assets, assetSeen, dep)
 				}
 			}
@@ -3426,7 +3542,7 @@ func collectDependenciesWithBudget(htmlPath, src, fontPreset string, budget rend
 			return styles, assets, fonts, err
 		}
 		dep := dependency{ID: fmt.Sprintf("font_face_%02d", i+1), Kind: "font_file"}
-		fillDependency(&dep, base, ref)
+		fillDependencyWithBudget(&dep, base, ref, hashBudget)
 		fonts = append(fonts, dep)
 	}
 	fonts = append(fonts, fontPresetDependency(fontPreset))
@@ -3889,10 +4005,18 @@ func fontPresetDependency(fontPreset string) dependency {
 }
 
 func fillDependency(dep *dependency, base, ref string) {
-	fillDependencyWithPortableBase(dep, base, base, ref)
+	fillDependencyWithBudget(dep, base, ref, nil)
+}
+
+func fillDependencyWithBudget(dep *dependency, base, ref string, hashBudget *dependencyHashBudget) {
+	fillDependencyWithPortableBaseAndBudget(dep, base, base, ref, hashBudget)
 }
 
 func fillDependencyWithPortableBase(dep *dependency, pathBase, portableBase, ref string) {
+	fillDependencyWithPortableBaseAndBudget(dep, pathBase, portableBase, ref, nil)
+}
+
+func fillDependencyWithPortableBaseAndBudget(dep *dependency, pathBase, portableBase, ref string, hashBudget *dependencyHashBudget) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		dep.Risk = "dependency reference is empty"
@@ -3917,7 +4041,7 @@ func fillDependencyWithPortableBase(dep *dependency, pathBase, portableBase, ref
 				return
 			case "file":
 				path, err := fileURLDependencyPath(u)
-				recordLocalDependency(dep, portableBase, path, err)
+				recordLocalDependency(dep, portableBase, path, err, hashBudget)
 				return
 			default:
 				dep.URL = ref
@@ -3927,10 +4051,10 @@ func fillDependencyWithPortableBase(dep *dependency, pathBase, portableBase, ref
 		}
 	}
 	path, err := localDependencyPath(pathBase, ref)
-	recordLocalDependency(dep, portableBase, path, err)
+	recordLocalDependency(dep, portableBase, path, err, hashBudget)
 }
 
-func recordLocalDependency(dep *dependency, base, path string, err error) {
+func recordLocalDependency(dep *dependency, base, path string, err error, hashBudget *dependencyHashBudget) {
 	if err != nil {
 		dep.Risk = err.Error()
 		return
@@ -3938,8 +4062,9 @@ func recordLocalDependency(dep *dependency, base, path string, err error) {
 	dep.Path = path
 	if risk := localDependencyPortabilityRisk(base, path); risk != "" {
 		dep.Risk = risk
+		return
 	}
-	if hash, err := sha256File(path); err == nil {
+	if hash, err := hashBudget.hash(path); err == nil {
 		dep.SHA256 = hash
 	} else if dep.Risk == "" {
 		dep.Risk = "local dependency missing or unreadable: " + err.Error()
@@ -5424,7 +5549,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 			}
 			if manifestArtifactPathsOK {
 				for _, img := range manifest.PNGFiles {
-					if hash, err := sha256File(img.Path); err != nil {
+					if hash, err := sha256FileWithMaxBytes(img.Path, maxRenderedPNGBytes); err != nil {
 						findings = append(findings, fail("package.png_hash", "manifest PNG file missing: "+err.Error(), img.Path))
 					} else if hash != img.SHA256 {
 						findings = append(findings, fail("package.png_hash", "PNG hash does not match manifest", img.Path))
@@ -5437,7 +5562,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 						findings = append(findings, fail("package.png_dimensions", "PNG dimensions differ from manifest", img.Path))
 					}
 				}
-				if hash, err := sha256File(manifest.PDF.Path); err != nil {
+				if hash, err := sha256FileWithMaxBytes(manifest.PDF.Path, maxRenderedPDFBytes); err != nil {
 					findings = append(findings, fail("package.pdf_hash", "manifest PDF missing: "+err.Error(), manifest.PDF.Path))
 				} else if hash != manifest.PDF.SHA256 {
 					findings = append(findings, fail("package.pdf_hash", "PDF hash does not match manifest", manifest.PDF.Path))
@@ -5448,7 +5573,7 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 					findings = append(findings, fail("package.pdf_pages", fmt.Sprintf("PDF pages=%d manifestPages=%d pngs=%d", pages, manifest.PDFPageCount, len(manifest.PNGFiles)), manifest.PDF.Path))
 				}
 				findings = append(findings, verifyPDFPNGVisualParity(manifest.PDF.Path, manifest.PNGFiles)...)
-				if hash, err := sha256File(manifest.QAMontage.Path); err != nil {
+				if hash, err := sha256FileWithMaxBytes(manifest.QAMontage.Path, maxRenderedPNGBytes); err != nil {
 					findings = append(findings, fail("package.montage_hash", "manifest montage missing: "+err.Error(), manifest.QAMontage.Path))
 				} else if hash != manifest.QAMontage.SHA256 {
 					findings = append(findings, fail("package.montage_hash", "QA montage hash does not match manifest", manifest.QAMontage.Path))
@@ -5616,7 +5741,7 @@ func verifyManifestDependencies(kind string, manifestDeps []dependency, currentD
 	for _, dep := range manifestDeps {
 		manifestSet[dependencyFreshnessKey(dep)] = dep
 		if dep.Path != "" && dep.SHA256 != "" {
-			if hash, err := sha256File(dep.Path); err != nil {
+			if hash, err := sha256ManifestDependency(dep.Path, manifestPath); err != nil {
 				findings = append(findings, fail("package."+kind+"_dependency", "dependency file missing: "+err.Error(), dep.Path))
 			} else if hash != dep.SHA256 {
 				findings = append(findings, fail("package."+kind+"_dependency", "dependency hash does not match manifest", dep.Path))
@@ -5641,6 +5766,17 @@ func verifyManifestDependencies(kind string, manifestDeps []dependency, currentD
 		}
 	}
 	return findings
+}
+
+func sha256ManifestDependency(path, manifestPath string) (string, error) {
+	root := renderManifestBaseDir(manifestPath)
+	if filepath.VolumeName(root) != filepath.VolumeName(path) || !pathWithin(root, path) {
+		return "", fmt.Errorf("dependency path is outside the deck workspace and will not be hashed: %s", filepath.ToSlash(path))
+	}
+	if err := rejectSymlinkEscape(root, path, true); err != nil {
+		return "", err
+	}
+	return sha256FileWithMaxBytes(path, maxDependencyHashBytes)
 }
 
 func dependencyFreshnessKey(dep dependency) string {
@@ -5686,14 +5822,30 @@ func openRegularFileForRead(path string) (*os.File, os.FileInfo, error) {
 }
 
 func sha256File(path string) (string, error) {
-	f, _, err := openRegularFileForRead(path)
+	return sha256FileWithMaxBytes(path, maxHashFileBytes)
+}
+
+func sha256FileWithMaxBytes(path string, maxBytes int64) (string, error) {
+	f, info, err := openRegularFileForRead(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
+	if maxBytes > 0 && info.Size() > maxBytes {
+		return "", fmt.Errorf("file exceeds maximum hash size: %s is %d bytes > %d", filepath.ToSlash(path), info.Size(), maxBytes)
+	}
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	var n int64
+	if maxBytes > 0 {
+		n, err = io.Copy(h, io.LimitReader(f, maxBytes+1))
+	} else {
+		n, err = io.Copy(h, f)
+	}
+	if err != nil {
 		return "", err
+	}
+	if maxBytes > 0 && n > maxBytes {
+		return "", fmt.Errorf("file exceeds maximum hash size while reading: %s is greater than %d bytes", filepath.ToSlash(path), maxBytes)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -5709,7 +5861,7 @@ func renderManifestHTMLFreshnessFindings(htmlPath, expectedSHA string) []qaFindi
 			fail("ED-RENDER-001", "rendered PNG lineage is stale because render manifest is missing source HTML hash", htmlPath),
 		}
 	}
-	currentHash, err := sha256File(htmlPath)
+	currentHash, err := sha256FileWithMaxBytes(htmlPath, maxDeckHTMLBytes)
 	if err != nil {
 		return []qaFinding{
 			fail("manifest.freshness", "could not hash current HTML: "+err.Error(), htmlPath),
@@ -5729,7 +5881,7 @@ func packageManifestHTMLFreshnessFindings(htmlPath, manifestPath, expectedSHA st
 	if strings.TrimSpace(expectedSHA) == "" {
 		return []qaFinding{fail("package.manifest_freshness", "manifest source HTML hash is missing", manifestPath)}
 	}
-	currentHash, err := sha256File(htmlPath)
+	currentHash, err := sha256FileWithMaxBytes(htmlPath, maxDeckHTMLBytes)
 	if err != nil {
 		return []qaFinding{fail("package.manifest_freshness", "could not hash current HTML: "+err.Error(), htmlPath)}
 	}
@@ -5749,16 +5901,31 @@ func mustSHA256(path string) string {
 	return h
 }
 
+func mustSHA256WithMaxBytes(path string, maxBytes int64) string {
+	h, _ := sha256FileWithMaxBytes(path, maxBytes)
+	return h
+}
+
 func artifactFromPath(path string) artifact {
+	return artifactFromPathWithMaxBytes(path, maxHashFileBytes)
+}
+
+func artifactFromPathWithMaxBytes(path string, maxBytes int64) artifact {
 	info, err := regularFileInfoForRead(path)
 	if err != nil {
 		return artifact{Path: path}
 	}
-	return artifact{Path: path, SHA256: mustSHA256(path), Size: info.Size()}
+	return artifact{Path: path, SHA256: mustSHA256WithMaxBytes(path, maxBytes), Size: info.Size()}
 }
 
 func artifactFromPathRelative(path, base string) artifact {
 	artifact := artifactFromPath(path)
+	artifact.Path = portableManifestPath(base, path)
+	return artifact
+}
+
+func artifactFromPathRelativeWithMaxBytes(path, base string, maxBytes int64) artifact {
+	artifact := artifactFromPathWithMaxBytes(path, maxBytes)
 	artifact.Path = portableManifestPath(base, path)
 	return artifact
 }
