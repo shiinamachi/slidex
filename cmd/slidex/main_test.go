@@ -4757,6 +4757,62 @@ func TestExtractSlidesWithChromeRejectsTooManySlidesBeforeChrome(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLPropagatesSlidePolicyErrorWithoutFallback(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString(`<!doctype html><html><body>`)
+	for i := 0; i < maxRenderSlides+1; i++ {
+		fmt.Fprintf(&b, `<section class="slide" id="slide_%03d"><h1>Slide</h1></section>`, i)
+	}
+	b.WriteString(`</body></html>`)
+	htmlPath := filepath.Join(dir, "final_deck.html")
+	if err := os.WriteFile(htmlPath, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = renderHTML(renderConfig{
+		HTMLPath:     htmlPath,
+		OutDir:       filepath.Join(dir, "rendered_slides"),
+		PDFPath:      filepath.Join(dir, "final_deck.pdf"),
+		ManifestPath: filepath.Join(dir, "render_manifest.json"),
+		MontagePath:  filepath.Join(dir, "qa_montage.png"),
+		PDFMode:      "paginated",
+		Selector:     ".slide",
+		Width:        160,
+		Height:       90,
+		FontPreset:   "pretendard",
+		ChromePath:   exe,
+	})
+	if err == nil || !isSlideEnumerationPolicyError(err) || !strings.Contains(err.Error(), "too many slides") {
+		t.Fatalf("expected terminal slide policy error, got %v", err)
+	}
+}
+
+func TestExtractSlidesRegexWithLimitStopsAtSlideCap(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 3; i++ {
+		fmt.Fprintf(&b, `<section class="slide" id="slide_%d"><h1>Slide</h1></section>`, i)
+	}
+	slides, err := extractSlidesRegexWithLimit(b.String(), 2)
+	if err == nil || !isSlideEnumerationPolicyError(err) {
+		t.Fatalf("expected regex slide cap error, got slides=%d err=%v", len(slides), err)
+	}
+	if len(slides) != 3 {
+		t.Fatalf("expected cap sentinel slide to be observed, got %d", len(slides))
+	}
+}
+
+func TestDecodeChromeSlideEnumerationReportsPolicyError(t *testing.T) {
+	payload := fmt.Sprintf(`{"slides":[],"totalSlides":%d,"error":"slide enumeration payload exceeds maximum size"}`, maxRenderSlides+1)
+	_, err := decodeChromeSlideEnumeration(payload)
+	if err == nil || !isSlideEnumerationPolicyError(err) || !strings.Contains(err.Error(), "payload exceeds") {
+		t.Fatalf("expected Chrome policy error, got %v", err)
+	}
+}
+
 func TestRunChromeCommandRejectsOversizedOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell helper script is Unix-specific")

@@ -109,7 +109,7 @@ func decodeChromeSlideEnumeration(payload string) ([]chromeEnumeratedSlide, erro
 	var report chromeSlideEnumerationReport
 	if err := json.Unmarshal([]byte(payload), &report); err == nil && (report.Slides != nil || report.Error != "" || report.TotalSlides != 0) {
 		if report.Error != "" {
-			return nil, errorsNew(report.Error)
+			return nil, newSlideEnumerationPolicyError("%s", report.Error)
 		}
 		if err := enforceRenderSlideLimit(report.TotalSlides); err != nil {
 			return nil, err
@@ -555,7 +555,7 @@ func extractSlidesHTMLParserWithLimit(src string, maxSlides int) ([]slideInfo, e
 		if n.Type == xhtml.ElementNode && hasNodeClass(n, "slide") {
 			slides = append(slides, slideInfoFromNode(n))
 			if maxSlides > 0 && len(slides) > maxSlides {
-				limitErr = fmt.Errorf("too many slides to render: %d > %d", len(slides), maxSlides)
+				limitErr = newSlideEnumerationPolicyError("too many slides to render: %d > %d", len(slides), maxSlides)
 			}
 			return
 		}

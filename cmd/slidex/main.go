@@ -2069,12 +2069,25 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		return renderManifest{}, errors.New("only .slide selector is currently supported")
 	}
 	slides, enumMethod, enumErr := extractSlidesWithChromeFromHTML(chromePath, cfg.HTMLPath, string(raw), cfg.Selector, cfg.ChromeNoSandbox)
-	if enumErr != nil || len(slides) == 0 {
-		parserSlides := extractSlides(probeHTML)
+	if enumErr != nil {
+		if isSlideEnumerationPolicyError(enumErr) {
+			return renderManifest{}, enumErr
+		}
+		parserSlides, parserErr := extractSlidesWithLimit(probeHTML, maxRenderSlides)
+		if parserErr != nil {
+			return renderManifest{}, parserErr
+		}
 		if len(parserSlides) == 0 {
-			if enumErr != nil {
-				return renderManifest{}, fmt.Errorf("no .slide elements found in HTML; chrome DOM enumeration failed: %w", enumErr)
-			}
+			return renderManifest{}, fmt.Errorf("no .slide elements found in HTML; chrome DOM enumeration failed: %w", enumErr)
+		}
+		slides = parserSlides
+		enumMethod = "go-html-parser-fallback"
+	} else if len(slides) == 0 {
+		parserSlides, parserErr := extractSlidesWithLimit(probeHTML, maxRenderSlides)
+		if parserErr != nil {
+			return renderManifest{}, parserErr
+		}
+		if len(parserSlides) == 0 {
 			return renderManifest{}, errors.New("no .slide elements found in HTML")
 		}
 		slides = parserSlides
@@ -2198,9 +2211,29 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 
 func enforceRenderSlideLimit(count int) error {
 	if count > maxRenderSlides {
-		return fmt.Errorf("too many slides to render: %d > %d", count, maxRenderSlides)
+		return newSlideEnumerationPolicyError("too many slides to render: %d > %d", count, maxRenderSlides)
 	}
 	return nil
+}
+
+type slideEnumerationPolicyError struct {
+	message string
+}
+
+func newSlideEnumerationPolicyError(format string, args ...any) error {
+	if len(args) == 0 {
+		return &slideEnumerationPolicyError{message: format}
+	}
+	return &slideEnumerationPolicyError{message: fmt.Sprintf(format, args...)}
+}
+
+func (e *slideEnumerationPolicyError) Error() string {
+	return e.message
+}
+
+func isSlideEnumerationPolicyError(err error) bool {
+	var target *slideEnumerationPolicyError
+	return errors.As(err, &target)
 }
 
 func extractSlides(src string) []slideInfo {
@@ -2210,14 +2243,41 @@ func extractSlides(src string) []slideInfo {
 	return extractSlidesRegex(src)
 }
 
+func extractSlidesWithLimit(src string, maxSlides int) ([]slideInfo, error) {
+	parserSlides, err := extractSlidesHTMLParserWithLimit(src, maxSlides)
+	if err != nil {
+		if isSlideEnumerationPolicyError(err) {
+			return parserSlides, err
+		}
+	} else if len(parserSlides) > 0 {
+		return parserSlides, nil
+	}
+	return extractSlidesRegexWithLimit(src, maxSlides)
+}
+
 func extractSlidesRegex(src string) []slideInfo {
+	slides, _ := extractSlidesRegexWithLimit(src, 0)
+	return slides
+}
+
+func extractSlidesRegexWithLimit(src string, maxSlides int) ([]slideInfo, error) {
 	re := regexp.MustCompile(`(?is)<section\b([^>]*)>(.*?)</section>`)
 	var slides []slideInfo
-	matches := re.FindAllStringSubmatchIndex(src, -1)
-	for _, m := range matches {
+	searchStart := 0
+	for searchStart < len(src) {
+		m := re.FindStringSubmatchIndex(src[searchStart:])
+		if m == nil {
+			break
+		}
+		for i := range m {
+			if m[i] >= 0 {
+				m[i] += searchStart
+			}
+		}
 		full := src[m[0]:m[1]]
 		attrs := src[m[2]:m[3]]
 		inner := src[m[4]:m[5]]
+		searchStart = m[1]
 		if !hasClass(attrs, "slide") {
 			continue
 		}
@@ -2234,8 +2294,11 @@ func extractSlidesRegex(src string) []slideInfo {
 			Headline: extractHeadline(inner),
 			Text:     text,
 		})
+		if maxSlides > 0 && len(slides) > maxSlides {
+			return slides, newSlideEnumerationPolicyError("too many slides to render: %d > %d", len(slides), maxSlides)
+		}
 	}
-	return slides
+	return slides, nil
 }
 
 func hasClass(attrs, className string) bool {
