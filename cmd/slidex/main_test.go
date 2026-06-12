@@ -1028,6 +1028,91 @@ func TestValidatePNGRejectsSymlinkArtifact(t *testing.T) {
 	}
 }
 
+func TestValidateSpecFileRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	linkPath := filepath.Join(dir, "deck_spec.json")
+	if err := os.WriteFile(outside, []byte(`{"metadata":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := validateSpecFile(linkPath)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink spec rejection, got %v", err)
+	}
+}
+
+func TestReadRegularFileRejectsOversizedDeckText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "final_deck.html")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxDeckTextArtifactBytes + 1); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = readRegularFile(path)
+	if err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected oversized deck text rejection, got %v", err)
+	}
+}
+
+func TestVerifySanitizedLogsRejectsSymlink(t *testing.T) {
+	outDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "run_log.jsonl")
+	logPath := filepath.Join(outDir, "run_log.jsonl")
+	if err := os.WriteFile(outside, []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, logPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	findings := verifySanitizedLogs(outDir)
+	if !hasFindingCheck(findings, "package.logs") || !hasFindingCheck(findings, "symlink") {
+		t.Fatalf("expected symlink log rejection, got %#v", findings)
+	}
+}
+
+func TestPackageDeckSkipsSpecParsingWhenRequiredSpecInvalid(t *testing.T) {
+	deck := t.TempDir()
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "deck_spec.json")
+	specPath := filepath.Join(outDir, "deck_spec.json")
+	if err := os.WriteFile(outside, []byte(`{"metadata":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, specPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	result, err := packageDeck(deck, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, ok := result["findings"].([]qaFinding)
+	if !ok {
+		t.Fatalf("unexpected package findings payload: %#v", result["findings"])
+	}
+	if !hasFindingCheck(findings, "ED-PACKAGE-001") || !hasFindingCheck(findings, "symlink") {
+		t.Fatalf("expected invalid required spec finding, got %#v", findings)
+	}
+	if hasFindingCheck(findings, "package.deck_spec") {
+		t.Fatalf("package should not parse an invalid required spec after file validation fails: %#v", findings)
+	}
+}
+
 func TestMCPStateReadRejectsSymlinkStateFile(t *testing.T) {
 	deck := t.TempDir()
 	outDir := filepath.Join(deck, "out")

@@ -57,6 +57,12 @@ const (
 	maxRenderedPDFBytes  = int64(512 << 20)
 	maxMontageSlides     = 500
 	maxMontagePixels     = maxRenderedPNGPixels
+
+	maxDeckJSONBytes         = int64(16 << 20)
+	maxDeckMarkdownBytes     = int64(16 << 20)
+	maxDeckLogBytes          = int64(16 << 20)
+	maxDeckHTMLBytes         = int64(64 << 20)
+	maxDeckTextArtifactBytes = maxDeckHTMLBytes
 )
 
 func isReleaseBaseVersion(version string) bool {
@@ -479,7 +485,7 @@ func runValidateSpec(args []string) error {
 }
 
 func validateSpecFile(path string) ([]qaFinding, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -4341,7 +4347,7 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 		}
 	}
 	var specObj map[string]any
-	if raw, err := os.ReadFile(specPath); err == nil {
+	if raw, err := readRegularFileWithMaxBytes(specPath, maxDeckJSONBytes); err == nil {
 		_ = json.Unmarshal(raw, &specObj)
 	}
 	if findings, err := validateSpecFile(specPath); err == nil {
@@ -4397,7 +4403,7 @@ func qaDeckWithVisualReviewRunner(deck string, writeReport bool, visualReview st
 	var manifest renderManifest
 	manifestLoaded := false
 	manifestArtifactPathsOK := false
-	if raw, err := os.ReadFile(manifestPath); err == nil {
+	if raw, err := readRegularFileWithMaxBytes(manifestPath, maxDeckJSONBytes); err == nil {
 		if decoded, err := decodeRenderManifest(raw, manifestPath); err != nil {
 			result.Findings = append(result.Findings, fail("manifest.parse", err.Error(), manifestPath))
 		} else {
@@ -4577,7 +4583,7 @@ func writeQAReport(path string, result qaResult) error {
 }
 
 func qaRuntimeForDeck(deckAbs string) (string, string) {
-	raw, err := os.ReadFile(filepath.Join(deckAbs, "out", "slidex_state.json"))
+	raw, err := readRegularFileWithMaxBytes(filepath.Join(deckAbs, "out", "slidex_state.json"), maxDeckJSONBytes)
 	if err != nil {
 		return "", ""
 	}
@@ -4751,7 +4757,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 				qaErr = strings.TrimSpace(qaErr + "; failed to update generated baseline: " + err.Error())
 				correctedOrRejected = append(correctedOrRejected, "HTML edits were not accepted into the generated baseline because the baseline update failed.")
 			} else {
-				baseRaw, _ = os.ReadFile(baselinePath)
+				baseRaw, _ = readRegularFileWithMaxBytes(baselinePath, maxDeckHTMLBytes)
 				newBaselineHash = sha256Bytes(baseRaw)
 				if qa, err := syncQADeck(deckAbs, true); err != nil && qa.Status == "fail" {
 					qaStatus = qa.Status
@@ -4778,7 +4784,7 @@ func syncHTMLEdits(deck string, width, height int, fontPreset, chromePath string
 		if err := rollbackSyncChanges(); err != nil {
 			return nil, err
 		}
-		if raw, err := os.ReadFile(baselinePath); err == nil {
+		if raw, err := readRegularFileWithMaxBytes(baselinePath, maxDeckHTMLBytes); err == nil {
 			newBaselineHash = sha256Bytes(raw)
 		} else {
 			newBaselineHash = ""
@@ -4899,7 +4905,7 @@ func snapshotFile(path string) (fileSnapshot, error) {
 	if info.IsDir() {
 		return fileSnapshot{}, fmt.Errorf("sync snapshot target must be a file: %s", filepath.ToSlash(path))
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckTextArtifactBytes)
 	if err != nil {
 		return fileSnapshot{}, err
 	}
@@ -4977,7 +4983,7 @@ func compareSlides(oldSlides, newSlides []slideInfo) []string {
 }
 
 func slidesFromSpec(specPath string) []slideInfo {
-	raw, err := os.ReadFile(specPath)
+	raw, err := readRegularFileWithMaxBytes(specPath, maxDeckJSONBytes)
 	if err != nil {
 		return nil
 	}
@@ -5096,7 +5102,7 @@ func containsMeaningChange(changes []string) bool {
 }
 
 func updateSpecFromHTML(specPath string, slides []slideInfo) error {
-	raw, err := os.ReadFile(specPath)
+	raw, err := readRegularFileWithMaxBytes(specPath, maxDeckJSONBytes)
 	if err != nil {
 		return err
 	}
@@ -5193,7 +5199,7 @@ func splitBodyContent(text, headline string) []any {
 
 func appendNotes(path, heading string, lines []string) error {
 	var b strings.Builder
-	if existing, err := os.ReadFile(path); err == nil {
+	if existing, err := readRegularFileWithMaxBytes(path, maxDeckMarkdownBytes); err == nil {
 		b.Write(existing)
 		if !strings.HasSuffix(b.String(), "\n") {
 			b.WriteString("\n")
@@ -5271,7 +5277,7 @@ func writeSyncReport(path string, report map[string]any) error {
 
 func appendSyncFindingsToQAReport(path string, stale []string, accepted []string, corrected []string) error {
 	var b strings.Builder
-	if existing, err := os.ReadFile(path); err == nil {
+	if existing, err := readRegularFileWithMaxBytes(path, maxDeckMarkdownBytes); err == nil {
 		b.Write(existing)
 		if !strings.HasSuffix(b.String(), "\n") {
 			b.WriteString("\n")
@@ -5345,9 +5351,11 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 		"delivery_summary.md",
 	}
 	var findings []qaFinding
+	invalidRequired := map[string]bool{}
 	for _, rel := range required {
 		path := filepath.Join(outDir, rel)
 		if _, err := regularFileInfoForRead(path); err != nil {
+			invalidRequired[path] = true
 			findings = append(findings, fail("ED-PACKAGE-001", "missing or invalid required delivery file: "+err.Error(), path))
 		}
 	}
@@ -5368,7 +5376,9 @@ func packageDeck(deck string, includeLogs bool) (map[string]any, error) {
 	for _, stage := range structuredReviewStages() {
 		structuredReviewPaths = append(structuredReviewPaths, filepath.Join(outDir, "agent_reviews", "round_01", "reviewer_"+safeFilenameComponent(stage)+".json"))
 	}
-	findings = append(findings, verifyPackageSpec(specPath)...)
+	if !invalidRequired[specPath] {
+		findings = append(findings, verifyPackageSpec(specPath)...)
+	}
 	if raw, err := readRegularFile(manifestPath); err != nil {
 		findings = append(findings, fail("package.manifest_read", err.Error(), manifestPath))
 	} else {
@@ -5492,7 +5502,7 @@ func verifyPackageSpec(path string) []qaFinding {
 }
 
 func verifyQAReportStatus(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckMarkdownBytes)
 	if err != nil {
 		return []qaFinding{fail("package.qa_report_status", "QA report missing: "+err.Error(), path)}
 	}
@@ -5518,7 +5528,7 @@ func verifyQAReportStatus(path string) []qaFinding {
 }
 
 func verifyDeliverySummaryPolicy(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckMarkdownBytes)
 	if err != nil {
 		return []qaFinding{fail("ED-PACKAGE-002", "delivery summary missing: "+err.Error(), path)}
 	}
@@ -5557,7 +5567,7 @@ func qaReportStatusField(text, key string) string {
 }
 
 func verifyRiskPolicy(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return []qaFinding{fail("package.risk_policy", "missing state file: "+err.Error(), path)}
 	}
@@ -5675,12 +5685,7 @@ func sha256File(path string) (string, error) {
 }
 
 func readRegularFile(path string) ([]byte, error) {
-	f, _, err := openRegularFileForRead(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(f)
+	return readRegularFileWithMaxBytes(path, maxDeckTextArtifactBytes)
 }
 
 func renderManifestHTMLFreshnessFindings(htmlPath, expectedSHA string) []qaFinding {

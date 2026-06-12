@@ -4844,7 +4844,7 @@ func ensureHTML(deck string, force bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	raw, err := os.ReadFile(specPath)
+	raw, err := readRegularFileWithMaxBytes(specPath, maxDeckJSONBytes)
 	if err != nil {
 		return "", err
 	}
@@ -5052,7 +5052,7 @@ func writeDeliverySummary(deck string) (string, error) {
 }
 
 func approvedAssumptionsFromSpec(specPath string) []string {
-	raw, err := os.ReadFile(specPath)
+	raw, err := readRegularFileWithMaxBytes(specPath, maxDeckJSONBytes)
 	if err != nil {
 		return nil
 	}
@@ -7705,9 +7705,9 @@ func verifyTextArtifactFreshness(check, path, referencePath string, requiredHash
 
 func verifySanitizedLogs(outDir string) []qaFinding {
 	logPath := filepath.Join(outDir, "run_log.jsonl")
-	raw, err := os.ReadFile(logPath)
+	raw, err := readRegularFileWithMaxBytes(logPath, maxDeckLogBytes)
 	if err != nil {
-		return []qaFinding{fail("package.logs", "include-logs requested but run_log.jsonl is missing", logPath)}
+		return []qaFinding{fail("package.logs", "include-logs requested but run_log.jsonl is missing or unreadable: "+err.Error(), logPath)}
 	}
 	text := string(raw)
 	if strings.Contains(text, "OPENAI_API_KEY=") || strings.Contains(text, "CODEX_API_KEY=") || strings.Contains(text, "Bearer ") {
