@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -4860,6 +4861,91 @@ func TestRenderResourcePreflightRejectsRemoteFetches(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("preflight error missing %q:\n%s", want, msg)
 		}
+	}
+}
+
+func TestRenderResourcePreflightRejectsCSSEscapedRemoteFetches(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	assets := filepath.Join(deck, "assets")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "styles.css"), []byte(`
+@import "https\3a //127.0.0.1:8765/import.css";
+.linked{background-image:url(https\3a //127.0.0.1:8765/linked.png)}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `<!doctype html><html><head>
+<link rel="stylesheet" href="../assets/styles.css">
+<style>.slide{background-image:url(https\3a //127.0.0.1:8765/inline.png)}</style>
+</head><body>
+<section class="slide" style='background-image:url("https\3a //127.0.0.1:8765/attr.png")'>OK</section>
+</body></html>`
+
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil {
+		t.Fatal("CSS-escaped remote render resources should fail preflight")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"https://127.0.0.1:8765/import.css",
+		"https://127.0.0.1:8765/linked.png",
+		"https://127.0.0.1:8765/inline.png",
+		"https://127.0.0.1:8765/attr.png",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("preflight error missing decoded CSS URL %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestRenderResourcePreflightRejectsLinkImagePreloadSrcsetRemote(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	assets := filepath.Join(deck, "assets")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "fallback.png"), []byte("fallback"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `<!doctype html><html><head>
+<link rel="preload" as="image" href="../assets/fallback.png" imagesrcset="http://127.0.0.1:8765/beacon.png 1x">
+</head><body><section class="slide">OK</section></body></html>`
+
+	err := renderResourceRequestPreflight(htmlPath, src)
+	if err == nil || !strings.Contains(err.Error(), "http://127.0.0.1:8765/beacon.png") {
+		t.Fatalf("remote image preload imagesrcset should fail preflight, got %v", err)
+	}
+}
+
+func TestRenderResourcePreflightAllowsLargeImagePreload(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	htmlPath := filepath.Join(deck, "out", "final_deck.html")
+	assets := filepath.Join(deck, "assets")
+	if err := os.MkdirAll(filepath.Dir(htmlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "hero.jpg"), bytes.Repeat([]byte{0x7f}, maxDependencyScanBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `<!doctype html><html><head>
+<link rel="preload" as="image" href="../assets/hero.jpg">
+</head><body><section class="slide"><img src="../assets/hero.jpg"></section></body></html>`
+
+	if err := renderResourceRequestPreflight(htmlPath, src); err != nil {
+		t.Fatalf("large image preload should not be scanned as CSS: %v", err)
 	}
 }
 

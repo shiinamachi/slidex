@@ -2903,6 +2903,12 @@ func collectHTMLRenderResourceRefs(base, src string) ([]renderResourceRef, error
 					}
 					continue
 				}
+				if key == "imagesrcset" && tag == "link" && linkRelPreloadsImage(n) {
+					for _, candidate := range splitSrcsetRefs(value) {
+						refs = append(refs, renderResourceRef{Context: tag + " imagesrcset", Base: base, Ref: candidate})
+					}
+					continue
+				}
 				if isFetchResourceAttr(tag, key) {
 					refs = append(refs, renderResourceRef{
 						Context:   tag + " " + key,
@@ -2924,14 +2930,14 @@ func collectHTMLRenderResourceRefs(base, src string) ([]renderResourceRef, error
 func collectCSSRenderResourceRefs(base, cssText, context string) []renderResourceRef {
 	refs := make([]renderResourceRef, 0)
 	for _, m := range cssURLRe.FindAllStringSubmatch(cssText, -1) {
-		ref := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
+		ref := normalizeCSSResourceRef(firstNonEmpty(m[1], m[2], m[3]))
 		if shouldSkipCSSURLDependency(ref) {
 			continue
 		}
 		refs = append(refs, renderResourceRef{Context: context + " url()", Base: base, Ref: ref})
 	}
 	for _, m := range cssImportRe.FindAllStringSubmatch(cssText, -1) {
-		ref := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
+		ref := normalizeCSSResourceRef(firstNonEmpty(m[1], m[2], m[3]))
 		if shouldSkipCSSURLDependency(ref) {
 			continue
 		}
@@ -3015,13 +3021,33 @@ func splitSrcsetRefs(srcset string) []string {
 }
 
 func linkRelFetchesStylesheet(n *xhtml.Node) bool {
-	rel := strings.ToLower(nodeAttr(n, "rel"))
-	for _, token := range strings.Fields(rel) {
-		if token == "stylesheet" || token == "preload" || token == "modulepreload" || token == "import" {
+	preloadsStyle := false
+	as := strings.ToLower(strings.TrimSpace(nodeAttr(n, "as")))
+	for _, token := range linkRelTokens(n) {
+		switch token {
+		case "stylesheet":
+			return true
+		case "preload":
+			preloadsStyle = as == "style"
+		}
+	}
+	return preloadsStyle
+}
+
+func linkRelPreloadsImage(n *xhtml.Node) bool {
+	if !strings.EqualFold(strings.TrimSpace(nodeAttr(n, "as")), "image") {
+		return false
+	}
+	for _, token := range linkRelTokens(n) {
+		if token == "preload" {
 			return true
 		}
 	}
 	return false
+}
+
+func linkRelTokens(n *xhtml.Node) []string {
+	return strings.Fields(strings.ToLower(nodeAttr(n, "rel")))
 }
 
 func rawNodeText(n *xhtml.Node) string {
@@ -3105,7 +3131,7 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 
 func collectCSSURLDependencies(deps []dependency, seen map[string]bool, base, cssText, idPrefix string) []dependency {
 	for i, m := range cssURLRe.FindAllStringSubmatch(cssText, -1) {
-		ref := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
+		ref := normalizeCSSResourceRef(firstNonEmpty(m[1], m[2], m[3]))
 		if shouldSkipCSSURLDependency(ref) {
 			continue
 		}
@@ -3140,6 +3166,74 @@ func shouldSkipCSSURLDependency(ref string) bool {
 		return true
 	}
 	return strings.HasPrefix(strings.ToLower(ref), "data:")
+}
+
+func normalizeCSSResourceRef(ref string) string {
+	return strings.TrimSpace(cssUnescape(strings.TrimSpace(ref)))
+}
+
+func cssUnescape(value string) string {
+	var b strings.Builder
+	for i := 0; i < len(value); {
+		if value[i] != '\\' {
+			b.WriteByte(value[i])
+			i++
+			continue
+		}
+		i++
+		if i >= len(value) {
+			continue
+		}
+		if isCSSNewlineByte(value[i]) {
+			i = consumeCSSNewline(value, i)
+			continue
+		}
+		start := i
+		for i < len(value) && i-start < 6 && isASCIIHexDigit(value[i]) {
+			i++
+		}
+		if i > start {
+			decoded, err := strconv.ParseInt(value[start:i], 16, 32)
+			if err != nil || decoded == 0 || decoded > 0x10ffff || (decoded >= 0xd800 && decoded <= 0xdfff) {
+				b.WriteRune('\uFFFD')
+			} else {
+				b.WriteRune(rune(decoded))
+			}
+			if i < len(value) && isCSSWhitespaceByte(value[i]) {
+				i = consumeCSSWhitespaceAfterHexEscape(value, i)
+			}
+			continue
+		}
+		b.WriteByte(value[i])
+		i++
+	}
+	return b.String()
+}
+
+func isASCIIHexDigit(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
+}
+
+func isCSSWhitespaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f'
+}
+
+func isCSSNewlineByte(b byte) bool {
+	return b == '\n' || b == '\r' || b == '\f'
+}
+
+func consumeCSSWhitespaceAfterHexEscape(value string, i int) int {
+	if i < len(value) && value[i] == '\r' && i+1 < len(value) && value[i+1] == '\n' {
+		return i + 2
+	}
+	return i + 1
+}
+
+func consumeCSSNewline(value string, i int) int {
+	if value[i] == '\r' && i+1 < len(value) && value[i+1] == '\n' {
+		return i + 2
+	}
+	return i + 1
 }
 
 func appendDependencyIfNew(deps []dependency, seen map[string]bool, dep dependency) []dependency {
