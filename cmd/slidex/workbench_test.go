@@ -1085,6 +1085,9 @@ func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
 		t.Fatal(err)
 	}
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+		t.Fatal(err)
+	}
 	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", handler.handleReady)
@@ -2115,6 +2118,9 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
 		t.Fatal(err)
 	}
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		_ = writeJSONResponse(w, map[string]any{
@@ -2341,6 +2347,50 @@ func TestWorkbenchLoopbackContractRejectsNonCanonicalHosts(t *testing.T) {
 	}
 }
 
+func TestWorkbenchStatusRequiresTrustedControlForRunningManifest(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		_ = writeJSONResponse(w, map[string]any{
+			"status":    "ready",
+			"sessionId": "session-1",
+			"deckDir":   filepath.ToSlash(deck),
+			"pid":       os.Getpid(),
+		})
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", port, os.Getpid(), "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	status, err := workbenchStatus(workspace, "demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "stale" {
+		t.Fatalf("manifest without trusted control status = %q, want stale", status.Status)
+	}
+}
+
 func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
@@ -2374,6 +2424,9 @@ func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
 	}
 	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", port, os.Getpid(), "starting")
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
 		t.Fatal(err)
 	}
 

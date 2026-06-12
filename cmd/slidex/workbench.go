@@ -1270,7 +1270,8 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 		Status:    "ready",
 	}
 	if existing, ok := readWorkbenchManifest(deckAbs); ok {
-		if isWorkbenchReady(existing) {
+		existing = canonicalWorkbenchManifestPaths(deckAbs, existing)
+		if isTrustedWorkbenchReady(existing) {
 			existing.Status = "running"
 			if seeded, err := seedWorkbenchDraft(deckAbs, existing, seed); err != nil {
 				return result, existing, false, err
@@ -2474,7 +2475,7 @@ func workbenchStatusForDeck(deckAbs string) workbenchManifest {
 		return canonicalWorkbenchManifestPaths(deckAbs, workbenchManifest{Status: "not_started"})
 	}
 	manifest = canonicalWorkbenchManifestPaths(deckAbs, manifest)
-	if isWorkbenchReady(manifest) {
+	if isTrustedWorkbenchReady(manifest) {
 		manifest.Status = "running"
 	} else if manifest.Status == "running" || manifest.Status == "starting" {
 		manifest.Status = "stale"
@@ -2578,6 +2579,9 @@ func stopWorkbenchProcess(manifest workbenchManifest) {
 	if manifest.PID <= 0 {
 		return
 	}
+	if !workbenchManifestHasTrustedControl(manifest) {
+		return
+	}
 	if requestWorkbenchShutdown(manifest) {
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
@@ -2599,18 +2603,11 @@ func stopWorkbenchProcess(manifest workbenchManifest) {
 }
 
 func requestWorkbenchShutdown(manifest workbenchManifest) bool {
-	if manifest.Host != "127.0.0.1" || manifest.Port <= 0 || manifest.SessionID == "" || manifest.DeckDir == "" {
+	control, ok := trustedWorkbenchControl(manifest)
+	if !ok {
 		return false
 	}
-	deckAbs := filepath.Clean(filepath.FromSlash(manifest.DeckDir))
-	control, ok := readWorkbenchControl(deckAbs)
-	if !ok || !workbenchControlMatchesManifest(control, manifest) {
-		return false
-	}
-	origin, ok := originFromURL(manifest.URL)
-	if !ok || origin != fmt.Sprintf("http://127.0.0.1:%d", manifest.Port) {
-		return false
-	}
+	origin := fmt.Sprintf("http://127.0.0.1:%d", manifest.Port)
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 	shutdownURL := absoluteWorkbenchAPIURL(manifest.URL, "/workbench/"+manifest.SessionID+"/api/shutdown")
@@ -2793,6 +2790,31 @@ func workbenchControlMatchesManifest(control workbenchControl, manifest workbenc
 		control.PID == manifest.PID &&
 		control.Port == manifest.Port &&
 		control.URL == manifest.URL
+}
+
+func isTrustedWorkbenchReady(manifest workbenchManifest) bool {
+	return workbenchManifestHasTrustedControl(manifest) && isWorkbenchReady(manifest)
+}
+
+func workbenchManifestHasTrustedControl(manifest workbenchManifest) bool {
+	_, ok := trustedWorkbenchControl(manifest)
+	return ok
+}
+
+func trustedWorkbenchControl(manifest workbenchManifest) (workbenchControl, bool) {
+	if manifest.Host != "127.0.0.1" || manifest.Port <= 0 || manifest.SessionID == "" || manifest.DeckDir == "" {
+		return workbenchControl{}, false
+	}
+	origin, ok := originFromURL(manifest.URL)
+	if !ok || origin != fmt.Sprintf("http://127.0.0.1:%d", manifest.Port) {
+		return workbenchControl{}, false
+	}
+	deckAbs := filepath.Clean(filepath.FromSlash(manifest.DeckDir))
+	control, ok := readWorkbenchControl(deckAbs)
+	if !ok || !workbenchControlMatchesManifest(control, manifest) {
+		return workbenchControl{}, false
+	}
+	return control, true
 }
 
 func readWorkbenchDraft(deckAbs string) (workbenchDraft, bool) {
