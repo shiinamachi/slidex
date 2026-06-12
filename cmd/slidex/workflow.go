@@ -1928,10 +1928,13 @@ func runClean(args []string) error {
 		return err
 	}
 	removed := []string{}
+	deckAbs := mustAbs(*deck)
 	if *logs {
-		outDir := filepath.Join(mustAbs(*deck), "out")
 		cutoff := time.Now().Add(-d)
-		runLogPath := filepath.Join(outDir, "run_log.jsonl")
+		runLogPath, err := cleanScopedPath(deckAbs, "out", "run_log.jsonl")
+		if err != nil {
+			return err
+		}
 		pruned, retainedRun, err := pruneRunLogByRetention(runLogPath, cutoff, 1, 1)
 		if err != nil {
 			return err
@@ -1939,19 +1942,56 @@ func runClean(args []string) error {
 		if pruned {
 			removed = append(removed, runLogPath)
 		}
-		agentRuns := filepath.Join(outDir, "agent_runs")
+		agentRuns, err := cleanScopedPath(deckAbs, "out", "agent_runs")
+		if err != nil {
+			return err
+		}
 		staleAgentRuns, err := directoryTreeOlderThan(agentRuns, cutoff)
 		if err != nil {
 			return err
 		}
 		if staleAgentRuns && !retainedRun {
-			if err := os.RemoveAll(agentRuns); err != nil {
+			if err := removeCleanTree(deckAbs, agentRuns); err != nil {
 				return err
 			}
 			removed = append(removed, agentRuns)
 		}
 	}
-	return printJSON(map[string]any{"toolName": toolName, "deckDir": mustAbs(*deck), "removed": removed})
+	return printJSON(map[string]any{"toolName": toolName, "deckDir": deckAbs, "removed": removed})
+}
+
+func cleanScopedPath(deckAbs string, elems ...string) (string, error) {
+	deckAbs = filepath.Clean(deckAbs)
+	if err := rejectSymlinkAncestors(deckAbs); err != nil {
+		return "", err
+	}
+	parts := append([]string{deckAbs}, elems...)
+	target := filepath.Clean(filepath.Join(parts...))
+	if !pathWithin(deckAbs, target) {
+		return "", fmt.Errorf("clean target escapes deck root: %s", filepath.ToSlash(target))
+	}
+	if err := rejectSymlinkEscape(deckAbs, target, true); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func removeCleanTree(deckAbs, target string) error {
+	deckAbs = filepath.Clean(deckAbs)
+	target = filepath.Clean(target)
+	if err := rejectSymlinkAncestors(deckAbs); err != nil {
+		return err
+	}
+	if !pathWithin(deckAbs, target) {
+		return fmt.Errorf("clean target escapes deck root: %s", filepath.ToSlash(target))
+	}
+	if err := rejectSymlinkEscape(deckAbs, target, false); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.RemoveAll(target)
 }
 
 func directoryTreeOlderThan(root string, cutoff time.Time) (bool, error) {
@@ -2002,12 +2042,18 @@ type runLogSegment struct {
 }
 
 func pruneRunLogByRetention(path string, cutoff time.Time, keepSuccessful, keepFailed int) (bool, bool, error) {
-	info, err := os.Stat(path)
+	if err := rejectSymlinkAncestors(path); err != nil {
+		return false, false, err
+	}
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, false, nil
 		}
 		return false, false, err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return false, false, fmt.Errorf("clean target must not be a symlink or reparse point: %s", filepath.ToSlash(path))
 	}
 	segments, err := readRunLogSegments(path, info.ModTime())
 	if err != nil {
@@ -2041,6 +2087,9 @@ func pruneRunLogByRetention(path string, cutoff time.Time, keepSuccessful, keepF
 	}
 	if len(lines) == 0 {
 		if info.ModTime().Before(cutoff) {
+			if err := rejectSymlinkAncestors(path); err != nil {
+				return false, false, err
+			}
 			return true, false, os.Remove(path)
 		}
 		return false, false, nil

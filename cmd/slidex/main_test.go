@@ -3589,6 +3589,45 @@ func TestCleanLogsRetainsLatestSuccessfulAndFailedRuns(t *testing.T) {
 	}
 }
 
+func TestCleanLogsRejectsSymlinkedOutDirectory(t *testing.T) {
+	root := t.TempDir()
+	deck := filepath.Join(root, "deck")
+	victim := filepath.Join(root, "victim")
+	if err := os.MkdirAll(deck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runDir := filepath.Join(victim, "agent_runs")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runLog := filepath.Join(victim, "run_log.jsonl")
+	if err := os.WriteFile(runLog, []byte(runLogLine("old-run", "package", "pass", time.Now().Add(-2*time.Hour))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runFile := filepath.Join(runDir, "turn.json")
+	if err := os.WriteFile(runFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	for _, path := range []string{victim, runDir, runFile, runLog} {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(victim, filepath.Join(deck, "out")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	err := runClean([]string{"--deck", deck, "--logs", "--older-than", "1h"})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("expected symlinked out directory to be rejected, got %v", err)
+	}
+	for _, path := range []string{victim, runDir, runFile, runLog} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("clean should not remove outside target %s: %v", path, statErr)
+		}
+	}
+}
+
 func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
