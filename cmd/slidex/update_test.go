@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -400,6 +401,34 @@ func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	}
 	if archive.Name != "slidex_0.2.0-canary.20260610010000_linux_amd64.tar.gz" || checksum.Name != "slidex_0.2.0-canary.20260610010000_checksums.txt" {
 		t.Fatalf("required assets = %q / %q", archive.Name, checksum.Name)
+	}
+}
+
+func TestFetchUpdateReleasesHonorsContextTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	_, err := fetchUpdateReleases(ctx, server.URL)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected release fetch context deadline, got %v", err)
+	}
+}
+
+func TestDownloadUpdateAssetHonorsContextTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	_, err := downloadUpdateAsset(ctx, updateAsset{Name: "slidex.zip", BrowserDownloadURL: server.URL}, 1024)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected asset download context deadline, got %v", err)
 	}
 }
 

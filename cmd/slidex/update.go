@@ -56,6 +56,9 @@ const (
 	maxUpdateArchiveFileBytes       = int64(256 << 20)
 	maxUpdateArchiveExpandedBytes   = int64(1024 << 20)
 	maxUpdateZipCentralDirBytes     = int64(64 << 20)
+	updateReleaseFetchTimeout       = 30 * time.Second
+	updateAssetDownloadTimeout      = 2 * time.Minute
+	updateHTTPClientTimeout         = 2 * time.Minute
 
 	zipEndOfCentralDirectorySignature       = uint32(0x06054b50)
 	zipCentralDirectoryHeaderSignature      = uint32(0x02014b50)
@@ -72,6 +75,7 @@ var (
 	stablePackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	canaryPackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{14}$`)
 	gitCommitPattern            = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+	updateHTTPClient            = &http.Client{Timeout: updateHTTPClientTimeout}
 )
 
 type installMetadata struct {
@@ -1135,13 +1139,15 @@ func downloadUpdateAsset(ctx context.Context, asset updateAsset, maxBytes int64)
 	if asset.BrowserDownloadURL == "" {
 		return nil, fmt.Errorf("release asset %s is missing browser_download_url", asset.Name)
 	}
+	ctx, cancel := contextWithDefaultTimeout(ctx, updateAssetDownloadTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("User-Agent", "slidex-update/"+toolVersion)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -2429,13 +2435,15 @@ func releaseBaseVersion(version string) string {
 }
 
 func fetchUpdateReleases(ctx context.Context, apiURL string) ([]updateRelease, error) {
+	ctx, cancel := contextWithDefaultTimeout(ctx, updateReleaseFetchTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "slidex-update/"+toolVersion)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -2449,6 +2457,19 @@ func fetchUpdateReleases(ctx context.Context, apiURL string) ([]updateRelease, e
 		return nil, err
 	}
 	return parseUpdateReleases(raw)
+}
+
+func contextWithDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func parseUpdateReleases(raw []byte) ([]updateRelease, error) {
