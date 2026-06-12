@@ -4757,6 +4757,93 @@ func TestCollectDependenciesDecodesLocalURLs(t *testing.T) {
 	}
 }
 
+func TestCollectDependenciesRecordsImportedCSSAndSrcsets(t *testing.T) {
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "out", "final_deck.html")
+	stylesDir := filepath.Join(dir, "styles")
+	assetsDir := filepath.Join(dir, "assets")
+	for _, path := range []string{stylesDir, assetsDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseCSS := filepath.Join(stylesDir, "base.css")
+	themeCSS := filepath.Join(stylesDir, "theme.css")
+	bg := filepath.Join(assetsDir, "bg.png")
+	hero2x := filepath.Join(assetsDir, "hero-2x.png")
+	preload := filepath.Join(assetsDir, "preload.png")
+	preload2x := filepath.Join(assetsDir, "preload-2x.png")
+	files := map[string]string{
+		baseCSS:   `@import "theme.css";` + "\n",
+		themeCSS:  `.slide { background-image: url("../assets/bg.png"); }` + "\n",
+		bg:        "bg\n",
+		hero2x:    "hero\n",
+		preload:   "preload\n",
+		preload2x: "preload 2x\n",
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := `<!doctype html>
+<link rel="stylesheet" href="../styles/base.css">
+<img srcset="../assets/hero-2x.png 2x">
+<link rel="preload" as="image" href="../assets/preload.png" imagesrcset="../assets/preload-2x.png 2x">`
+	styles, assets, _ := collectDependencies(htmlPath, src, "pretendard")
+	for _, path := range []string{baseCSS, themeCSS} {
+		dep, ok := findDependencyByPath(styles, path)
+		if !ok {
+			t.Fatalf("stylesheet dependency %q not found\nstyles=%#v", path, styles)
+		}
+		if dep.Kind != "stylesheet" || dep.SHA256 == "" || dep.Risk != "" {
+			t.Fatalf("stylesheet dependency %q misclassified: %#v", path, dep)
+		}
+	}
+	for _, path := range []string{bg, hero2x, preload, preload2x} {
+		dep, ok := findDependencyByPath(assets, path)
+		if !ok {
+			t.Fatalf("asset dependency %q not found\nassets=%#v", path, assets)
+		}
+		if dep.Kind != "asset" || dep.SHA256 == "" || dep.Risk != "" {
+			t.Fatalf("asset dependency %q misclassified: %#v", path, dep)
+		}
+	}
+	if dep, ok := findDependencyByPath(styles, preload); ok {
+		t.Fatalf("image preload should not be classified as stylesheet: %#v", dep)
+	}
+}
+
+func TestVerifyManifestDependenciesDetectsImportedCSSMutation(t *testing.T) {
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "out", "final_deck.html")
+	stylesDir := filepath.Join(dir, "styles")
+	if err := os.MkdirAll(stylesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baseCSS := filepath.Join(stylesDir, "base.css")
+	themeCSS := filepath.Join(stylesDir, "theme.css")
+	if err := os.WriteFile(baseCSS, []byte(`@import "theme.css";`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(themeCSS, []byte(`.slide { color: red; }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `<!doctype html><link rel="stylesheet" href="../styles/base.css">`
+	styles, _, _ := collectDependencies(htmlPath, src, "pretendard")
+	if _, ok := findDependencyByPath(styles, themeCSS); !ok {
+		t.Fatalf("imported stylesheet dependency was not recorded: %#v", styles)
+	}
+	if err := os.WriteFile(themeCSS, []byte(`.slide { color: blue; }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	currentStyles, _, _ := collectDependencies(htmlPath, src, "pretendard")
+	findings := verifyManifestDependencies("styles", styles, currentStyles, filepath.Join(dir, "out", "render_manifest.json"))
+	if len(findings) == 0 {
+		t.Fatalf("expected stale imported stylesheet dependency finding")
+	}
+}
+
 func TestCollectDependenciesDoesNotScanSymlinkedStylesheet(t *testing.T) {
 	dir := t.TempDir()
 	htmlPath := filepath.Join(dir, "final_deck.html")

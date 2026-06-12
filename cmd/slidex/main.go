@@ -3081,45 +3081,114 @@ func collectDependencies(htmlPath, src, fontPreset string) ([]dependency, []depe
 	var assets []dependency
 	var fonts []dependency
 	assetSeen := map[string]bool{}
-
-	styleRe := regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style>`)
-	for i, m := range styleRe.FindAllStringSubmatch(src, -1) {
-		block := []byte(m[1])
-		styles = append(styles, dependency{
-			ID:     fmt.Sprintf("inline_style_%02d", i+1),
-			Kind:   "inline_css",
-			SHA256: sha256Bytes(block),
-		})
-		assets = collectCSSURLDependencies(assets, assetSeen, base, m[1], fmt.Sprintf("inline_css_url_%02d", i+1))
+	styleSeen := map[string]bool{}
+	seenCSS := map[string]bool{}
+	inlineStyleCount := 0
+	styleAttrCount := 0
+	linkedStyleCount := 0
+	cssURLCount := 0
+	appendStylesheet := func(cssBase, ref, id string) dependency {
+		dep := dependency{ID: id, Kind: "stylesheet"}
+		fillDependencyWithPortableBase(&dep, cssBase, base, ref)
+		styles = appendDependencyIfNew(styles, styleSeen, dep)
+		return dep
 	}
-	linkRe := regexp.MustCompile(`(?is)<link\b[^>]*href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>`)
-	for i, m := range linkRe.FindAllStringSubmatch(src, -1) {
-		href := firstNonEmpty(m[2], m[3], m[4])
-		if href == "" {
-			continue
-		}
-		dep := dependency{Kind: "stylesheet"}
-		fillDependency(&dep, base, href)
-		styles = append(styles, dep)
-		if dep.Path != "" {
-			if raw, err := readRegularFileForDependencyScan(dep.Path); err == nil {
-				assets = collectCSSURLDependencies(assets, assetSeen, filepath.Dir(dep.Path), string(raw), fmt.Sprintf("linked_css_url_%02d", i+1))
+	var scanCSSDependencies func(cssBase, cssText, idPrefix string)
+	scanCSSDependencies = func(cssBase, cssText, idPrefix string) {
+		for _, cssRef := range scanCSSResourceRefs(cssText, true) {
+			ref := normalizeCSSResourceRef(cssRef.Ref)
+			if shouldSkipCSSURLDependency(ref) {
+				continue
+			}
+			switch cssRef.Kind {
+			case "import":
+				linkedStyleCount++
+				dep := appendStylesheet(cssBase, ref, fmt.Sprintf("%s_import_%02d", idPrefix, linkedStyleCount))
+				if dep.Path == "" || seenCSS[dep.Path] {
+					continue
+				}
+				seenCSS[dep.Path] = true
+				raw, err := readRegularFileForDependencyScan(dep.Path)
+				if err != nil {
+					continue
+				}
+				scanCSSDependencies(filepath.Dir(dep.Path), string(raw), dep.ID)
+			case "url", "image-set":
+				cssURLCount++
+				dep := dependency{ID: fmt.Sprintf("%s_url_%02d", idPrefix, cssURLCount), Kind: "asset"}
+				fillDependencyWithPortableBase(&dep, cssBase, base, ref)
+				assets = appendDependencyIfNew(assets, assetSeen, dep)
 			}
 		}
 	}
-	imgRe := regexp.MustCompile(`(?is)<(?:img|image|source)\b[^>]*(?:src|href)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))`)
-	for _, m := range imgRe.FindAllStringSubmatch(src, -1) {
-		ref := firstNonEmpty(m[2], m[3], m[4])
-		if ref == "" || strings.HasPrefix(ref, "data:") {
-			continue
+	doc, err := xhtml.Parse(strings.NewReader(src))
+	if err == nil {
+		var walk func(*xhtml.Node)
+		walk = func(n *xhtml.Node) {
+			if n.Type == xhtml.ElementNode {
+				tag := strings.ToLower(n.Data)
+				if tag == "style" {
+					inlineStyleCount++
+					css := rawNodeText(n)
+					id := fmt.Sprintf("inline_style_%02d", inlineStyleCount)
+					styles = append(styles, dependency{
+						ID:     id,
+						Kind:   "inline_css",
+						SHA256: sha256Bytes([]byte(css)),
+					})
+					scanCSSDependencies(base, css, id)
+				}
+				for _, attr := range n.Attr {
+					key := strings.ToLower(attr.Key)
+					if attr.Namespace != "" {
+						key = strings.ToLower(attr.Namespace + ":" + attr.Key)
+					}
+					value := strings.TrimSpace(attr.Val)
+					if key == "style" {
+						styleAttrCount++
+						scanCSSDependencies(base, value, fmt.Sprintf("style_attr_%02d", styleAttrCount))
+						continue
+					}
+					if key == "srcset" && isSrcsetFetchElement(tag) {
+						for _, candidate := range splitSrcsetRefs(value) {
+							dep := dependency{Kind: "asset"}
+							fillDependency(&dep, base, candidate)
+							assets = appendDependencyIfNew(assets, assetSeen, dep)
+						}
+						continue
+					}
+					if key == "imagesrcset" && tag == "link" && linkRelPreloadsImage(n) {
+						for _, candidate := range splitSrcsetRefs(value) {
+							dep := dependency{Kind: "asset"}
+							fillDependency(&dep, base, candidate)
+							assets = appendDependencyIfNew(assets, assetSeen, dep)
+						}
+						continue
+					}
+					if !isFetchResourceAttr(tag, key) {
+						continue
+					}
+					if tag == "link" && key == "href" && linkRelFetchesStylesheet(n) {
+						linkedStyleCount++
+						dep := appendStylesheet(base, value, fmt.Sprintf("linked_stylesheet_%02d", linkedStyleCount))
+						if dep.Path != "" && !seenCSS[dep.Path] {
+							seenCSS[dep.Path] = true
+							if raw, err := readRegularFileForDependencyScan(dep.Path); err == nil {
+								scanCSSDependencies(filepath.Dir(dep.Path), string(raw), dep.ID)
+							}
+						}
+						continue
+					}
+					dep := dependency{Kind: "asset"}
+					fillDependency(&dep, base, value)
+					assets = appendDependencyIfNew(assets, assetSeen, dep)
+				}
+			}
+			for child := n.FirstChild; child != nil; child = child.NextSibling {
+				walk(child)
+			}
 		}
-		dep := dependency{Kind: "asset"}
-		fillDependency(&dep, base, ref)
-		assets = appendDependencyIfNew(assets, assetSeen, dep)
-	}
-	for i, m := range styleAttributeRe.FindAllStringSubmatch(src, -1) {
-		css := firstNonEmpty(m[1], m[2])
-		assets = collectCSSURLDependencies(assets, assetSeen, base, css, fmt.Sprintf("style_attr_url_%02d", i+1))
+		walk(doc)
 	}
 	fontURLRe := regexp.MustCompile(`(?is)@font-face\s*{.*?url\(\s*["']?([^'")]+)["']?\s*\).*?}`)
 	for i, m := range fontURLRe.FindAllStringSubmatch(src, -1) {
@@ -3591,6 +3660,10 @@ func fontPresetDependency(fontPreset string) dependency {
 }
 
 func fillDependency(dep *dependency, base, ref string) {
+	fillDependencyWithPortableBase(dep, base, base, ref)
+}
+
+func fillDependencyWithPortableBase(dep *dependency, pathBase, portableBase, ref string) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		dep.Risk = "dependency reference is empty"
@@ -3615,7 +3688,7 @@ func fillDependency(dep *dependency, base, ref string) {
 				return
 			case "file":
 				path, err := fileURLDependencyPath(u)
-				recordLocalDependency(dep, base, path, err)
+				recordLocalDependency(dep, portableBase, path, err)
 				return
 			default:
 				dep.URL = ref
@@ -3624,8 +3697,8 @@ func fillDependency(dep *dependency, base, ref string) {
 			}
 		}
 	}
-	path, err := localDependencyPath(base, ref)
-	recordLocalDependency(dep, base, path, err)
+	path, err := localDependencyPath(pathBase, ref)
+	recordLocalDependency(dep, portableBase, path, err)
 }
 
 func recordLocalDependency(dep *dependency, base, path string, err error) {
