@@ -57,6 +57,8 @@ const (
 	maxRenderedPDFBytes  = int64(512 << 20)
 	maxMontageSlides     = 500
 	maxMontagePixels     = maxRenderedPNGPixels
+	maxPDFImageStreams   = maxMontageSlides
+	maxPDFImageBytes     = maxRenderedPDFBytes
 
 	maxDeckJSONBytes         = int64(16 << 20)
 	maxDeckMarkdownBytes     = int64(16 << 20)
@@ -1484,15 +1486,23 @@ func verifyPDFPNGVisualParity(pdfPath string, images []renderedImage) []qaFindin
 }
 
 func extractPDFImageStreams(pdfPath string) ([]pdfImageStream, error) {
+	return extractPDFImageStreamsWithBudget(pdfPath, maxPDFImageStreams, maxPDFImageBytes)
+}
+
+func extractPDFImageStreamsWithBudget(pdfPath string, maxStreams int, maxDecodedBytes int64) ([]pdfImageStream, error) {
 	raw, err := readRegularFileWithMaxBytes(pdfPath, maxRenderedPDFBytes)
 	if err != nil {
 		return nil, err
 	}
 	objects := bytes.Split(raw, []byte("\nendobj\n"))
 	var images []pdfImageStream
+	var decodedBytes int64
 	for _, obj := range objects {
 		if !bytes.Contains(obj, []byte("/Subtype /Image")) {
 			continue
+		}
+		if maxStreams > 0 && len(images) >= maxStreams {
+			return nil, fmt.Errorf("PDF image stream count exceeds maximum allowed count: %d > %d", len(images)+1, maxStreams)
 		}
 		streamMarker := []byte("\nstream\n")
 		streamStart := bytes.Index(obj, streamMarker)
@@ -1520,6 +1530,9 @@ func extractPDFImageStreams(pdfPath string) ([]pdfImageStream, error) {
 		if err != nil {
 			return nil, err
 		}
+		if maxDecodedBytes > 0 && maxStreamBytes > maxDecodedBytes-decodedBytes {
+			return nil, fmt.Errorf("PDF image streams exceed maximum decoded byte budget: %d > %d", decodedBytes+maxStreamBytes, maxDecodedBytes)
+		}
 		reader, err := zlib.NewReader(bytes.NewReader(obj[streamStart:streamEnd]))
 		if err != nil {
 			return nil, err
@@ -1532,6 +1545,7 @@ func extractPDFImageStreams(pdfPath string) ([]pdfImageStream, error) {
 		if int64(len(data)) != maxStreamBytes {
 			return nil, fmt.Errorf("PDF image stream decoded length %d does not match expected RGB byte count %d", len(data), maxStreamBytes)
 		}
+		decodedBytes += int64(len(data))
 		images = append(images, pdfImageStream{Width: width, Height: height, Data: data})
 	}
 	return images, nil

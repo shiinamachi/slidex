@@ -1736,7 +1736,7 @@ func runPipeline(args []string) error {
 			return err
 		}
 		if state.CodexRuntime.Mode == "app-server" {
-			if snapshotRaw, err := os.ReadFile(filepath.Join(outDir, "protocol_diagnostics.json")); err == nil {
+			if snapshotRaw, err := readRegularFileWithMaxBytes(filepath.Join(outDir, "protocol_diagnostics.json"), maxDeckJSONBytes); err == nil {
 				var snapshot map[string]any
 				if json.Unmarshal(snapshotRaw, &snapshot) == nil && snapshot["thread_start"] != nil {
 					return writeThreadIndex(outDir, threadIndexFromAppServerSnapshot(deckAbs, snapshot))
@@ -2100,7 +2100,7 @@ func pruneRunLogByRetention(path string, cutoff time.Time, keepSuccessful, keepF
 }
 
 func readRunLogSegments(path string, fallback time.Time) ([]runLogSegment, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckLogBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -3911,7 +3911,7 @@ func replayMCPEvents(deckAbs, threadID string) (eventReplayRecord, error) {
 	byThread := map[string]*replayThread{}
 	eventCount := 0
 	for _, path := range paths {
-		raw, err := os.ReadFile(path)
+		raw, err := readRegularFileWithMaxBytes(path, maxDeckLogBytes)
 		if err != nil {
 			return eventReplayRecord{}, err
 		}
@@ -4449,7 +4449,7 @@ func authoringArtifactCandidates(deckAbs, stage string) []string {
 
 func authoringResultForStage(deckAbs, stage string) (map[string]any, string, error) {
 	for _, path := range authoringArtifactCandidates(deckAbs, stage) {
-		raw, err := os.ReadFile(path)
+		raw, err := readRegularFileWithMaxBytes(path, maxCodexMessageBytes)
 		if err != nil {
 			continue
 		}
@@ -6560,7 +6560,7 @@ func recordCodexExecAuditCorrection(path string, corrected map[string]any, corre
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxCodexMessageBytes)
 	if err != nil {
 		return err
 	}
@@ -6738,7 +6738,7 @@ func artifactsForExisting(paths []string) []artifact {
 }
 
 func readRenderManifest(path string) (renderManifest, bool) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return renderManifest{}, false
 	}
@@ -6774,7 +6774,7 @@ func writeState(outDir string, state slidexState) error {
 func readStateOrNew(deck, mode string, allowMismatch bool) slidexState {
 	deckAbs := mustAbs(deck)
 	path := filepath.Join(deckAbs, "out", "slidex_state.json")
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err == nil {
 		var state slidexState
 		if json.Unmarshal(raw, &state) == nil {
@@ -6785,7 +6785,7 @@ func readStateOrNew(deck, mode string, allowMismatch bool) slidexState {
 }
 
 func readThreadIndex(outDir string) codexThreadIndex {
-	raw, err := os.ReadFile(filepath.Join(outDir, "codex_threads.json"))
+	raw, err := readRegularFileWithMaxBytes(filepath.Join(outDir, "codex_threads.json"), maxDeckJSONBytes)
 	if err == nil {
 		var idx codexThreadIndex
 		if json.Unmarshal(raw, &idx) == nil {
@@ -7452,7 +7452,7 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 }
 
 func visualReviewArtifactFresh(path string, manifest renderManifest) bool {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return false
 	}
@@ -7473,7 +7473,7 @@ func visualReviewArtifactFresh(path string, manifest renderManifest) bool {
 }
 
 func verifyManualVisualReviewArtifact(path, deckAbs string, manifest renderManifest) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return []qaFinding{fail("visual_review.manual", "manual visual review is required and latest_review.json is missing or stale: "+err.Error(), path)}
 	}
@@ -7504,7 +7504,7 @@ func verifyManualVisualReviewArtifact(path, deckAbs string, manifest renderManif
 }
 
 func verifyVisualReviewImageSet(path string, manifest renderManifest) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return []qaFinding{fail("package.visual_review_image_set", "visual review image set missing: "+err.Error(), path)}
 	}
@@ -7538,7 +7538,7 @@ func verifyVisualReviewEvidence(path, deckAbs string, manifest renderManifest) [
 }
 
 func visualReviewEvidenceFindings(check, path, deckAbs string, manifest renderManifest) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return []qaFinding{fail(check, "visual review missing: "+err.Error(), path)}
 	}
@@ -7583,7 +7583,7 @@ func visualReviewEvidenceFindings(check, path, deckAbs string, manifest renderMa
 }
 
 func verifyStructuredReviewGate(path, expectedStage string, manifest renderManifest, deckAbs, htmlPath, qaReportPath, deliverySummaryPath string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return []qaFinding{fail("package.structured_review", "structured review missing: "+err.Error(), path)}
 	}

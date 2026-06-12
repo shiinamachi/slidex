@@ -1623,6 +1623,37 @@ func TestWorkbenchWritesRejectSymlinkTargets(t *testing.T) {
 	}
 }
 
+func TestWorkbenchReadsRejectSymlinkArtifacts(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+
+	manifestTarget := filepath.Join(outside, "manifest.json")
+	if err := os.WriteFile(manifestTarget, []byte(`{"schemaVersion":"slidex.workbenchManifest.v1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(manifestTarget, filepath.Join(outDir, workbenchManifestName)); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	if _, ok := readWorkbenchManifest(deck); ok {
+		t.Fatal("workbench manifest reader should reject symlink targets")
+	}
+
+	draftTarget := filepath.Join(outside, "draft.json")
+	if err := os.WriteFile(draftTarget, []byte(`{"schemaVersion":"slidex.workbenchDraft.v1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(draftTarget, filepath.Join(outDir, workbenchDraftName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readWorkbenchDraft(deck); ok {
+		t.Fatal("workbench draft reader should reject symlink targets")
+	}
+}
+
 func TestWorkbenchWritesRejectSymlinkParentDirectory(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	if err := os.MkdirAll(deck, 0o700); err != nil {

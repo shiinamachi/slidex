@@ -1082,6 +1082,44 @@ func TestVerifySanitizedLogsRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestReadRunLogSegmentsRejectsSymlink(t *testing.T) {
+	outDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "run_log.jsonl")
+	logPath := filepath.Join(outDir, "run_log.jsonl")
+	if err := os.WriteFile(outside, []byte(`{"event":"run_started"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, logPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := readRunLogSegments(logPath, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink run log rejection, got %v", err)
+	}
+}
+
+func TestReplayMCPEventsRejectsSymlinkEventLog(t *testing.T) {
+	deck := t.TempDir()
+	agentRuns := filepath.Join(deck, "out", "agent_runs")
+	if err := os.MkdirAll(agentRuns, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "events.jsonl")
+	eventPath := filepath.Join(agentRuns, "resolve_workspace_appserver_events.jsonl")
+	if err := os.WriteFile(outside, []byte(`{"method":"thread/item/updated","params":{"threadId":"t","turnId":"u"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, eventPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	_, err := replayMCPEvents(deck, "")
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink event log rejection, got %v", err)
+	}
+}
+
 func TestPackageDeckSkipsSpecParsingWhenRequiredSpecInvalid(t *testing.T) {
 	deck := t.TempDir()
 	outDir := filepath.Join(deck, "out")
@@ -1177,6 +1215,39 @@ func TestExtractPDFImageStreamsRejectsOversizedDimensions(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "maximum pixel count") {
 		t.Fatalf("expected PDF image stream dimension budget rejection, got %v", err)
 	}
+}
+
+func TestExtractPDFImageStreamsRejectsAggregateDecodedBudget(t *testing.T) {
+	var pdf bytes.Buffer
+	pdf.WriteString("%PDF-1.4\n")
+	writePDFImageStreamForTest(t, &pdf, 1, 2, 2, bytes.Repeat([]byte{0}, 12))
+	writePDFImageStreamForTest(t, &pdf, 2, 2, 2, bytes.Repeat([]byte{1}, 12))
+	path := filepath.Join(t.TempDir(), "final_deck.pdf")
+	if err := os.WriteFile(path, pdf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := extractPDFImageStreamsWithBudget(path, 10, 12)
+	if err == nil || !strings.Contains(err.Error(), "decoded byte budget") {
+		t.Fatalf("expected aggregate PDF image stream budget rejection, got %v", err)
+	}
+}
+
+func writePDFImageStreamForTest(t *testing.T, pdf *bytes.Buffer, objectID, width, height int, rawRGB []byte) {
+	t.Helper()
+	var compressed bytes.Buffer
+	zw := zlib.NewWriter(&compressed)
+	if _, err := zw.Write(rawRGB); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(pdf, "%d 0 obj\n", objectID)
+	fmt.Fprintf(pdf, "<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\n", width, height, compressed.Len())
+	pdf.WriteString("stream\n")
+	pdf.Write(compressed.Bytes())
+	pdf.WriteString("\nendstream\nendobj\n")
 }
 
 func writeSolidPNGForTest(t *testing.T, path string, c color.RGBA) {

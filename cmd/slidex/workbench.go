@@ -1172,7 +1172,7 @@ func rawTokenAbsentFromFiles(token string, paths []string) bool {
 		return false
 	}
 	for _, path := range paths {
-		raw, err := os.ReadFile(path)
+		raw, err := readRegularFileWithMaxBytes(path, maxDeckTextArtifactBytes)
 		if err != nil || bytes.Contains(raw, []byte(token)) {
 			return false
 		}
@@ -2560,7 +2560,7 @@ func staleWorkbenchLock(lockPath string) bool {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return false
 	}
-	raw, err := os.ReadFile(lockPath)
+	raw, err := readRegularFileWithMaxBytes(lockPath, maxDeckLogBytes)
 	if err != nil {
 		return time.Since(info.ModTime()) > 5*time.Second
 	}
@@ -2674,12 +2674,7 @@ func readWorkbenchManifest(deckAbs string) (workbenchManifest, bool) {
 
 func readWorkbenchManifestUnlocked(deckAbs string) (workbenchManifest, bool) {
 	path := workbenchManifestPath(deckAbs)
-	f, _, err := openRegularFileForRead(path)
-	if err != nil {
-		return workbenchManifest{}, false
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(f)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return workbenchManifest{}, false
 	}
@@ -2764,7 +2759,7 @@ func readWorkbenchControl(deckAbs string) (workbenchControl, bool) {
 	if err := requirePrivateFile(path, "workbench control file"); err != nil {
 		return workbenchControl{}, false
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxDeckJSONBytes)
 	if err != nil {
 		return workbenchControl{}, false
 	}
@@ -2819,7 +2814,7 @@ func trustedWorkbenchControl(manifest workbenchManifest) (workbenchControl, bool
 }
 
 func readWorkbenchDraft(deckAbs string) (workbenchDraft, bool) {
-	raw, err := os.ReadFile(filepath.Join(deckAbs, "out", workbenchDraftName))
+	raw, err := readRegularFileWithMaxBytes(filepath.Join(deckAbs, "out", workbenchDraftName), maxDeckJSONBytes)
 	if err != nil {
 		return workbenchDraft{}, false
 	}
@@ -3077,7 +3072,7 @@ func verifyWorkbenchBrowserEvidence(workspace, deckID, deck string, requireScree
 		addFinding("browser evidence path is not a regular secure target: %v", err)
 		return result, nil
 	}
-	raw, err := os.ReadFile(evidencePath)
+	raw, err := readRegularFileWithMaxBytes(evidencePath, maxDeckJSONBytes)
 	if err != nil {
 		addFinding("browser evidence is missing or unreadable: %s: %v", filepath.ToSlash(evidencePath), err)
 		return result, nil
