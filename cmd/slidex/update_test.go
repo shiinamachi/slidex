@@ -1079,6 +1079,50 @@ func TestRunUpdateApplyRejectsUnsafeArchiveTargetVersionBeforeExtraction(t *test
 	}
 }
 
+func TestRunUpdateApplyRejectsNonReleaseArchiveTargetVersionBeforeExtraction(t *testing.T) {
+	parent := t.TempDir()
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	writeTarGzFromDirForTest(t, archivePath, candidate, strings.TrimSuffix(contract.ArchiveName, ".tar.gz"))
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksumPath := filepath.Join(parent, contract.ChecksumName)
+	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := []string{"dev-local", "0.1.0-beta.1", "0.1.0-e9c033e"}
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			safeName := strings.NewReplacer(".", "_", "-", "_").Replace(target)
+			installRoot := filepath.Join(parent, "slidex-"+safeName)
+			if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+
+			err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", installMetadataPath(installRoot), "--archive", archivePath, "--checksums", checksumPath, "--target-version", target, "--yes"})
+			if err == nil || !strings.Contains(err.Error(), "stable or canary package version") {
+				t.Fatalf("expected non-release target version failure, got %v", err)
+			}
+			if candidateExtractedUnderForTest(t, filepath.Join(installRoot, ".slidex", "staged")) {
+				t.Fatalf("archive should not be extracted for non-release target version %q", target)
+			}
+		})
+	}
+}
+
 func TestRunUpdateApplyArchiveChecksumFailureJSONReportsFailureContract(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")

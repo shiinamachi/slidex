@@ -979,7 +979,8 @@ func safeUpdateTargetVersionSegment(targetVersion string) (string, error) {
 	if version == "" {
 		return "", errors.New("target version is required")
 	}
-	if channelFromPackageVersion(version) == "" {
+	channel := channelFromPackageVersion(version)
+	if channel != updateChannelProduction && channel != updateChannelCanary {
 		return "", fmt.Errorf("target version must be a stable or canary package version, got %q", targetVersion)
 	}
 	if filepath.IsAbs(version) ||
