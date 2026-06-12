@@ -371,10 +371,11 @@ func runUpdateApply(args []string) error {
 		}
 		*targetVersion = canonicalVersion
 		*targetTag = canonicalTag
-		if err := verifyArchiveCandidateSHA256(*archive, *checksums); err != nil {
+		stageParent, stagedArchive, err := stageVerifiedLocalReleaseArchive(status.InstallRoot, *targetVersion, *archive, *checksums)
+		if err != nil {
 			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
-		extracted, err := extractArchiveCandidate(*archive, *targetVersion, status.InstallRoot)
+		extracted, err := extractDownloadedReleaseArchive(stageParent, stagedArchive)
 		if err != nil {
 			return maybePrintUpdateApplyFailure(*jsonOut, status, *targetVersion, *targetTag, err)
 		}
@@ -990,6 +991,34 @@ func verifyArchiveCandidateSHA256(archivePath, checksumsPath string) error {
 		return err
 	}
 	return nil
+}
+
+func stageVerifiedLocalReleaseArchive(installRoot, targetVersion, archivePath, checksumsPath string) (stageParent, stagedArchivePath string, err error) {
+	payload, err := readRegularFileWithMaxBytes(archivePath, maxUpdateArchiveCompressedBytes)
+	if err != nil {
+		return "", "", err
+	}
+	checksumText, err := readRegularFileWithMaxBytes(checksumsPath, maxUpdateChecksumBytes)
+	if err != nil {
+		return "", "", err
+	}
+	archiveName := filepath.Base(archivePath)
+	if _, err := verifyReleaseAssetSHA256(archiveName, payload, string(checksumText), ""); err != nil {
+		return "", "", err
+	}
+	stageParent, err = updateInternalStageDir(installRoot, "downloads", targetVersion)
+	if err != nil {
+		return "", "", err
+	}
+	if err := ensureSecureDir(stageParent); err != nil {
+		return "", "", err
+	}
+	stagedArchivePath = filepath.Join(stageParent, archiveName)
+	if err := secureWriteFile(stagedArchivePath, payload, 0o644); err != nil {
+		_ = os.RemoveAll(stageParent)
+		return "", "", err
+	}
+	return stageParent, stagedArchivePath, nil
 }
 
 func extractArchiveCandidate(archivePath, targetVersion, installRoot string) (string, error) {

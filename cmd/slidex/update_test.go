@@ -1576,6 +1576,56 @@ func TestRunUpdateApplyRequiresMatchingChecksumBeforeActivation(t *testing.T) {
 	}
 }
 
+func TestStageVerifiedLocalReleaseArchiveExtractsVerifiedCopy(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	contract, err := releaseAssetContractFor("v0.2.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(parent, contract.ArchiveName)
+	topName := strings.TrimSuffix(strings.TrimSuffix(contract.ArchiveName, ".tar.gz"), ".zip")
+	if strings.HasSuffix(contract.ArchiveName, ".zip") {
+		writeZipFromDirForTest(t, archivePath, candidate, topName)
+	} else {
+		writeTarGzFromDirForTest(t, archivePath, candidate, topName)
+	}
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksumPath := filepath.Join(parent, contract.ChecksumName)
+	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stageParent, stagedArchive, err := stageVerifiedLocalReleaseArchive(installRoot, "0.2.0", archivePath, checksumPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(parent, "replacement")
+	writeCandidateBundleForTest(t, replacement, "9.9.9")
+	if strings.HasSuffix(contract.ArchiveName, ".zip") {
+		writeZipFromDirForTest(t, archivePath, replacement, topName)
+	} else {
+		writeTarGzFromDirForTest(t, archivePath, replacement, topName)
+	}
+
+	extracted, err := extractDownloadedReleaseArchive(stageParent, stagedArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(extracted, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("extracted VERSION = %q, want verified archive contents", got)
+	}
+}
+
 func TestRunUpdateApplyRejectsUnsafeArchiveTargetVersionBeforeExtraction(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
