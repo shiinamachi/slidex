@@ -3331,16 +3331,16 @@ func canaryVersionTimestamp(version string) (string, bool) {
 	return timestamp, ok && len(timestamp) == 14
 }
 
-func parseReleaseBaseVersionParts(version string) ([3]int, bool) {
-	var parts [3]int
+func parseReleaseBaseVersionParts(version string) ([3]uint64, bool) {
+	var parts [3]uint64
 	version = releaseBaseVersion(version)
 	if !stablePackageVersionPattern.MatchString(version) {
 		return parts, false
 	}
 	for i, part := range strings.Split(version, ".") {
-		var value int
-		for _, r := range part {
-			value = value*10 + int(r-'0')
+		value, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return [3]uint64{}, false
 		}
 		parts[i] = value
 	}
@@ -3484,6 +3484,7 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 			findings = append(findings, fail("update.candidate_runtime", "missing candidate runtime path: "+err.Error(), filepath.ToSlash(path)))
 		}
 	}
+	findings = append(findings, validateCandidateBundleMutableStatePaths(root)...)
 	versionPath := filepath.Join(root, "VERSION")
 	versionRaw, versionErr := readRegularFileWithMaxBytes(versionPath, maxUpdateVersionBytes)
 	if versionErr != nil {
@@ -3574,6 +3575,22 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must not be a symlink or reparse point", filepath.ToSlash(binaryPath)))
 	} else if !info.Mode().IsRegular() {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must be a regular file", filepath.ToSlash(binaryPath)))
+	}
+	return findings
+}
+
+func validateCandidateBundleMutableStatePaths(root string) []qaFinding {
+	var findings []qaFinding
+	for _, rel := range []string{
+		".slidex/update_state.json",
+		".slidex/pending_update.json",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Lstat(path); err == nil {
+			findings = append(findings, fail("update.candidate_mutable_state", "candidate must not include updater mutable state path: "+rel, filepath.ToSlash(path)))
+		} else if !errors.Is(err, os.ErrNotExist) {
+			findings = append(findings, fail("update.candidate_mutable_state", "candidate mutable state path could not be inspected: "+err.Error(), filepath.ToSlash(path)))
+		}
 	}
 	return findings
 }

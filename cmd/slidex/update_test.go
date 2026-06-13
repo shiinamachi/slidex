@@ -539,6 +539,34 @@ func TestUpdateDiscoverySelectsNewestProductionReleaseWithoutAPISorting(t *testi
 	}
 }
 
+func TestCompareReleaseBaseVersionsRejectsHugeComponents(t *testing.T) {
+	huge := strings.Repeat("9", 128) + ".0.0"
+	if _, ok := compareReleaseBaseVersions(huge, "0.1.0"); ok {
+		t.Fatal("huge release version component should not compare successfully")
+	}
+	if releaseIsNotOlder(huge, "0.1.0") {
+		t.Fatal("overflowing release version should not be considered an update candidate")
+	}
+}
+
+func TestUpdateDiscoveryIgnoresOverflowingReleaseVersions(t *testing.T) {
+	huge := strings.Repeat("9", 128)
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"v` + huge + `.0.0","draft":false,"prerelease":false,"published_at":"2026-04-01T00:00:00Z","assets":[]},
+	  {"tag_name":"v0.3.0","draft":false,"prerelease":false,"published_at":"2026-03-01T00:00:00Z","assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := selectUpdateReleaseForCurrent(updateChannelProduction, "0.1.0", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Version != "0.3.0" {
+		t.Fatalf("production selected %s", release.Version)
+	}
+}
+
 func TestUpdateDiscoveryOrdersSameBaseCanaryByTimestamp(t *testing.T) {
 	releases, err := parseUpdateReleases([]byte(`[
 	  {"tag_name":"v0.2.0-canary.20260610010000","draft":false,"prerelease":true,"published_at":"2026-02-01T00:00:00Z","assets":[]},
@@ -1320,6 +1348,40 @@ func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	}
 	if result.Status != "candidate-invalid" || !hasFailures(result.CandidateValidation) {
 		t.Fatalf("invalid candidate result = %#v", result)
+	}
+}
+
+func TestApplyCandidateBundleRejectsMutableStateCollisionBeforeActivation(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if err := os.Mkdir(filepath.Join(candidate, ".slidex", "update_state.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := applyCandidateBundle(status, candidate, "0.2.0", "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_mutable_state") {
+		t.Fatalf("mutable state collision should be candidate-invalid: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("mutable state collision should not activate install root, VERSION = %q", got)
+	}
+	if _, err := os.Stat(updateStatePath(installRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mutable state collision should not write update state in install root: %v", err)
 	}
 }
 
