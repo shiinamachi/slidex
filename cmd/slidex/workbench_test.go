@@ -3057,3 +3057,40 @@ func TestWorkbenchLockSerializesAccessAndRejectsSymlink(t *testing.T) {
 		t.Fatalf("expected symlink error, got %v", err)
 	}
 }
+
+func TestWorkbenchLockRejectsForgedLivePIDWithoutHanging(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(outDir, workbenchLockName)
+	lockBody := fmt.Sprintf("pid=%d acquired=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(lockPath, []byte(lockBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldWaitTimeout := workbenchLockWaitTimeout
+	oldRetryDelay := workbenchLockRetryDelay
+	oldStaleAfter := workbenchLockStaleAfter
+	t.Cleanup(func() {
+		workbenchLockWaitTimeout = oldWaitTimeout
+		workbenchLockRetryDelay = oldRetryDelay
+		workbenchLockStaleAfter = oldStaleAfter
+	})
+	workbenchLockWaitTimeout = 80 * time.Millisecond
+	workbenchLockRetryDelay = 5 * time.Millisecond
+	workbenchLockStaleAfter = time.Hour
+
+	start := time.Now()
+	unlock, err := acquireWorkbenchLock(outDir)
+	if err == nil {
+		unlock()
+		t.Fatal("expected forged live-pid lock to time out")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("forged live-pid lock waited too long: %s", elapsed)
+	}
+	if !strings.Contains(err.Error(), "still held") {
+		t.Fatalf("expected bounded lock-held error, got %v", err)
+	}
+}

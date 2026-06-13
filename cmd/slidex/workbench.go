@@ -56,7 +56,13 @@ const (
 	workbenchLogTruncationMarker = "\n[slidex] workbench log output exceeded maximum allowed size; further output truncated\n"
 )
 
-var errWorkbenchJSONTrailing = errors.New("request body must contain exactly one JSON value")
+var (
+	errWorkbenchJSONTrailing  = errors.New("request body must contain exactly one JSON value")
+	workbenchLockWaitTimeout  = 10 * time.Second
+	workbenchLockRetryDelay   = 50 * time.Millisecond
+	workbenchLockStaleAfter   = 5 * time.Second
+	workbenchLockSchemaMarker = "workbench-lock-v1"
+)
 
 type workbenchAssetManifest struct {
 	SchemaVersion string   `json:"schemaVersion"`
@@ -2691,6 +2697,7 @@ func acquireWorkbenchLock(outDir string) (func(), error) {
 		return nil, err
 	}
 	lockPath := filepath.Join(outDir, workbenchLockName)
+	deadline := time.Now().Add(workbenchLockWaitTimeout)
 	for {
 		if err := rejectSecureWriteTarget(lockPath); err != nil {
 			return nil, err
@@ -2702,7 +2709,7 @@ func acquireWorkbenchLock(outDir string) (func(), error) {
 				_ = os.Remove(lockPath)
 				return nil, err
 			}
-			_, _ = fmt.Fprintf(f, "pid=%d acquired=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(f, "schema=%s tool=slidex pid=%d acquired=%s\n", workbenchLockSchemaMarker, os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 			return func() {
 				_ = f.Close()
 				_ = os.Remove(lockPath)
@@ -2715,7 +2722,18 @@ func acquireWorkbenchLock(outDir string) (func(), error) {
 			_ = os.Remove(lockPath)
 			continue
 		}
-		time.Sleep(50 * time.Millisecond)
+		now := time.Now()
+		if workbenchLockWaitTimeout <= 0 || !deadline.After(now) {
+			return nil, fmt.Errorf("workbench lock %s is still held after %s", lockPath, workbenchLockWaitTimeout)
+		}
+		sleepFor := workbenchLockRetryDelay
+		if sleepFor <= 0 {
+			sleepFor = 50 * time.Millisecond
+		}
+		if remaining := deadline.Sub(now); remaining < sleepFor {
+			sleepFor = remaining
+		}
+		time.Sleep(sleepFor)
 	}
 }
 
@@ -2727,20 +2745,29 @@ func staleWorkbenchLock(lockPath string) bool {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return false
 	}
+	staleAfter := workbenchLockStaleAfter
+	if staleAfter <= 0 {
+		staleAfter = 5 * time.Second
+	}
 	raw, err := readRegularFileWithMaxBytes(lockPath, maxDeckLogBytes)
 	if err != nil {
-		return time.Since(info.ModTime()) > 5*time.Second
+		return time.Since(info.ModTime()) > staleAfter
 	}
+	fields := map[string]string{}
 	for _, field := range strings.Fields(string(raw)) {
-		if strings.HasPrefix(field, "pid=") {
-			pid, err := strconv.Atoi(strings.TrimPrefix(field, "pid="))
-			if err != nil || pid <= 0 {
-				return time.Since(info.ModTime()) > 5*time.Second
-			}
-			return !processAlive(pid)
+		name, value, ok := strings.Cut(field, "=")
+		if ok {
+			fields[name] = value
 		}
 	}
-	return time.Since(info.ModTime()) > 5*time.Second
+	if fields["schema"] == workbenchLockSchemaMarker && fields["tool"] == "slidex" {
+		pid, err := strconv.Atoi(fields["pid"])
+		if err != nil || pid <= 0 {
+			return time.Since(info.ModTime()) > staleAfter
+		}
+		return !processAlive(pid)
+	}
+	return time.Since(info.ModTime()) > staleAfter
 }
 
 func stopWorkbenchProcess(manifest workbenchManifest) {
