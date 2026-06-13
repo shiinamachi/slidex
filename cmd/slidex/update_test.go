@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -457,6 +458,40 @@ func TestFetchUpdateReleasesFollowsPagination(t *testing.T) {
 	}
 	if release.TagName != "v0.3.0" {
 		t.Fatalf("production release = %s, want v0.3.0", release.TagName)
+	}
+}
+
+func TestFetchUpdateReleaseForStatusSearchesPastBusyCanaryPages(t *testing.T) {
+	var requests []string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.String())
+		page, _ := strconv.Atoi(firstNonEmpty(r.URL.Query().Get("page"), "1"))
+		if page >= 7 {
+			_, _ = io.WriteString(w, `[
+			  {"tag_name":"v0.3.0","draft":false,"prerelease":false,"published_at":"2026-03-01T00:00:00Z","assets":[]}
+			]`)
+			return
+		}
+		w.Header().Set("Link", "<"+server.URL+"/releases?per_page=100&page="+strconv.Itoa(page+1)+">; rel=\"next\"")
+		_, _ = io.WriteString(w, `[
+		  {"tag_name":"v0.4.0-canary.20260610010000","draft":false,"prerelease":true,"published_at":"2026-04-01T00:00:00Z","assets":[]}
+		]`)
+	}))
+	defer server.Close()
+
+	release, err := fetchUpdateReleaseForStatus(context.Background(), server.URL+"/releases?per_page=100", updateStatus{
+		Channel:        updateChannelProduction,
+		CurrentVersion: "0.2.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v0.3.0" {
+		t.Fatalf("production release = %s, want v0.3.0", release.TagName)
+	}
+	if len(requests) != 7 {
+		t.Fatalf("expected selection-aware pagination through page 7, got %d requests: %#v", len(requests), requests)
 	}
 }
 

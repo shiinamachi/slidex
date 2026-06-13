@@ -60,7 +60,7 @@ const (
 	maxUpdateArchiveExpandedBytes   = int64(1024 << 20)
 	maxUpdateZipCentralDirBytes     = int64(64 << 20)
 	maxUpdateMetadataBytes          = int64(1 << 20)
-	maxUpdateReleasePages           = 5
+	maxUpdateReleasePages           = 20
 	maxUpdateCandidateJSONBytes     = int64(4 << 20)
 	maxUpdateVersionBytes           = int64(64 << 10)
 	updateReleaseFetchTimeout       = 30 * time.Second
@@ -456,11 +456,7 @@ func runUpdateCheck(args []string) error {
 		return err
 	}
 	if status.UpdatesEnabled {
-		releases, err := fetchUpdateReleases(context.Background(), *apiURL)
-		if err != nil {
-			return err
-		}
-		release, err := selectUpdateReleaseForStatus(status, releases)
+		release, err := fetchUpdateReleaseForStatus(context.Background(), *apiURL, status)
 		if err != nil {
 			return err
 		}
@@ -1353,11 +1349,7 @@ func canonicalUpdateTargetInputs(targetVersion, targetTag string) (string, strin
 }
 
 func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL string) (candidateRoot, targetVersion, targetTag string, err error) {
-	releases, err := fetchUpdateReleases(ctx, apiURL)
-	if err != nil {
-		return "", "", "", err
-	}
-	release, err := selectUpdateReleaseForStatus(status, releases)
+	release, err := fetchUpdateReleaseForStatus(ctx, apiURL, status)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -3016,6 +3008,21 @@ func releaseBaseVersion(version string) string {
 }
 
 func fetchUpdateReleases(ctx context.Context, apiURL string) ([]updateRelease, error) {
+	return fetchUpdateReleasesUntil(ctx, apiURL, nil)
+}
+
+func fetchUpdateReleaseForStatus(ctx context.Context, apiURL string, status updateStatus) (updateRelease, error) {
+	releases, err := fetchUpdateReleasesUntil(ctx, apiURL, func(releases []updateRelease) bool {
+		_, err := selectUpdateReleaseForStatus(status, releases)
+		return err == nil
+	})
+	if err != nil {
+		return updateRelease{}, err
+	}
+	return selectUpdateReleaseForStatus(status, releases)
+}
+
+func fetchUpdateReleasesUntil(ctx context.Context, apiURL string, stop func([]updateRelease) bool) ([]updateRelease, error) {
 	ctx, cancel := contextWithDefaultTimeout(ctx, updateReleaseFetchTimeout)
 	defer cancel()
 	var releases []updateRelease
@@ -3032,6 +3039,9 @@ func fetchUpdateReleases(ctx context.Context, apiURL string) ([]updateRelease, e
 			return nil, err
 		}
 		releases = append(releases, pageReleases...)
+		if stop != nil && stop(releases) {
+			return releases, nil
+		}
 		nextURL = nextUpdateReleasePageURL(linkHeader)
 	}
 	return releases, nil

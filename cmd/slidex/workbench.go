@@ -683,14 +683,7 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	releases, err := fetchUpdateReleases(ctx, defaultUpdateAPIURL())
-	if err != nil {
-		result.Status = "check_failed"
-		result.Error = err.Error()
-		result.Instruction = "Automatic update check failed. Continue to the local Workbench with the currently installed version."
-		return result
-	}
-	release, err := selectUpdateReleaseForStatus(status, releases)
+	release, err := fetchUpdateReleaseForStatus(ctx, defaultUpdateAPIURL(), status)
 	if err != nil {
 		result.Status = "check_failed"
 		result.Error = err.Error()
@@ -1349,6 +1342,7 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 	}
 	defer logFile.Close()
 	var manifest workbenchManifest
+	var startedCmd *exec.Cmd
 	err = retryWorkbenchPortAttempts(5, chooseLoopbackPort, func(port int) (bool, error) {
 		cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", workbenchTokenEnv, "--shutdown-token-env", workbenchShutdownTokenEnv, "--readiness-token-env", workbenchReadinessTokenEnv, "--port", strconv.Itoa(port))
 		cmd.Env = append(os.Environ(), workbenchTokenEnv+"="+token, workbenchShutdownTokenEnv+"="+shutdownToken, workbenchReadinessTokenEnv+"="+readinessToken)
@@ -1383,6 +1377,7 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
 			return false, err
 		}
+		startedCmd = cmd
 		cleanupStarted = false
 		return false, nil
 	})
@@ -1397,12 +1392,13 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 		return result, workbenchManifest{}, false, err
 	}
 	if seeded, err := seedWorkbenchDraft(deckAbs, manifest, seed); err != nil {
-		stopWorkbenchProcess(manifest)
+		cleanupStartedWorkbenchCommand(startedCmd, manifest)
 		removeWorkbenchControl(deckAbs)
 		return result, manifest, false, err
 	} else {
 		manifest = seeded
 	}
+	reapStartedWorkbenchCommand(startedCmd)
 	return result, manifest, true, nil
 }
 
@@ -2187,6 +2183,15 @@ func cleanupStartedWorkbenchCommand(cmd *exec.Cmd, manifest workbenchManifest) {
 	}
 	killWorkbenchProcessFn(cmd.Process.Pid)
 	_ = waitForCommandExit(done, 2*time.Second)
+}
+
+func reapStartedWorkbenchCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	go func() {
+		_ = cmd.Wait()
+	}()
 }
 
 func commandExitChan(cmd *exec.Cmd) <-chan struct{} {

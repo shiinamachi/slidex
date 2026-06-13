@@ -689,6 +689,26 @@ func TestCleanupStartedWorkbenchCommandWithoutControlReapsProcess(t *testing.T) 
 	}
 }
 
+func TestReapStartedWorkbenchCommandReapsAfterStop(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+	cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=5s")
+	configureWorkbenchCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reapStartedWorkbenchCommand(cmd)
+	signalWorkbenchProcessFn(cmd.Process.Pid)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd.ProcessState != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	killWorkbenchProcessFn(cmd.Process.Pid)
+	t.Fatal("workbench reaper should reap the stopped child process")
+}
+
 func TestWorkbenchGenerationHelperProcess(t *testing.T) {
 	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION") != "1" {
 		return
