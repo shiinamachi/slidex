@@ -2089,7 +2089,11 @@ func pendingActivationCommand(activatorPath, installRoot string) string {
 	if strings.TrimSpace(activatorPath) != "" {
 		command = filepath.ToSlash(activatorPath)
 	}
-	return shellQuoteCommand([]string{command, "update", "activate-pending", "--install-root", filepath.ToSlash(installRoot), "--yes", "--json"})
+	args := []string{"update", "activate-pending", "--install-root", filepath.ToSlash(installRoot), "--yes", "--json"}
+	if runtime.GOOS == "windows" {
+		return windowsPowerShellCommand(command, args...)
+	}
+	return shellQuoteCommand(append([]string{command}, args...))
 }
 
 func truncateForJSON(value string, limit int) string {

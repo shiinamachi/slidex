@@ -10,8 +10,11 @@ import (
 )
 
 func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
-	parent := t.TempDir()
-	installRoot := filepath.Join(parent, "slidex")
+	parent := filepath.Join(t.TempDir(), "parent with spaces")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installRoot := filepath.Join(parent, "slidex install")
 	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -67,5 +70,15 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	}
 	if !status.PendingActivation || status.PendingActivationCommand == "" || !strings.Contains(status.PendingActivationCommand, "slidex.exe") {
 		t.Fatalf("pending activation status missing command: %#v", status)
+	}
+	if !strings.HasPrefix(status.PendingActivationCommand, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ") {
+		t.Fatalf("pending activation command should use encoded PowerShell: %s", status.PendingActivationCommand)
+	}
+	script := decodeWindowsPowerShellCommandForTest(t, status.PendingActivationCommand)
+	if !strings.Contains(script, "& "+powershellSingleQuote(filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath)))) {
+		t.Fatalf("pending activation command should invoke activator with PowerShell call operator:\n%s", script)
+	}
+	if !strings.Contains(script, powershellSingleQuote(filepath.ToSlash(installRoot))) {
+		t.Fatalf("pending activation command should quote install root with spaces:\n%s", script)
 	}
 }
