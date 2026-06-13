@@ -1076,6 +1076,28 @@ func TestStopWorkbenchProcessDoesNotSignalForgedManifestControl(t *testing.T) {
 	}
 }
 
+func TestWorkbenchServeArgsMatchRequiresTopLevelSubcommand(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 54321, os.Getpid(), "running")
+	flags := []string{
+		"--workspace", manifest.Workspace,
+		"--deck", manifest.DeckDir,
+		"--session", manifest.SessionID,
+		"--port", strconv.Itoa(manifest.Port),
+		"--token-env", workbenchTokenEnv,
+		"--shutdown-token-env", workbenchShutdownTokenEnv,
+		"--readiness-token-env", workbenchReadinessTokenEnv,
+	}
+	if !workbenchServeArgsMatch(append([]string{"/usr/bin/slidex", "workbench", "serve"}, flags...), manifest) {
+		t.Fatal("top-level workbench serve argv should match")
+	}
+	forged := append([]string{"/usr/bin/slidex", "mcp-server", "--stdio", "workbench", "serve"}, flags...)
+	if workbenchServeArgsMatch(forged, manifest) {
+		t.Fatal("workbench serve tail under another subcommand should not match")
+	}
+}
+
 func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
@@ -2209,6 +2231,27 @@ func TestVerifySecureOpenFileRejectsSymlinkAfterOpen(t *testing.T) {
 	}
 }
 
+func TestVerifySecureOpenFileRejectsHardlinkAfterOpen(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	target := filepath.Join(dir, "target.log")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, target)
+	f, err := os.OpenFile(target, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := verifySecureOpenFile(target, f); err == nil || !strings.Contains(strings.ToLower(err.Error()), "hardlink") {
+		t.Fatalf("expected post-open hardlink rejection, got %v", err)
+	}
+	if got := readFileOrEmpty(outside); got != "outside\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+}
+
 func TestWorkbenchBrowserEvidenceRecordsVerifiedCodexSurface(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
@@ -2812,6 +2855,16 @@ func TestMCPStdioIgnoresNotifications(t *testing.T) {
 		if resp["id"] == nil {
 			t.Fatalf("response %d should not have null id: %#v", i, resp)
 		}
+	}
+}
+
+func TestRunMCPServerRejectsExtraOperands(t *testing.T) {
+	err := runMCPServer([]string{"--stdio", "workbench", "serve"})
+	if err == nil {
+		t.Fatal("expected extra mcp-server operands to fail")
+	}
+	if !strings.Contains(err.Error(), "unexpected mcp-server arguments") {
+		t.Fatalf("unexpected error for extra operands: %v", err)
 	}
 }
 

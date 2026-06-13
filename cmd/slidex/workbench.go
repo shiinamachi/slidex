@@ -2992,12 +2992,13 @@ func workbenchServeArgsMatch(args []string, manifest workbenchManifest) bool {
 }
 
 func workbenchServeFlagArgs(args []string) ([]string, bool) {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "workbench" && args[i+1] == "serve" {
-			return args[i+2:], true
-		}
+	if len(args) < 3 {
+		return nil, false
 	}
-	return nil, false
+	if args[1] != "workbench" || args[2] != "serve" {
+		return nil, false
+	}
+	return args[3:], true
 }
 
 func flagValueFromArgs(args []string, name string) (string, bool) {

@@ -4191,6 +4191,9 @@ func runMCPServer(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() != 0 {
+		return exitCodeError(2, "unexpected mcp-server arguments: %s", strings.Join(fs.Args(), " "))
+	}
 	if !*stdio {
 		return exitCodeError(2, "--stdio is required")
 	}
@@ -7058,6 +7061,16 @@ func verifySecureOpenFile(path string, f *os.File) error {
 	fileInfo, err := f.Stat()
 	if err != nil {
 		return err
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return fmt.Errorf("secure write target must be a regular file: %s", filepath.ToSlash(path))
+	}
+	links, ok, err := secureFileLinkCount(path, fileInfo)
+	if err != nil {
+		return err
+	}
+	if ok && links > 1 {
+		return fmt.Errorf("secure write target must not be hardlinked: %s", filepath.ToSlash(path))
 	}
 	if !os.SameFile(pathInfo, fileInfo) {
 		return fmt.Errorf("secure write target changed while opening: %s", filepath.ToSlash(path))
