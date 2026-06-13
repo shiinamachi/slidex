@@ -2012,7 +2012,7 @@ func sanitizedWorkbenchChildEnv(env []string) []string {
 	sanitized := make([]string, 0, len(env))
 	for _, entry := range env {
 		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(strings.ToUpper(name), "SLIDEX_WORKBENCH_") {
+		if strings.HasPrefix(strings.ToUpper(name), "SLIDEX_WORKBENCH_") || sensitiveSubprocessEnvName(name) {
 			continue
 		}
 		sanitized = append(sanitized, entry)

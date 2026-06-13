@@ -1800,14 +1800,14 @@ func TestEnsureStrategyAndSpecConsumeCodexAuthoring(t *testing.T) {
 }
 
 func TestCodexExecResumeArgsKeepOutputSchema(t *testing.T) {
-	args := codexExecArgs("schemas/app_stage_result.strict.schema.json", "last.json", true, "session-123", nil)
+	args := codexExecArgs("/tmp/deck", "schemas/app_stage_result.strict.schema.json", "last.json", true, "session-123", nil)
 	got := strings.Join(args, " ")
 	for _, want := range []string{"exec resume", "--json", "--output-schema schemas/app_stage_result.strict.schema.json", "--output-last-message last.json", "session-123", "-"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("resume args %q missing %q", got, want)
 		}
 	}
-	lastArgs := strings.Join(codexExecArgs("schema.json", "last.json", true, "last", nil), " ")
+	lastArgs := strings.Join(codexExecArgs("/tmp/deck", "schema.json", "last.json", true, "last", nil), " ")
 	if !strings.Contains(lastArgs, "--last") {
 		t.Fatalf("resume --last args missing --last: %q", lastArgs)
 	}
@@ -6640,6 +6640,8 @@ func TestNormalizedReviewImageEvidenceUsesRenderManifest(t *testing.T) {
 
 func TestCodexExecArgsIncludeSchemaForFreshAndResume(t *testing.T) {
 	root := repoRootForTest(t)
+	deck := filepath.Join(root, "decks", "demo")
+	schema := filepath.Join(root, "schemas", "app_stage_result.strict.schema.json")
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -6649,20 +6651,44 @@ func TestCodexExecArgsIncludeSchemaForFreshAndResume(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWD) }()
 
-	fresh := codexExecArgs("schemas/app_stage_result.strict.schema.json", "/tmp/last.json", false, "", []string{"/tmp/slide.png"})
-	wantFresh := []string{"exec", "--json", "--sandbox", "read-only", "--cd", root, "--output-schema", "schemas/app_stage_result.strict.schema.json", "--output-last-message", "/tmp/last.json", "--image", "/tmp/slide.png", "-"}
+	fresh := codexExecArgs(deck, schema, "/tmp/last.json", false, "", []string{"/tmp/slide.png"})
+	wantFresh := []string{"exec", "--json", "--sandbox", "read-only", "--cd", deck, "--output-schema", schema, "--output-last-message", "/tmp/last.json", "--image", "/tmp/slide.png", "-"}
 	if !reflect.DeepEqual(fresh, wantFresh) {
 		t.Fatalf("fresh args = %#v, want %#v", fresh, wantFresh)
 	}
-	resumeLast := codexExecArgs("schemas/app_stage_result.strict.schema.json", "/tmp/last.json", true, "last", nil)
-	wantResumeLast := []string{"exec", "resume", "--json", "--output-schema", "schemas/app_stage_result.strict.schema.json", "--output-last-message", "/tmp/last.json", "--last", "-"}
+	resumeLast := codexExecArgs(deck, schema, "/tmp/last.json", true, "last", nil)
+	wantResumeLast := []string{"exec", "resume", "--json", "--output-schema", schema, "--output-last-message", "/tmp/last.json", "--last", "-"}
 	if !reflect.DeepEqual(resumeLast, wantResumeLast) {
 		t.Fatalf("resume --last args = %#v, want %#v", resumeLast, wantResumeLast)
 	}
-	resumeSession := codexExecArgs("schemas/app_stage_result.strict.schema.json", "/tmp/last.json", true, "019e-session", nil)
-	wantResumeSession := []string{"exec", "resume", "--json", "--output-schema", "schemas/app_stage_result.strict.schema.json", "--output-last-message", "/tmp/last.json", "019e-session", "-"}
+	resumeSession := codexExecArgs(deck, schema, "/tmp/last.json", true, "019e-session", nil)
+	wantResumeSession := []string{"exec", "resume", "--json", "--output-schema", schema, "--output-last-message", "/tmp/last.json", "019e-session", "-"}
 	if !reflect.DeepEqual(resumeSession, wantResumeSession) {
 		t.Fatalf("resume session args = %#v, want %#v", resumeSession, wantResumeSession)
+	}
+}
+
+func TestSanitizedCodexChildEnvDropsSensitiveAmbientValues(t *testing.T) {
+	env := []string{
+		"PATH=/bin",
+		"HOME=/home/slidex",
+		"OPENAI_API_KEY=sk-test",
+		"GITHUB_TOKEN=ghp-test",
+		"SLIDEX_TEST_SECRET=secret",
+		"AWS_ACCESS_KEY_ID=access",
+		"SAFE_VALUE=keep",
+	}
+	sanitized := sanitizedCodexChildEnv(env)
+	joined := "\n" + strings.Join(sanitized, "\n") + "\n"
+	for _, forbidden := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET", "AWS_ACCESS_KEY_ID"} {
+		if strings.Contains(joined, "\n"+forbidden+"=") {
+			t.Fatalf("sanitized env retained %s in %q", forbidden, joined)
+		}
+	}
+	for _, want := range []string{"PATH=/bin", "HOME=/home/slidex", "SAFE_VALUE=keep"} {
+		if !strings.Contains(joined, "\n"+want+"\n") {
+			t.Fatalf("sanitized env dropped %s: %q", want, joined)
+		}
 	}
 }
 

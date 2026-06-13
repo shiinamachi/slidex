@@ -6191,6 +6191,9 @@ func runBufferedCommandWithInputAndMaxOutput(timeout time.Duration, maxOutputByt
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.Command(name, args...)
+	if isCodexCommandName(name) {
+		cmd.Env = sanitizedCodexChildEnv(cmd.Env)
+	}
 	configureProcessGroupCommand(cmd)
 	if dir != "" {
 		cmd.Dir = dir
@@ -6230,6 +6233,57 @@ func runBufferedCommandWithInputAndMaxOutput(timeout time.Duration, maxOutputByt
 		}
 		return output.Bytes(), fmt.Errorf("%s timed out after %s", name, timeout)
 	}
+}
+
+func isCodexCommandName(name string) bool {
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.TrimSpace(name))), ".exe")
+	return base == "codex"
+}
+
+func sanitizedCodexChildEnv(env []string) []string {
+	return sanitizedSensitiveSubprocessEnv(env)
+}
+
+func sanitizedSensitiveSubprocessEnv(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	sanitized := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if sensitiveSubprocessEnvName(name) {
+			continue
+		}
+		sanitized = append(sanitized, entry)
+	}
+	return sanitized
+}
+
+func sensitiveSubprocessEnvName(name string) bool {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	switch name {
+	case "OPENAI_API_KEY", "CODEX_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS":
+		return true
+	}
+	for _, fragment := range []string{
+		"API_KEY",
+		"ACCESS_KEY",
+		"AUTH_TOKEN",
+		"CREDENTIAL",
+		"COOKIE",
+		"PASSWORD",
+		"PRIVATE_KEY",
+		"SECRET",
+		"TOKEN",
+	} {
+		if strings.Contains(name, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func safeFilenameComponent(value string) string {
@@ -6302,8 +6356,12 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 			effectiveResumeTarget = local
 		}
 	}
-	args := codexExecArgs(schemaPath, lastMessage, resume, effectiveResumeTarget, images)
-	out, err := runBufferedCommandWithInput(5*time.Minute, mustAbs("."), strings.NewReader(prompt), "codex", args...)
+	schemaForCodex := schemaPath
+	if !filepath.IsAbs(schemaForCodex) {
+		schemaForCodex = mustAbs(schemaForCodex)
+	}
+	args := codexExecArgs(deckAbs, schemaForCodex, lastMessage, resume, effectiveResumeTarget, images)
+	out, err := runBufferedCommandWithInput(5*time.Minute, deckAbs, strings.NewReader(prompt), "codex", args...)
 	if writeErr := secureWriteFile(eventLog, out, 0o600); writeErr != nil {
 		return "", nil, writeErr
 	}
@@ -6320,7 +6378,7 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 		"effectiveResumeTarget": effectiveResumeTarget,
 		"threadId":              threadID,
 		"args":                  args,
-		"cwd":                   mustAbs("."),
+		"cwd":                   deckAbs,
 		"promptSha256":          sha256Bytes([]byte(prompt)),
 		"outputSchemaPath":      filepath.ToSlash(schemaPath),
 		"outputSchemaHash":      mustSHA256(schemaPath),
@@ -6456,7 +6514,7 @@ func extractCodexExecThreadID(raw []byte) string {
 	return ""
 }
 
-func codexExecArgs(schemaPath, lastMessage string, resume bool, resumeTarget string, images []string) []string {
+func codexExecArgs(cwd, schemaPath, lastMessage string, resume bool, resumeTarget string, images []string) []string {
 	args := []string{"exec"}
 	if resume {
 		args = append(args, "resume")
@@ -6471,7 +6529,7 @@ func codexExecArgs(schemaPath, lastMessage string, resume bool, resumeTarget str
 		}
 		return append(args, "-")
 	}
-	args = append(args, "--json", "--sandbox", "read-only", "--cd", mustAbs("."), "--output-schema", schemaPath, "--output-last-message", lastMessage)
+	args = append(args, "--json", "--sandbox", "read-only", "--cd", cwd, "--output-schema", schemaPath, "--output-last-message", lastMessage)
 	for _, image := range images {
 		args = append(args, "--image", image)
 	}
@@ -7920,12 +7978,13 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	args := []string{
 		"exec",
 		"--sandbox", "read-only",
+		"--cd", deckAbs,
 	}
 	for _, image := range manifest.PNGFiles {
 		args = append(args, "--image", image.Path)
 	}
-	args = append(args, "--output-schema", filepath.Join("schemas", "app_review_findings.strict.schema.json"), "--output-last-message", lastMessage, "-")
-	out, err := runBufferedCommandWithInput(5*time.Minute, mustAbs("."), strings.NewReader(prompt), "codex", args...)
+	args = append(args, "--output-schema", mustAbs(filepath.Join("schemas", "app_review_findings.strict.schema.json")), "--output-last-message", lastMessage, "-")
+	out, err := runBufferedCommandWithInput(5*time.Minute, deckAbs, strings.NewReader(prompt), "codex", args...)
 	if err != nil {
 		return nil, fmt.Errorf("codex exec visual QA failed: %w\n%s", err, string(out))
 	}

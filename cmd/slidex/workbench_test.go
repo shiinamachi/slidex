@@ -3059,11 +3059,14 @@ func TestSanitizedWorkbenchChildEnvDropsInternalTokens(t *testing.T) {
 		"slidex_workbench_shutdown_token=shutdown-token",
 		workbenchReadinessTokenEnv + "=ready-token",
 		workbenchBrowserOpenEnv + "=manual",
+		"OPENAI_API_KEY=sk-test",
+		"GITHUB_TOKEN=ghp-test",
+		"SLIDEX_TEST_SECRET=secret",
 		"SLIDEX_OTHER=value",
 	}
 	sanitized := sanitizedWorkbenchChildEnv(env)
 	joined := "\n" + strings.Join(sanitized, "\n") + "\n"
-	for _, forbidden := range []string{workbenchTokenEnv, workbenchShutdownTokenEnv, workbenchReadinessTokenEnv, "slidex_workbench_shutdown_token"} {
+	for _, forbidden := range []string{workbenchTokenEnv, workbenchShutdownTokenEnv, workbenchReadinessTokenEnv, "slidex_workbench_shutdown_token", "OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET"} {
 		if strings.Contains(strings.ToUpper(joined), strings.ToUpper("\n"+forbidden+"=")) {
 			t.Fatalf("sanitized env retained %s in %q", forbidden, joined)
 		}

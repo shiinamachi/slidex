@@ -277,8 +277,26 @@ func newAppServerClientCommand(name string, args ...string) (*appServerClient, e
 
 func appServerClientExecCommand(name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
+	if isCodexCommandName(name) {
+		cmd.Env = sanitizedCodexChildEnv(cmd.Env)
+	}
 	configureManagedAppServerCommand(cmd)
 	return cmd
+}
+
+func appServerDeckExecutionCWD(deckAbs string) string {
+	deckAbs = strings.TrimSpace(deckAbs)
+	if deckAbs == "" {
+		return mustAbs(".")
+	}
+	if abs, err := filepath.Abs(deckAbs); err == nil {
+		deckAbs = abs
+	}
+	return filepath.Clean(deckAbs)
+}
+
+func appServerDeckRuntimeWorkspaceRoots(deckAbs string) []string {
+	return uniqueStrings([]string{appServerDeckExecutionCWD(deckAbs)})
 }
 
 func (c *appServerClient) scanStdout(stdout io.Reader) {
@@ -598,14 +616,15 @@ func (c *appServerClient) waitForThreadCompacted(threadID string, timeout time.D
 }
 
 func startAppServerWorkflowRun(deckAbs string) (*appServerWorkflowRun, error) {
+	deckCWD := appServerDeckExecutionCWD(deckAbs)
 	client, err := newAppServerClient()
 	if err != nil {
 		return nil, err
 	}
 	run := &appServerWorkflowRun{
 		client:  client,
-		deckAbs: deckAbs,
-		outDir:  filepath.Join(deckAbs, "out"),
+		deckAbs: deckCWD,
+		outDir:  filepath.Join(deckCWD, "out"),
 		snapshot: map[string]any{
 			"schemaVersion": "slidex.protocolDiagnostics.v1",
 			"generatedAt":   time.Now().UTC().Format(time.RFC3339),
@@ -647,12 +666,12 @@ func startAppServerWorkflowRun(deckAbs string) (*appServerWorkflowRun, error) {
 		run.snapshot[strings.ReplaceAll(method, "/", "_")] = resp["result"]
 	}
 	resp, events, err := client.request("thread/start", map[string]any{
-		"cwd":                   mustAbs("."),
+		"cwd":                   deckCWD,
 		"approvalPolicy":        "never",
 		"sandbox":               "read-only",
 		"serviceName":           "slidex",
 		"model":                 defaultCodexModel(),
-		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), deckAbs}),
+		"runtimeWorkspaceRoots": appServerDeckRuntimeWorkspaceRoots(deckCWD),
 	}, 20*time.Second)
 	addEvents(events)
 	if err != nil {
@@ -705,11 +724,11 @@ func (r *appServerWorkflowRun) runStructuredTurnWithInput(stage string, input []
 	}
 	resp, events, err := r.client.request("turn/start", map[string]any{
 		"threadId":              r.threadID,
-		"cwd":                   mustAbs("."),
+		"cwd":                   r.deckAbs,
 		"approvalPolicy":        "never",
 		"sandboxPolicy":         map[string]any{"type": "readOnly"},
 		"model":                 defaultCodexModel(),
-		"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), r.deckAbs}),
+		"runtimeWorkspaceRoots": appServerDeckRuntimeWorkspaceRoots(r.deckAbs),
 		"input":                 input,
 		"outputSchema":          schema,
 	}, 30*time.Second)
@@ -1997,6 +2016,7 @@ func extractAgentTextFromItem(v any) string {
 }
 
 func appServerGoalRequest(deckAbs, threadID, method string, params map[string]any) (map[string]any, string, []map[string]any, error) {
+	deckCWD := appServerDeckExecutionCWD(deckAbs)
 	client, err := newAppServerClient()
 	if err != nil {
 		return nil, threadID, nil, err
@@ -2017,12 +2037,12 @@ func appServerGoalRequest(deckAbs, threadID, method string, params map[string]an
 	}
 	if threadID == "" || threadID == "local-mirror" {
 		resp, events, err := client.request("thread/start", map[string]any{
-			"cwd":                   mustAbs("."),
+			"cwd":                   deckCWD,
 			"approvalPolicy":        "never",
 			"sandbox":               "read-only",
 			"serviceName":           "slidex-goal",
 			"model":                 defaultCodexModel(),
-			"runtimeWorkspaceRoots": uniqueStrings([]string{mustAbs("."), deckAbs}),
+			"runtimeWorkspaceRoots": appServerDeckRuntimeWorkspaceRoots(deckCWD),
 		}, 20*time.Second)
 		allEvents = append(allEvents, events...)
 		if err != nil {
@@ -2032,7 +2052,7 @@ func appServerGoalRequest(deckAbs, threadID, method string, params map[string]an
 	} else {
 		resp, events, err := client.request("thread/resume", map[string]any{
 			"threadId":       threadID,
-			"cwd":            mustAbs("."),
+			"cwd":            deckCWD,
 			"approvalPolicy": "never",
 			"sandbox":        "read-only",
 			"excludeTurns":   true,

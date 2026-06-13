@@ -311,6 +311,27 @@ func TestManagedAppServerSignalIdentityRequiresAppServerCommand(t *testing.T) {
 	}
 }
 
+func TestAppServerDeckRuntimeWorkspaceRootsStayWithinDeck(t *testing.T) {
+	repoRoot := mustAbs(".")
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(deck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cwd := appServerDeckExecutionCWD(deck)
+	if cwd != filepath.Clean(deck) {
+		t.Fatalf("app-server deck cwd = %q, want %q", cwd, filepath.Clean(deck))
+	}
+	roots := appServerDeckRuntimeWorkspaceRoots(deck)
+	if len(roots) != 1 || roots[0] != filepath.Clean(deck) {
+		t.Fatalf("runtime workspace roots = %#v, want only deck", roots)
+	}
+	for _, root := range roots {
+		if sameFilesystemPath(root, repoRoot) {
+			t.Fatalf("runtime workspace roots must not include repo root by default: %#v", roots)
+		}
+	}
+}
+
 func TestReadAppServerMetadataRejectsUnsafeRuntimeDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX mode bits are not reliable on Windows")
