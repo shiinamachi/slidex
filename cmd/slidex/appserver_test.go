@@ -261,6 +261,66 @@ exit 13
 	}
 }
 
+func TestStartManagedAppServerSanitizesChildEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake executable script is POSIX-specific")
+	}
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envCapturePath := filepath.Join(root, "child.env")
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  --version)
+    echo "codex-cli 0.138.0"
+    exit 0
+    ;;
+  app-server)
+    env > "${SLIDEX_ENV_CAPTURE:?}"
+    echo "fake app-server bind failed" >&2
+    exit 12
+    ;;
+esac
+echo "unexpected fake codex invocation: $*" >&2
+exit 13
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(root, "runtime"))
+	t.Setenv("SLIDEX_ENV_CAPTURE", envCapturePath)
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("GITHUB_TOKEN", "ghp-test")
+	t.Setenv("SLIDEX_TEST_SECRET", "secret")
+	t.Setenv("AWS_ACCESS_KEY_ID", "access")
+	t.Setenv("SAFE_VALUE", "keep")
+
+	err := startManagedAppServer("ws://127.0.0.1:1/app", "", webSocketAuthConfig{}, false)
+	if err == nil || !strings.Contains(err.Error(), "exited before readiness") {
+		t.Fatalf("expected early-exit readiness failure, got %v", err)
+	}
+	raw, readErr := os.ReadFile(envCapturePath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	joined := "\n" + string(raw)
+	for _, forbidden := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET", "AWS_ACCESS_KEY_ID"} {
+		if strings.Contains(joined, "\n"+forbidden+"=") {
+			t.Fatalf("managed app-server child retained %s in env:\n%s", forbidden, raw)
+		}
+	}
+	for _, want := range []string{"SAFE_VALUE=keep", "SLIDEX_ENV_CAPTURE=" + envCapturePath} {
+		if !strings.Contains(joined, "\n"+want+"\n") {
+			t.Fatalf("managed app-server child env missing %s:\n%s", want, raw)
+		}
+	}
+}
+
 func TestManagedAppServerSignalIdentityRejectsUntrustedMetadata(t *testing.T) {
 	if managedAppServerMetadataTrustedForSignal(os.Getpid(), map[string]any{"ownerUid": currentOwnerID()}) {
 		t.Fatal("metadata without process identity must not be trusted for signaling")

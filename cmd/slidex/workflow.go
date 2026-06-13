@@ -2537,6 +2537,7 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	}
 	cmd := exec.Command("codex", args...)
 	cmd.Dir = mustAbs(".")
+	cmd.Env = sanitizedCodexChildEnv(cmd.Env)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	configureManagedAppServerCommand(cmd)
