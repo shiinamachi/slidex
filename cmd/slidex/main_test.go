@@ -242,6 +242,20 @@ func TestRunBufferedCommandUsesDirAndStdin(t *testing.T) {
 	}
 }
 
+func TestRunBufferedCommandRejectsOversizedOutput(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runBufferedCommandWithInputAndMaxOutput(time.Second, 128, "", nil, exe, "-test.run=^TestRunBufferedCommandHelperProcess$", "--", "large-output")
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+		t.Fatalf("expected output cap error, got out=%d err=%v", len(out), err)
+	}
+	if len(out) > 128 {
+		t.Fatalf("retained output should be capped, got %d bytes", len(out))
+	}
+}
+
 func TestRunBufferedCommandHelperProcess(t *testing.T) {
 	mode := ""
 	for i, arg := range os.Args {
@@ -271,6 +285,12 @@ func TestRunBufferedCommandHelperProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		fmt.Print(cwd)
+		os.Exit(0)
+	case "large-output":
+		for i := 0; i < 2048; i++ {
+			fmt.Fprint(os.Stdout, "o")
+			fmt.Fprint(os.Stderr, "e")
+		}
 		os.Exit(0)
 	default:
 		return

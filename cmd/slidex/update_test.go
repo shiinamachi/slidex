@@ -2731,6 +2731,34 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	}
 }
 
+func TestCandidateBinaryVersionRejectsOversizedOutput(t *testing.T) {
+	temp := t.TempDir()
+	binary := filepath.Join(temp, "slidex")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	writeCandidateBinaryForTestWithLargeOutput(t, binary, "version")
+
+	_, err := candidateBinaryVersionWithMaxOutput(binary, 128)
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+		t.Fatalf("expected output cap error, got %v", err)
+	}
+}
+
+func TestCandidateDoctorStatusRejectsOversizedOutput(t *testing.T) {
+	temp := t.TempDir()
+	binary := filepath.Join(temp, "slidex")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	writeCandidateBinaryForTestWithLargeOutput(t, binary, "doctor")
+
+	_, err := candidateDoctorStatusWithMaxOutput(temp, binary, 128)
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+		t.Fatalf("expected output cap error, got %v", err)
+	}
+}
+
 func writeInstallMetadataForTest(t *testing.T, path string, metadata installMetadata) {
 	t.Helper()
 	raw, err := json.Marshal(metadata)
@@ -2867,6 +2895,36 @@ func writeCandidateBinaryForTest(t *testing.T, path, version string) {
 func writeCandidateBinaryForTestWithDoctorStatus(t *testing.T, path, version, doctorStatus string) {
 	t.Helper()
 	writeCandidateBinaryForTestWithSideEffect(t, path, version, doctorStatus, "")
+}
+
+func writeCandidateBinaryForTestWithLargeOutput(t *testing.T, path, mode string) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	code := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == ` + fmt.Sprintf("%q", mode) + ` {
+		for i := 0; i < 2048; i++ {
+			fmt.Print("x")
+		}
+		return
+	}
+	fmt.Println("slidex 1.2.3")
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("candidate test binary build failed: %v\n%s", err, out)
+	}
 }
 
 func writeCandidateBinaryForTestWithSideEffect(t *testing.T, path, version, doctorStatus, sentinel string) {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -5839,6 +5838,10 @@ func runBufferedCommand(timeout time.Duration, name string, args ...string) ([]b
 }
 
 func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	return runBufferedCommandWithInputAndMaxOutput(timeout, maxExternalCommandOutputBytes, dir, stdin, name, args...)
+}
+
+func runBufferedCommandWithInputAndMaxOutput(timeout time.Duration, maxOutputBytes int64, dir string, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.Command(name, args...)
@@ -5849,9 +5852,9 @@ func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Rea
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	output := &limitedOutputBuffer{maxBytes: maxOutputBytes}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
 		return output.Bytes(), err
 	}
@@ -5861,6 +5864,12 @@ func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Rea
 	}()
 	select {
 	case err := <-done:
+		if outputErr := output.Err(name); outputErr != nil {
+			if err != nil {
+				return output.Bytes(), fmt.Errorf("%w; %v", err, outputErr)
+			}
+			return output.Bytes(), outputErr
+		}
 		return output.Bytes(), err
 	case <-ctx.Done():
 		if cmd.Process != nil {
@@ -5869,6 +5878,9 @@ func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Rea
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
+		}
+		if outputErr := output.Err(name); outputErr != nil {
+			return output.Bytes(), fmt.Errorf("%s timed out after %s; %v", name, timeout, outputErr)
 		}
 		return output.Bytes(), fmt.Errorf("%s timed out after %s", name, timeout)
 	}

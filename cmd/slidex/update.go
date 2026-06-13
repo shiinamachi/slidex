@@ -15,7 +15,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -3012,13 +3011,11 @@ func validateCandidateBundleDynamicChecks(root, expectedVersion string) []qaFind
 }
 
 func candidateBinaryVersion(path string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "version")
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		return "", ctx.Err()
-	}
+	return candidateBinaryVersionWithMaxOutput(path, maxExternalCommandOutputBytes)
+}
+
+func candidateBinaryVersionWithMaxOutput(path string, maxOutputBytes int64) (string, error) {
+	out, err := runBufferedCommandWithInputAndMaxOutput(8*time.Second, maxOutputBytes, "", nil, path, "version")
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -3030,14 +3027,11 @@ func candidateBinaryVersion(path string) (string, error) {
 }
 
 func candidateDoctorStatus(root, binaryPath string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, "doctor", "--json")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		return "", ctx.Err()
-	}
+	return candidateDoctorStatusWithMaxOutput(root, binaryPath, maxExternalCommandOutputBytes)
+}
+
+func candidateDoctorStatusWithMaxOutput(root, binaryPath string, maxOutputBytes int64) (string, error) {
+	out, err := runBufferedCommandWithInputAndMaxOutput(30*time.Second, maxOutputBytes, root, nil, binaryPath, "doctor", "--json")
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

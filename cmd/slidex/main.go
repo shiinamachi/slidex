@@ -69,6 +69,7 @@ const (
 	maxDeckTextArtifactBytes          = maxDeckHTMLBytes
 	maxSlideEnumerationTotalHTMLBytes = maxDeckHTMLBytes
 	maxChromeOutputBytes              = maxDeckHTMLBytes
+	maxExternalCommandOutputBytes     = maxDeckLogBytes
 	maxHashFileBytes                  = maxRenderedPDFBytes
 	maxDependencyHashBytes            = maxRenderedPNGBytes
 	maxDependencyHashTotal            = maxRenderedPDFBytes
