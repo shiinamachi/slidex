@@ -25,6 +25,18 @@ import (
 	"time"
 )
 
+func testWorkbenchReadyHandler(manifest workbenchManifest, readinessKey string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		payload := map[string]any{"status": "ready"}
+		if validWorkbenchToken(r.Header.Get(workbenchReadinessHeader), readinessKey) {
+			payload["sessionId"] = manifest.SessionID
+			payload["deckDir"] = manifest.DeckDir
+			payload["pid"] = manifest.PID
+		}
+		_ = writeJSONResponse(w, payload)
+	}
+}
+
 func TestBootstrapDeckRejectsTraversalAndCreatesUnderDecks(t *testing.T) {
 	root := repoRootForTest(t)
 	workspace := t.TempDir()
@@ -665,7 +677,7 @@ func TestWorkbenchControlFileStoresShutdownKeySeparately(t *testing.T) {
 	writeToken := "write-token"
 	shutdownKey := "shutdown-key"
 	manifest := newWorkbenchManifest(deck, workspace, "session-1", writeToken, 43210, 123, "running")
-	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, shutdownKey)); err != nil {
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, shutdownKey, "ready-key")); err != nil {
 		t.Fatal(err)
 	}
 	raw := readFileOrEmpty(workbenchControlPath(deck))
@@ -717,11 +729,12 @@ func TestStopWorkbenchProcessUsesHTTPShutdownBeforeSignalFallback(t *testing.T) 
 	var stopped atomic.Bool
 	var shutdownCalls atomic.Int32
 	handler := &workbenchHTTPServer{
-		deckAbs:       deck,
-		sessionID:     "session-1",
-		token:         "write-token",
-		shutdownToken: "shutdown-key",
-		manifest:      manifest,
+		deckAbs:        deck,
+		sessionID:      "session-1",
+		token:          "write-token",
+		shutdownToken:  "shutdown-key",
+		readinessToken: "ready-key",
+		manifest:       manifest,
 		shutdown: func() {
 			shutdownCalls.Add(1)
 			stopped.Store(true)
@@ -733,19 +746,14 @@ func TestStopWorkbenchProcessUsesHTTPShutdownBeforeSignalFallback(t *testing.T) 
 			http.Error(w, "stopped", http.StatusServiceUnavailable)
 			return
 		}
-		_ = writeJSONResponse(w, map[string]any{
-			"status":    "ready",
-			"sessionId": manifest.SessionID,
-			"deckDir":   manifest.DeckDir,
-			"pid":       manifest.PID,
-		})
+		testWorkbenchReadyHandler(manifest, "ready-key")(w, r)
 	})
 	mux.HandleFunc("/workbench/session-1/api/shutdown", handler.handleShutdown)
 	server := httptest.NewUnstartedServer(mux)
 	server.Listener = listener
 	server.Start()
 	defer server.Close()
-	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1120,10 +1128,10 @@ func TestWorkbenchSaveSmokeDoesNotStopReusedWorkbench(t *testing.T) {
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
 		t.Fatal(err)
 	}
-	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, readinessToken: "ready-key", manifest: manifest}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", handler.handleReady)
 	mux.HandleFunc("/workbench/session-1", handler.handleWorkbench)
@@ -1179,7 +1187,10 @@ func TestAppServerSkillSmokeSaveInputUsesStartedWorkbenchSession(t *testing.T) {
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
 		t.Fatal(err)
 	}
-	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
+		t.Fatal(err)
+	}
+	handler := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, readinessToken: "ready-key", manifest: manifest}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", handler.handleReady)
 	mux.HandleFunc("/workbench/session-1", handler.handleWorkbench)
@@ -2221,18 +2232,11 @@ func TestMCPToolsCallUsesCodexCompatibleEnvelope(t *testing.T) {
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		_ = writeJSONResponse(w, map[string]any{
-			"status":    "ready",
-			"sessionId": manifest.SessionID,
-			"deckDir":   manifest.DeckDir,
-			"pid":       manifest.PID,
-		})
-	})
+	mux.HandleFunc("/readyz", testWorkbenchReadyHandler(manifest, "ready-key"))
 	server := httptest.NewUnstartedServer(mux)
 	server.Listener = listener
 	server.Start()
@@ -2452,19 +2456,15 @@ func TestMCPRenderToolSchemaExposesChromeOptions(t *testing.T) {
 }
 
 func TestWorkbenchReadyValidatesSessionDeckAndPID(t *testing.T) {
-	deck := filepath.ToSlash(filepath.Join(t.TempDir(), "decks", "demo"))
-	mux := http.NewServeMux()
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		_ = writeJSONResponse(w, map[string]any{"status": "ready", "sessionId": "session-1", "deckDir": deck, "pid": os.Getpid()})
-	})
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewUnstartedServer(mux)
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
 	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -2473,14 +2473,71 @@ func TestWorkbenchReadyValidatesSessionDeckAndPID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", port, os.Getpid(), "running")
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", testWorkbenchReadyHandler(manifest, "ready-key"))
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
 
-	manifest := workbenchManifest{Host: "127.0.0.1", Port: port, SessionID: "session-1", DeckDir: deck, PID: os.Getpid()}
 	if !isWorkbenchReady(manifest) {
 		t.Fatal("expected matching ready response to be accepted")
 	}
 	manifest.SessionID = "wrong-session"
 	if isWorkbenchReady(manifest) {
 		t.Fatal("expected mismatched session to be rejected")
+	}
+}
+
+func TestWorkbenchReadyPublicResponseDoesNotRevealSessionRoute(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "write-token", 43210, os.Getpid(), "running")
+	handler := &workbenchHTTPServer{
+		deckAbs:        deck,
+		sessionID:      manifest.SessionID,
+		token:          "write-token",
+		shutdownToken:  "shutdown-key",
+		readinessToken: "ready-key",
+		manifest:       manifest,
+	}
+
+	rec := httptest.NewRecorder()
+	handler.handleReady(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public ready status = %d", rec.Code)
+	}
+	var publicPayload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &publicPayload); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"sessionId", "deckDir", "pid", "url", "apiBase", "token"} {
+		if _, ok := publicPayload[forbidden]; ok {
+			t.Fatalf("public ready leaked %s: %#v", forbidden, publicPayload)
+		}
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, manifest.SessionID) || strings.Contains(body, manifest.DeckDir) || strings.Contains(body, "/workbench/") {
+		t.Fatalf("public ready leaked route material: %s", body)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req.Header.Set(workbenchReadinessHeader, "ready-key")
+	rec = httptest.NewRecorder()
+	handler.handleReady(rec, req)
+	var privatePayload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &privatePayload); err != nil {
+		t.Fatal(err)
+	}
+	if privatePayload["sessionId"] != manifest.SessionID || privatePayload["deckDir"] != manifest.DeckDir {
+		t.Fatalf("private ready missing identity fields: %#v", privatePayload)
 	}
 }
 
@@ -2509,6 +2566,29 @@ func TestWorkbenchLoopbackContractRejectsNonCanonicalHosts(t *testing.T) {
 	}, badURL)
 	if err == nil || !strings.Contains(err.Error(), "127.0.0.1") {
 		t.Fatalf("localhost browser evidence URL should be rejected, got %v", err)
+	}
+}
+
+func TestSanitizedWorkbenchChildEnvDropsInternalTokens(t *testing.T) {
+	env := []string{
+		"PATH=/bin",
+		workbenchTokenEnv + "=write-token",
+		"slidex_workbench_shutdown_token=shutdown-token",
+		workbenchReadinessTokenEnv + "=ready-token",
+		workbenchBrowserOpenEnv + "=manual",
+		"SLIDEX_OTHER=value",
+	}
+	sanitized := sanitizedWorkbenchChildEnv(env)
+	joined := "\n" + strings.Join(sanitized, "\n") + "\n"
+	for _, forbidden := range []string{workbenchTokenEnv, workbenchShutdownTokenEnv, workbenchReadinessTokenEnv, "slidex_workbench_shutdown_token"} {
+		if strings.Contains(strings.ToUpper(joined), strings.ToUpper("\n"+forbidden+"=")) {
+			t.Fatalf("sanitized env retained %s in %q", forbidden, joined)
+		}
+	}
+	for _, want := range []string{"PATH=/bin", workbenchBrowserOpenEnv + "=manual", "SLIDEX_OTHER=value"} {
+		if !strings.Contains(joined, "\n"+want+"\n") {
+			t.Fatalf("sanitized env dropped %s: %q", want, joined)
+		}
 	}
 }
 
@@ -2562,23 +2642,10 @@ func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		_ = writeJSONResponse(w, map[string]any{
-			"status":    "ready",
-			"sessionId": "session-1",
-			"deckDir":   filepath.ToSlash(deck),
-			"pid":       os.Getpid(),
-		})
-	})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewUnstartedServer(mux)
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
 	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -2591,9 +2658,15 @@ func TestWorkbenchStatusReflectsRunningReadyServer(t *testing.T) {
 	if err := writeWorkbenchManifest(deck, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key")); err != nil {
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
 		t.Fatal(err)
 	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", testWorkbenchReadyHandler(manifest, "ready-key"))
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
 
 	status, err := workbenchStatus(workspace, "demo", "")
 	if err != nil {
@@ -2630,7 +2703,7 @@ func TestWorkbenchServeMarksManifestStaleOnPortCollision(t *testing.T) {
 		t.Fatalf("workbench must not bind to all interfaces by default: %s", workbenchListenAddr(port))
 	}
 
-	err = serveWorkbench(deck, workspace, "session-1", "token", "shutdown-token", port)
+	err = serveWorkbench(deck, workspace, "session-1", "token", "shutdown-token", "ready-token", port)
 	if err == nil {
 		t.Fatal("expected occupied port to fail")
 	}

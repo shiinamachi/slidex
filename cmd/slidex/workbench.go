@@ -47,6 +47,10 @@ const (
 	workbenchScreenshotMaxBytes  = 20 * 1024 * 1024
 	workbenchScreenshotMaxPixels = maxRenderedPNGPixels
 	workbenchBrowserOpenEnv      = "SLIDEX_BROWSER_OPEN"
+	workbenchTokenEnv            = "SLIDEX_WORKBENCH_TOKEN"
+	workbenchShutdownTokenEnv    = "SLIDEX_WORKBENCH_SHUTDOWN_TOKEN"
+	workbenchReadinessTokenEnv   = "SLIDEX_WORKBENCH_READINESS_TOKEN"
+	workbenchReadinessHeader     = "X-Slidex-Workbench-Readiness-Token"
 )
 
 type workbenchAssetManifest struct {
@@ -139,6 +143,7 @@ type workbenchControl struct {
 	Port          int    `json:"port"`
 	URL           string `json:"url"`
 	ShutdownKey   string `json:"shutdownKey"`
+	ReadinessKey  string `json:"readinessKey"`
 	CreatedAt     string `json:"createdAt"`
 }
 
@@ -393,6 +398,8 @@ func runWorkbenchServe(args []string) error {
 	tokenEnv := fs.String("token-env", "", "environment variable containing the write token")
 	shutdownToken := fs.String("shutdown-token", "", "shutdown token")
 	shutdownTokenEnv := fs.String("shutdown-token-env", "", "environment variable containing the shutdown token")
+	readinessToken := fs.String("readiness-token", "", "readiness token")
+	readinessTokenEnv := fs.String("readiness-token-env", "", "environment variable containing the readiness token")
 	port := fs.Int("port", 0, "loopback port")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -403,20 +410,29 @@ func runWorkbenchServe(args []string) error {
 	if *shutdownToken != "" {
 		return exitCodeError(2, "--shutdown-token is not supported; use --shutdown-token-env to keep the shutdown token out of process arguments")
 	}
+	if *readinessToken != "" {
+		return exitCodeError(2, "--readiness-token is not supported; use --readiness-token-env to keep the readiness token out of process arguments")
+	}
 	if *token == "" && *tokenEnv != "" {
 		*token = os.Getenv(*tokenEnv)
+		_ = os.Unsetenv(*tokenEnv)
 	}
 	if *shutdownToken == "" && *shutdownTokenEnv != "" {
 		*shutdownToken = os.Getenv(*shutdownTokenEnv)
+		_ = os.Unsetenv(*shutdownTokenEnv)
 	}
-	if *deck == "" || *sessionID == "" || *token == "" || *shutdownToken == "" || *port <= 0 {
-		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID --token-env ENV --shutdown-token-env ENV --port PORT")
+	if *readinessToken == "" && *readinessTokenEnv != "" {
+		*readinessToken = os.Getenv(*readinessTokenEnv)
+		_ = os.Unsetenv(*readinessTokenEnv)
+	}
+	if *deck == "" || *sessionID == "" || *token == "" || *shutdownToken == "" || *readinessToken == "" || *port <= 0 {
+		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID --token-env ENV --shutdown-token-env ENV --readiness-token-env ENV --port PORT")
 	}
 	deckAbs, err := resolveDeckDir(*workspace, "", *deck, false, defaultDeckTemplatePath)
 	if err != nil {
 		return err
 	}
-	return serveWorkbench(deckAbs, *workspace, *sessionID, *token, *shutdownToken, *port)
+	return serveWorkbench(deckAbs, *workspace, *sessionID, *token, *shutdownToken, *readinessToken, *port)
 }
 
 func runWorkbenchStatus(args []string) error {
@@ -1297,6 +1313,10 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 	if err != nil {
 		return result, workbenchManifest{}, false, err
 	}
+	readinessToken, err := randomURLToken(32)
+	if err != nil {
+		return result, workbenchManifest{}, false, err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return result, workbenchManifest{}, false, err
@@ -1309,8 +1329,8 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 	defer logFile.Close()
 	var manifest workbenchManifest
 	err = retryWorkbenchPortAttempts(5, chooseLoopbackPort, func(port int) (bool, error) {
-		cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", "SLIDEX_WORKBENCH_TOKEN", "--shutdown-token-env", "SLIDEX_WORKBENCH_SHUTDOWN_TOKEN", "--port", strconv.Itoa(port))
-		cmd.Env = append(os.Environ(), "SLIDEX_WORKBENCH_TOKEN="+token, "SLIDEX_WORKBENCH_SHUTDOWN_TOKEN="+shutdownToken)
+		cmd := exec.Command(exe, "workbench", "serve", "--workspace", workspaceRoot(workspace), "--deck", deckAbs, "--session", sessionID, "--token-env", workbenchTokenEnv, "--shutdown-token-env", workbenchShutdownTokenEnv, "--readiness-token-env", workbenchReadinessTokenEnv, "--port", strconv.Itoa(port))
+		cmd.Env = append(os.Environ(), workbenchTokenEnv+"="+token, workbenchShutdownTokenEnv+"="+shutdownToken, workbenchReadinessTokenEnv+"="+readinessToken)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		configureWorkbenchCommand(cmd)
@@ -1322,7 +1342,7 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 			stopWorkbenchProcess(manifest)
 			return false, err
 		}
-		if err := writeWorkbenchControl(deckAbs, newWorkbenchControl(manifest, shutdownToken)); err != nil {
+		if err := writeWorkbenchControl(deckAbs, newWorkbenchControl(manifest, shutdownToken, readinessToken)); err != nil {
 			stopWorkbenchProcess(manifest)
 			removeWorkbenchControl(deckAbs)
 			return false, err
@@ -1415,13 +1435,13 @@ func retryWorkbenchPortAttempts(maxAttempts int, choosePort func() (int, error),
 	return workbenchPortRetryExhaustedError{err: lastErr}
 }
 
-func serveWorkbench(deckAbs, workspace, sessionID, token, shutdownToken string, port int) error {
+func serveWorkbench(deckAbs, workspace, sessionID, token, shutdownToken, readinessToken string, port int) error {
 	manifest := newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, os.Getpid(), "running")
 	if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
 		return err
 	}
 	mux := http.NewServeMux()
-	server := &workbenchHTTPServer{deckAbs: deckAbs, sessionID: sessionID, token: token, shutdownToken: shutdownToken, manifest: manifest}
+	server := &workbenchHTTPServer{deckAbs: deckAbs, sessionID: sessionID, token: token, shutdownToken: shutdownToken, readinessToken: readinessToken, manifest: manifest}
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/readyz", server.handleReady)
 	mux.HandleFunc("/workbench/"+sessionID, server.handleWorkbench)
@@ -1454,13 +1474,14 @@ func serveWorkbench(deckAbs, workspace, sessionID, token, shutdownToken string, 
 }
 
 type workbenchHTTPServer struct {
-	deckAbs       string
-	sessionID     string
-	token         string
-	shutdownToken string
-	shutdown      func()
-	manifestMu    sync.RWMutex
-	manifest      workbenchManifest
+	deckAbs        string
+	sessionID      string
+	token          string
+	shutdownToken  string
+	readinessToken string
+	shutdown       func()
+	manifestMu     sync.RWMutex
+	manifest       workbenchManifest
 }
 
 func (s *workbenchHTTPServer) currentManifest() workbenchManifest {
@@ -1488,13 +1509,14 @@ func (s *workbenchHTTPServer) handleReady(w http.ResponseWriter, r *http.Request
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
-	manifest := s.currentManifest()
-	_ = writeJSONResponse(w, map[string]any{
-		"status":    "ready",
-		"sessionId": s.sessionID,
-		"deckDir":   manifest.DeckDir,
-		"pid":       os.Getpid(),
-	})
+	payload := map[string]any{"status": "ready"}
+	if validWorkbenchToken(r.Header.Get(workbenchReadinessHeader), s.readinessToken) {
+		manifest := s.currentManifest()
+		payload["sessionId"] = s.sessionID
+		payload["deckDir"] = manifest.DeckDir
+		payload["pid"] = os.Getpid()
+	}
+	_ = writeJSONResponse(w, payload)
 }
 
 func (s *workbenchHTTPServer) handleWorkbench(w http.ResponseWriter, r *http.Request) {
@@ -1923,6 +1945,21 @@ func defaultWorkbenchGenerationCommand(deckAbs string) (*exec.Cmd, []string, err
 	return cmd, append([]string{exe}, args...), nil
 }
 
+func sanitizedWorkbenchChildEnv(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	sanitized := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(strings.ToUpper(name), "SLIDEX_WORKBENCH_") {
+			continue
+		}
+		sanitized = append(sanitized, entry)
+	}
+	return sanitized
+}
+
 func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workbenchManifest, bool, error) {
 	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
 		return manifest, true, nil
@@ -1937,6 +1974,7 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 		_ = logFile.Close()
 		return manifest, false, err
 	}
+	cmd.Env = sanitizedWorkbenchChildEnv(cmd.Env)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	configureManagedAppServerCommand(cmd)
@@ -2730,7 +2768,7 @@ func workbenchControlPath(deckAbs string) string {
 	return filepath.Join(deckAbs, "out", workbenchControlName)
 }
 
-func newWorkbenchControl(manifest workbenchManifest, shutdownKey string) workbenchControl {
+func newWorkbenchControl(manifest workbenchManifest, shutdownKey, readinessKey string) workbenchControl {
 	return workbenchControl{
 		SchemaVersion: "slidex.workbenchControl.v1",
 		ToolName:      toolName,
@@ -2741,6 +2779,7 @@ func newWorkbenchControl(manifest workbenchManifest, shutdownKey string) workben
 		Port:          manifest.Port,
 		URL:           manifest.URL,
 		ShutdownKey:   shutdownKey,
+		ReadinessKey:  readinessKey,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
 }
@@ -2784,6 +2823,7 @@ func removeWorkbenchControl(deckAbs string) {
 func workbenchControlMatchesManifest(control workbenchControl, manifest workbenchManifest) bool {
 	return control.SchemaVersion == "slidex.workbenchControl.v1" &&
 		control.ShutdownKey != "" &&
+		control.ReadinessKey != "" &&
 		control.SessionID == manifest.SessionID &&
 		control.DeckDir == manifest.DeckDir &&
 		control.PID == manifest.PID &&
@@ -3418,12 +3458,17 @@ func isWorkbenchReady(manifest workbenchManifest) bool {
 	if manifest.Host != "127.0.0.1" || manifest.Port <= 0 {
 		return false
 	}
+	control, ok := trustedWorkbenchControl(manifest)
+	if !ok || control.ReadinessKey == "" {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/readyz", manifest.Port), nil)
 	if err != nil {
 		return false
 	}
+	req.Header.Set(workbenchReadinessHeader, control.ReadinessKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false
