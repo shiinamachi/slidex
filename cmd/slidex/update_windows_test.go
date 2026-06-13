@@ -87,9 +87,12 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	if !strings.Contains(status.PendingActivationCommand, location) {
 		t.Fatalf("pending activation command should move the caller session to activator root before invocation:\n%s", status.PendingActivationCommand)
 	}
-	restore := "} finally { Set-Location -LiteralPath " + powershellSingleQuote(filepath.ToSlash(installRoot)) + " }"
+	restore := "} finally { Set-Location -LiteralPath " + powershellSingleQuote(filepath.ToSlash(installRoot)) + "; $ErrorActionPreference = $slidexPreviousErrorActionPreference }"
 	if !strings.Contains(status.PendingActivationCommand, restore) {
 		t.Fatalf("pending activation command should restore caller session to install root after invocation:\n%s", status.PendingActivationCommand)
+	}
+	if !strings.HasPrefix(status.PendingActivationCommand, "& { ") || !strings.Contains(status.PendingActivationCommand, "$slidexPreviousErrorActionPreference") {
+		t.Fatalf("pending activation command should isolate helper variables in a scriptblock:\n%s", status.PendingActivationCommand)
 	}
 	if !strings.Contains(status.PendingActivationCommand, "$slidexActivationExitCode") || strings.Contains(status.PendingActivationCommand, "exit $LASTEXITCODE") {
 		t.Fatalf("pending activation command should preserve failures without exiting the caller shell:\n%s", status.PendingActivationCommand)
@@ -118,4 +121,59 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	if !sameFilesystemPath(gotCallerCwd, installRoot) {
 		t.Fatalf("caller PowerShell cwd after activation command = %s, want %s", gotCallerCwd, installRoot)
 	}
+}
+
+func TestWindowsPendingActivationCommandFailureDoesNotExitCaller(t *testing.T) {
+	if _, err := exec.LookPath("powershell.exe"); err != nil {
+		t.Skipf("powershell.exe unavailable: %v", err)
+	}
+	parent := filepath.Join(t.TempDir(), "parent with spaces")
+	installRoot := filepath.Join(parent, "slidex install")
+	activatorRoot := filepath.Join(parent, "pending activator")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(activatorRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	activatorCwdSentinel := filepath.Join(parent, "failing-activator-cwd.txt")
+	activator := filepath.Join(activatorRoot, "slidex.cmd")
+	activatorScript := "@echo off\r\ncd > " + windowsBatchQuote(activatorCwdSentinel) + "\r\nexit /b 7\r\n"
+	if err := os.WriteFile(activator, []byte(activatorScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pendingCommand := windowsPendingActivationPowerShellCommand(filepath.ToSlash(activatorRoot), filepath.ToSlash(installRoot), filepath.ToSlash(activator), "update", "activate-pending")
+
+	errorSentinel := filepath.Join(parent, "activation-error.txt")
+	callerCwdSentinel := filepath.Join(parent, "caller-cwd-after-failure.txt")
+	preferenceSentinel := filepath.Join(parent, "error-action-preference.txt")
+	runScript := "$ErrorActionPreference = 'Continue'; try { " + pendingCommand + " } catch { [System.IO.File]::WriteAllText(" + powershellSingleQuote(filepath.ToSlash(errorSentinel)) + ", $_.Exception.Message) }; [System.IO.File]::WriteAllText(" + powershellSingleQuote(filepath.ToSlash(callerCwdSentinel)) + ", (Get-Location).ProviderPath); [System.IO.File]::WriteAllText(" + powershellSingleQuote(filepath.ToSlash(preferenceSentinel)) + ", $ErrorActionPreference)"
+	run := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", runScript)
+	run.Dir = filepath.Join(installRoot, ".slidex")
+	if err := os.MkdirAll(run.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("pending activation failure should be catchable without exiting caller shell: %v\n%s", err, out)
+	}
+	gotError := strings.TrimSpace(readFileOrEmpty(errorSentinel))
+	if !strings.Contains(gotError, "exit code 7") {
+		t.Fatalf("activation error = %q, want exit code 7", gotError)
+	}
+	gotActivatorCwd := strings.TrimSpace(readFileOrEmpty(activatorCwdSentinel))
+	if !sameFilesystemPath(gotActivatorCwd, activatorRoot) {
+		t.Fatalf("failing activator cwd = %s, want %s", gotActivatorCwd, activatorRoot)
+	}
+	gotCallerCwd := strings.TrimSpace(readFileOrEmpty(callerCwdSentinel))
+	if !sameFilesystemPath(gotCallerCwd, installRoot) {
+		t.Fatalf("caller PowerShell cwd after failing activation command = %s, want %s", gotCallerCwd, installRoot)
+	}
+	if gotPreference := strings.TrimSpace(readFileOrEmpty(preferenceSentinel)); gotPreference != "Continue" {
+		t.Fatalf("caller ErrorActionPreference after failing activation command = %q, want Continue", gotPreference)
+	}
+}
+
+func windowsBatchQuote(path string) string {
+	return `"` + strings.ReplaceAll(path, `"`, `""`) + `"`
 }

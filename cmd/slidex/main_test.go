@@ -2446,10 +2446,10 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	}
 	pendingInlineCommand := windowsPendingActivationPowerShellCommand(`C:\Activator Root`, `C:\Install Root`, `C:\Activator Root\slidex.exe`, "update", "activate-pending")
 	for _, want := range []string{
-		"$ErrorActionPreference='Stop'",
+		"& { $slidexPreviousErrorActionPreference = $ErrorActionPreference; $ErrorActionPreference='Stop'",
 		"$slidexActivationExitCode = 0",
 		"try { Set-Location -LiteralPath 'C:\\Activator Root'; & 'C:\\Activator Root\\slidex.exe' 'update' 'activate-pending'",
-		"} finally { Set-Location -LiteralPath 'C:\\Install Root' }",
+		"} finally { Set-Location -LiteralPath 'C:\\Install Root'; $ErrorActionPreference = $slidexPreviousErrorActionPreference }",
 		"throw ('slidex pending activation failed with exit code ' + $slidexActivationExitCode)",
 	} {
 		if !strings.Contains(pendingInlineCommand, want) {
