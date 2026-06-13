@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -41,6 +42,10 @@ func extractSlidesWithChrome(chromePath, htmlPath, selector string, chromeNoSand
 }
 
 func extractSlidesWithChromeFromHTML(chromePath, htmlPath, src, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
+	return extractSlidesWithChromeFromHTMLContext(context.Background(), chromePath, htmlPath, src, selector, chromeNoSandbox)
+}
+
+func extractSlidesWithChromeFromHTMLContext(ctx context.Context, chromePath, htmlPath, src, selector string, chromeNoSandbox bool) ([]slideInfo, string, error) {
 	if selector != ".slide" {
 		return nil, "", fmt.Errorf("unsupported selector for Chrome enumeration: %s", selector)
 	}
@@ -69,7 +74,7 @@ func extractSlidesWithChromeFromHTML(chromePath, htmlPath, src, selector string,
 		"--dump-dom",
 		fileURLFromPath(tmpHTML),
 	)
-	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
+	out, err := runChromeCommandContext(ctx, chromeCommandTimeout, chromePath, args...)
 	payload, found := extractProbeJSONScript(string(out), "slidex-slide-enumeration", probeNonce)
 	if err != nil && !(isChromeCommandTimeout(err) && found) {
 		return nil, "", fmt.Errorf("chrome DOM enumeration failed: %w\n%s", err, string(out))

@@ -1975,15 +1975,18 @@ func workbenchFieldLengths(input workbenchSaveInput) map[string]int {
 	}
 }
 
-var newWorkbenchGenerationCommand = defaultWorkbenchGenerationCommand
+var (
+	newWorkbenchGenerationCommand = defaultWorkbenchGenerationCommand
+	workbenchGenerationTimeout    = 30 * time.Minute
+)
 
-func defaultWorkbenchGenerationCommand(deckAbs string) (*exec.Cmd, []string, error) {
+func defaultWorkbenchGenerationCommand(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, nil, err
 	}
 	args := []string{"run", "--deck", deckAbs, "--non-interactive"}
-	cmd := exec.Command(exe, args...)
+	cmd := exec.CommandContext(ctx, exe, args...)
 	return cmd, append([]string{exe}, args...), nil
 }
 
@@ -2078,8 +2081,10 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 	if err != nil {
 		return manifest, false, err
 	}
-	cmd, command, err := newWorkbenchGenerationCommand(s.deckAbs)
+	ctx, cancel := context.WithTimeout(context.Background(), workbenchGenerationTimeout)
+	cmd, command, err := newWorkbenchGenerationCommand(ctx, s.deckAbs)
 	if err != nil {
+		cancel()
 		_ = logFile.Close()
 		return manifest, false, err
 	}
@@ -2088,6 +2093,7 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 	cmd.Stderr = logFile
 	configureManagedAppServerCommand(cmd)
 	if err := cmd.Start(); err != nil {
+		cancel()
 		_ = logFile.Close()
 		return manifest, false, err
 	}
@@ -2104,27 +2110,35 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 		manifest.UpdatedAt = now
 	})
 	if err != nil {
+		cancel()
 		signalManagedProcess(cmd.Process.Pid)
 		_ = logFile.Close()
 		return manifest, false, err
 	}
 	s.setManifest(manifest)
-	go s.waitForGeneration(cmd, logFile, manifest)
+	go s.waitForGeneration(ctx, cancel, cmd, logFile, manifest)
 	return manifest, false, nil
 }
 
-func (s *workbenchHTTPServer) waitForGeneration(cmd *exec.Cmd, logFile io.Closer, started workbenchManifest) {
+func (s *workbenchHTTPServer) waitForGeneration(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, logFile io.Closer, started workbenchManifest) {
 	err := cmd.Wait()
+	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+	cancel()
 	_ = logFile.Close()
 	endedAt := time.Now().UTC().Format(time.RFC3339)
 	manifest, writeErr := updateWorkbenchManifest(s.deckAbs, started, func(manifest *workbenchManifest) {
 		manifest.GenerationEndedAt = endedAt
 		manifest.UpdatedAt = endedAt
-		manifest.GenerationExitCode = cmd.ProcessState.ExitCode()
-		if err == nil {
+		manifest.GenerationExitCode = generationExitCode(cmd)
+		switch {
+		case timedOut:
+			manifest.Status = "generation_failed"
+			manifest.GenerationStatus = "timeout"
+			manifest.Notes = append(manifest.Notes, fmt.Sprintf("Workbench generation exceeded %s and was terminated.", workbenchGenerationTimeout))
+		case err == nil:
 			manifest.Status = "generated"
 			manifest.GenerationStatus = "completed"
-		} else {
+		default:
 			manifest.Status = "generation_failed"
 			manifest.GenerationStatus = "failed"
 		}
@@ -2132,6 +2146,13 @@ func (s *workbenchHTTPServer) waitForGeneration(cmd *exec.Cmd, logFile io.Closer
 	if writeErr == nil {
 		s.setManifest(manifest)
 	}
+}
+
+func generationExitCode(cmd *exec.Cmd) int {
+	if cmd == nil || cmd.ProcessState == nil {
+		return -1
+	}
+	return cmd.ProcessState.ExitCode()
 }
 
 func (s *workbenchHTTPServer) handleShutdown(w http.ResponseWriter, r *http.Request) {

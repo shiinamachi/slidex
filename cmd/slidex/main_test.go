@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -4970,6 +4971,72 @@ func TestRunChromeCommandRejectsOversizedOutput(t *testing.T) {
 	}
 	if len(out) > 128 {
 		t.Fatalf("bounded output retained %d bytes", len(out))
+	}
+}
+
+func TestRunChromeCommandHonorsParentContextDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell helper script is Unix-specific")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-chrome")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := runChromeCommandContext(ctx, time.Hour, script)
+	if err == nil || !isChromeCommandTimeout(err) {
+		t.Fatalf("expected parent context chrome timeout, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("parent context deadline was not honored quickly: %s", elapsed)
+	}
+}
+
+func TestRenderHTMLStopsAtGlobalDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell helper script is Unix-specific")
+	}
+	oldTimeout := renderHTMLTimeout
+	renderHTMLTimeout = 120 * time.Millisecond
+	t.Cleanup(func() { renderHTMLTimeout = oldTimeout })
+
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "final_deck.html")
+	html := `<!doctype html><html><head><title>Deadline</title></head><body><section class="slide" data-slide-id="slide_01"><h1>Deadline</h1></section></body></html>`
+	if err := os.WriteFile(htmlPath, []byte(html), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chromePath := filepath.Join(dir, "fake-chrome")
+	body := "#!/bin/sh\n" +
+		"for arg in \"$@\"; do if [ \"$arg\" = \"--version\" ]; then echo 'Chromium 123.0.0.0'; exit 0; fi; done\n" +
+		"sleep 2\n"
+	if err := os.WriteFile(chromePath, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := renderConfig{
+		HTMLPath:        htmlPath,
+		OutDir:          filepath.Join(dir, "rendered_slides"),
+		PDFPath:         filepath.Join(dir, "final_deck.pdf"),
+		ManifestPath:    filepath.Join(dir, "render_manifest.json"),
+		MontagePath:     filepath.Join(dir, "qa_montage.png"),
+		PDFMode:         "paginated",
+		Selector:        ".slide",
+		Width:           16,
+		Height:          9,
+		FontPreset:      "pretendard",
+		ChromePath:      chromePath,
+		ChromeNoSandbox: false,
+	}
+	start := time.Now()
+	_, err := renderHTML(cfg)
+	if err == nil || !strings.Contains(err.Error(), "render deadline exceeded") {
+		t.Fatalf("expected render deadline error, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("render deadline was not honored quickly: %s", elapsed)
 	}
 }
 

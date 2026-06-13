@@ -521,8 +521,8 @@ func TestWorkbenchCompleteRequiresWizardDetail(t *testing.T) {
 
 func TestWorkbenchCompleteStartsGeneration(t *testing.T) {
 	oldCommand := newWorkbenchGenerationCommand
-	newWorkbenchGenerationCommand = func(deckAbs string) (*exec.Cmd, []string, error) {
-		cmd := exec.Command(os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+	newWorkbenchGenerationCommand = func(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
 		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1")
 		return cmd, []string{"slidex-test-generation", deckAbs}, nil
 	}
@@ -591,9 +591,62 @@ func TestWorkbenchCompleteStartsGeneration(t *testing.T) {
 	}
 }
 
+func TestWorkbenchGenerationTimesOut(t *testing.T) {
+	oldCommand := newWorkbenchGenerationCommand
+	oldTimeout := workbenchGenerationTimeout
+	newWorkbenchGenerationCommand = func(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=2s")
+		return cmd, []string{"slidex-test-generation", deckAbs}, nil
+	}
+	workbenchGenerationTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		newWorkbenchGenerationCommand = oldCommand
+		workbenchGenerationTimeout = oldTimeout
+	})
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+
+	started, alreadyRunning, err := server.startGeneration(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alreadyRunning || started.GenerationStatus != "running" || started.GenerationPID <= 0 {
+		t.Fatalf("generation should start before timing out: %#v already=%v", started, alreadyRunning)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	recorded := started
+	for time.Now().Before(deadline) {
+		recorded, _ = readWorkbenchManifest(deck)
+		if recorded.GenerationStatus == "timeout" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if recorded.GenerationStatus != "timeout" || recorded.Status != "generation_failed" {
+		t.Fatalf("generation should time out and fail closed: %#v", recorded)
+	}
+	if recorded.GenerationExitCode == 0 {
+		t.Fatalf("timeout should not record a successful exit code: %#v", recorded)
+	}
+}
+
 func TestWorkbenchGenerationHelperProcess(t *testing.T) {
 	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION") != "1" {
 		return
+	}
+	if sleepRaw := os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP"); sleepRaw != "" {
+		sleepFor, err := time.ParseDuration(sleepRaw)
+		if err != nil {
+			panic(err)
+		}
+		time.Sleep(sleepFor)
 	}
 	fmt.Println("generation helper complete")
 	os.Exit(0)

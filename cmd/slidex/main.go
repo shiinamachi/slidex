@@ -46,6 +46,7 @@ const (
 var (
 	toolVersion                = slidexmeta.Version()
 	pluginVersionDoctorExample = toolVersion + "+doctor"
+	renderHTMLTimeout          = 20 * time.Minute
 )
 
 var errInspectBudgetExceeded = errors.New("inspect budget exceeded")
@@ -54,6 +55,7 @@ const (
 	chromeVersionTimeout = 8 * time.Second
 	chromeCommandTimeout = 45 * time.Second
 
+	maxRenderChromeTimeouts           = 3
 	maxRenderedPNGBytes               = int64(128 << 20)
 	maxRenderedPNGPixels              = int64(64_000_000)
 	maxRenderedPDFBytes               = int64(512 << 20)
@@ -2188,6 +2190,8 @@ func renderConfigFromFlags(htmlPath, outDir, pdfPath, manifestPath, pdfMode, sel
 }
 
 func renderHTML(cfg renderConfig) (renderManifest, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), renderHTMLTimeout)
+	defer cancel()
 	raw, err := readRegularFile(cfg.HTMLPath)
 	if err != nil {
 		return renderManifest{}, err
@@ -2203,8 +2207,11 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	if cfg.Selector != ".slide" {
 		return renderManifest{}, errors.New("only .slide selector is currently supported")
 	}
-	slides, enumMethod, enumErr := extractSlidesWithChromeFromHTML(chromePath, cfg.HTMLPath, string(raw), cfg.Selector, cfg.ChromeNoSandbox)
+	slides, enumMethod, enumErr := extractSlidesWithChromeFromHTMLContext(ctx, chromePath, cfg.HTMLPath, string(raw), cfg.Selector, cfg.ChromeNoSandbox)
 	if enumErr != nil {
+		if err := renderDeadlineError(ctx); err != nil {
+			return renderManifest{}, err
+		}
 		if isSlideEnumerationPolicyError(enumErr) {
 			return renderManifest{}, enumErr
 		}
@@ -2273,8 +2280,12 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 	manifest.SlideEnumerationMethod = enumMethod
 	manifest.RepoRelativePaths = true
 	manifestBase := renderManifestBaseDir(cfg.ManifestPath)
+	chromeTimeouts := 0
 
 	for i, slide := range slides {
+		if err := renderDeadlineError(ctx); err != nil {
+			return manifest, err
+		}
 		if slide.ID == "" {
 			slide.ID = fmt.Sprintf("slide_%02d", i+1)
 			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("slide %d lacked data-slide-id; assigned %s", i+1, slide.ID))
@@ -2286,15 +2297,27 @@ func renderHTML(cfg renderConfig) (renderManifest, error) {
 		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o644); err != nil {
 			return manifest, err
 		}
-		overflowIssues, err := checkOverflowWithChrome(chromePath, wrapperPath, cfg.ChromeNoSandbox, overflowProbeNonce)
+		overflowIssues, err := checkOverflowWithChromeContext(ctx, chromePath, wrapperPath, cfg.ChromeNoSandbox, overflowProbeNonce)
 		if err != nil {
+			if abortErr := renderChromeTimeoutAbort(err, &chromeTimeouts); abortErr != nil {
+				return manifest, abortErr
+			}
+			if deadlineErr := renderDeadlineError(ctx); deadlineErr != nil {
+				return manifest, deadlineErr
+			}
 			manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("overflow check could not run for %s: %v", slide.ID, err))
 		}
 		if len(overflowIssues) > 0 {
 			return manifest, editorialGridClippingError(slide.ID, overflowIssues)
 		}
 		pngPath := filepath.Join(cfg.OutDir, fmt.Sprintf("slide_%02d.png", i+1))
-		if err := captureScreenshot(chromePath, wrapperPath, pngPath, cfg.Width, cfg.Height, cfg.ChromeNoSandbox); err != nil {
+		if err := captureScreenshotContext(ctx, chromePath, wrapperPath, pngPath, cfg.Width, cfg.Height, cfg.ChromeNoSandbox); err != nil {
+			if abortErr := renderChromeTimeoutAbort(err, &chromeTimeouts); abortErr != nil {
+				return manifest, abortErr
+			}
+			if deadlineErr := renderDeadlineError(ctx); deadlineErr != nil {
+				return manifest, deadlineErr
+			}
 			return manifest, err
 		}
 		dim, blank, err := validatePNG(pngPath, cfg.Width, cfg.Height)
@@ -2845,11 +2868,26 @@ func (b *limitedOutputBuffer) Err(label string) error {
 }
 
 func runChromeCommand(timeout time.Duration, chromePath string, args ...string) ([]byte, error) {
-	return runChromeCommandWithMaxOutput(timeout, maxChromeOutputBytes, chromePath, args...)
+	return runChromeCommandContext(context.Background(), timeout, chromePath, args...)
 }
 
 func runChromeCommandWithMaxOutput(timeout time.Duration, maxOutputBytes int64, chromePath string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return runChromeCommandWithMaxOutputContext(context.Background(), timeout, maxOutputBytes, chromePath, args...)
+}
+
+func runChromeCommandContext(ctx context.Context, timeout time.Duration, chromePath string, args ...string) ([]byte, error) {
+	return runChromeCommandWithMaxOutputContext(ctx, timeout, maxChromeOutputBytes, chromePath, args...)
+}
+
+func runChromeCommandWithMaxOutputContext(parent context.Context, timeout time.Duration, maxOutputBytes int64, chromePath string, args ...string) ([]byte, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return nil, chromeContextError(parent, 0)
+	}
+	effectiveTimeout := timeoutWithinContext(parent, timeout)
+	ctx, cancel := context.WithTimeout(parent, effectiveTimeout)
 	defer cancel()
 	cmd := exec.Command(chromePath, args...)
 	configureProcessGroupCommand(cmd)
@@ -2881,10 +2919,36 @@ func runChromeCommandWithMaxOutput(timeout time.Duration, maxOutputBytes int64, 
 		case <-time.After(2 * time.Second):
 		}
 		if outputErr := output.Err("chrome"); outputErr != nil {
-			return output.Bytes(), fmt.Errorf("chrome timed out after %s; %v", timeout, outputErr)
+			return output.Bytes(), fmt.Errorf("%s; %v", chromeContextError(ctx, effectiveTimeout), outputErr)
 		}
-		return output.Bytes(), fmt.Errorf("chrome timed out after %s", timeout)
+		return output.Bytes(), chromeContextError(ctx, effectiveTimeout)
 	}
+}
+
+func timeoutWithinContext(parent context.Context, timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return timeout
+	}
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return 0
+		}
+		if remaining < timeout {
+			return remaining
+		}
+	}
+	return timeout
+}
+
+func chromeContextError(ctx context.Context, timeout time.Duration) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("chrome timed out after %s", timeout)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("chrome canceled: %w", err)
+	}
+	return fmt.Errorf("chrome timed out after %s", timeout)
 }
 
 func fileURLFromPath(path string) string {
@@ -2911,10 +2975,18 @@ func fileURLFromPathForOS(goos, path string) string {
 }
 
 func captureScreenshot(chromePath, htmlPath, pngPath string, width, height int, chromeNoSandbox bool) error {
-	return captureURLScreenshot(chromePath, fileURLFromPath(htmlPath), pngPath, width, height, chromeNoSandbox)
+	return captureScreenshotContext(context.Background(), chromePath, htmlPath, pngPath, width, height, chromeNoSandbox)
 }
 
 func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
+	return captureURLScreenshotContext(context.Background(), chromePath, targetURL, pngPath, width, height, chromeNoSandbox)
+}
+
+func captureScreenshotContext(ctx context.Context, chromePath, htmlPath, pngPath string, width, height int, chromeNoSandbox bool) error {
+	return captureURLScreenshotContext(ctx, chromePath, fileURLFromPath(htmlPath), pngPath, width, height, chromeNoSandbox)
+}
+
+func captureURLScreenshotContext(ctx context.Context, chromePath, targetURL, pngPath string, width, height int, chromeNoSandbox bool) error {
 	dir := filepath.Dir(pngPath)
 	if err := prepareRenderedSlidesDir(dir); err != nil {
 		return err
@@ -2955,7 +3027,7 @@ func captureURLScreenshot(chromePath, targetURL, pngPath string, width, height i
 		"--screenshot="+tmpPath,
 		targetURL,
 	)
-	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
+	out, err := runChromeCommandContext(ctx, chromeCommandTimeout, chromePath, args...)
 	if err != nil {
 		if !(isChromeCommandTimeout(err) && screenshotFileExists(tmpPath)) {
 			return fmt.Errorf("chrome screenshot failed: %w\n%s", err, string(out))
@@ -2984,12 +3056,37 @@ func isChromeCommandTimeout(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "chrome timed out after")
 }
 
+func renderDeadlineError(ctx context.Context) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("render deadline exceeded after %s", renderHTMLTimeout)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("render canceled: %w", err)
+	}
+	return nil
+}
+
+func renderChromeTimeoutAbort(err error, timeouts *int) error {
+	if !isChromeCommandTimeout(err) {
+		return nil
+	}
+	*timeouts++
+	if *timeouts < maxRenderChromeTimeouts {
+		return nil
+	}
+	return fmt.Errorf("render aborted after %d Chrome timeouts: %w", *timeouts, err)
+}
+
 func screenshotFileExists(pngPath string) bool {
 	info, err := os.Stat(pngPath)
 	return err == nil && info.Size() > 0
 }
 
 func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool, probeNonce string) ([]string, error) {
+	return checkOverflowWithChromeContext(context.Background(), chromePath, htmlPath, chromeNoSandbox, probeNonce)
+}
+
+func checkOverflowWithChromeContext(ctx context.Context, chromePath, htmlPath string, chromeNoSandbox bool, probeNonce string) ([]string, error) {
 	args, cleanup, err := chromeHeadlessBaseArgs(chromeNoSandbox)
 	if err != nil {
 		return nil, err
@@ -3000,7 +3097,7 @@ func checkOverflowWithChrome(chromePath, htmlPath string, chromeNoSandbox bool, 
 		"--dump-dom",
 		fileURLFromPath(htmlPath),
 	)
-	out, err := runChromeCommand(chromeCommandTimeout, chromePath, args...)
+	out, err := runChromeCommandContext(ctx, chromeCommandTimeout, chromePath, args...)
 	payload, found := extractProbeJSONScript(string(out), "slidex-overflow-data", probeNonce)
 	if err != nil && !(isChromeCommandTimeout(err) && found) {
 		return nil, fmt.Errorf("chrome overflow probe failed: %w\n%s", err, string(out))
