@@ -2107,6 +2107,96 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	}
 }
 
+func TestStagePendingActivatorUsesUniqueSiblingRoots(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	first, err := stagePendingActivator(installRoot, candidate, "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := stagePendingActivator(installRoot, candidate, "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(first) == filepath.Dir(second) {
+		t.Fatalf("activator roots should be unique, both were %s", filepath.Dir(first))
+	}
+	if !strings.HasPrefix(filepath.Base(filepath.Dir(first)), ".slidex.activator-0.2.0-") {
+		t.Fatalf("unexpected activator root %s", first)
+	}
+	if err := validatePendingActivatorPath(installRoot, first, "0.2.0"); err != nil {
+		t.Fatalf("staged activator should validate: %v", err)
+	}
+}
+
+func TestPendingUpdateIgnoresSerializedActivationCommand(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	pending, _, err := readPendingUpdate(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.ActivationCommand = "evil-command --should-not-be-used"
+	if err := writeSourceJSONFile(pendingUpdatePath(installRoot), pending); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending-activation" {
+		t.Fatalf("status = %s, want pending-activation: %#v", status.Status, status)
+	}
+	if strings.Contains(status.PendingActivationCommand, "evil-command") {
+		t.Fatalf("status trusted serialized activation command: %s", status.PendingActivationCommand)
+	}
+	if !strings.Contains(status.PendingActivationCommand, filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath))) {
+		t.Fatalf("status command should be derived from activator path, got %s", status.PendingActivationCommand)
+	}
+}
+
+func TestValidatePendingUpdateRejectsExternalActivatorPath(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	pending, _, err := readPendingUpdate(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside-"+pendingActivatorBinaryName())
+	if err := os.WriteFile(outside, []byte("not the activator"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pending.ActivatorPath = filepath.ToSlash(outside)
+	if err := validatePendingUpdate(installRoot, pending); err == nil || !strings.Contains(err.Error(), "pending activator") {
+		t.Fatalf("expected external activator rejection, got %v", err)
+	}
+}
+
 func TestReadPendingUpdateRejectsAdditionalProperties(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")

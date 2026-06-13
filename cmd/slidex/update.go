@@ -654,7 +654,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 			status.TargetTag = pending.TargetTag
 			status.RestartRequired = true
 			status.PluginVerificationStatus = "restart_required"
-			status.PendingActivationCommand = firstNonEmpty(pending.ActivationCommand, pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot))
+			status.PendingActivationCommand = pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot)
 		}
 	}
 	return status, nil
@@ -2020,10 +2020,20 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
-	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
-	activatorRoot := filepath.Join(parent, "."+base+".activator-"+stamp)
-	_ = os.RemoveAll(activatorRoot)
-	if err := os.MkdirAll(activatorRoot, 0o755); err != nil {
+	activatorRoot, err := os.MkdirTemp(parent, "."+base+".activator-"+versionSegment+"-")
+	if err != nil {
+		return "", err
+	}
+	if !sameFilesystemPath(filepath.Dir(activatorRoot), parent) {
+		_ = os.RemoveAll(activatorRoot)
+		return "", fmt.Errorf("pending activator path escapes install parent: %s", filepath.ToSlash(activatorRoot))
+	}
+	if err := rejectSymlinkAncestors(activatorRoot); err != nil {
+		_ = os.RemoveAll(activatorRoot)
+		return "", err
+	}
+	if err := ensureSecureDirMode(activatorRoot, 0o700); err != nil {
+		_ = os.RemoveAll(activatorRoot)
 		return "", err
 	}
 	destination := filepath.Join(activatorRoot, binary)
@@ -2035,6 +2045,10 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 		if err := os.Chmod(destination, 0o755); err != nil {
 			return "", err
 		}
+	}
+	if err := validatePendingActivatorPath(installRoot, destination, targetVersion); err != nil {
+		_ = os.RemoveAll(activatorRoot)
+		return "", err
 	}
 	return destination, nil
 }
@@ -2180,10 +2194,11 @@ func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
 	if !isSHA256Hex(pending.StagedRootManifestSHA256) {
 		return errors.New("pending update stagedRootManifestSha256 must be a SHA-256 hex digest")
 	}
-	if strings.TrimSpace(pending.ActivatorPath) != "" {
-		if _, err := os.Stat(filepath.FromSlash(pending.ActivatorPath)); err != nil {
-			return fmt.Errorf("pending activator is unavailable: %w", err)
-		}
+	if strings.TrimSpace(pending.ActivatorPath) == "" {
+		return errors.New("pending update activatorPath is required")
+	}
+	if err := validatePendingActivatorPath(installRoot, filepath.FromSlash(pending.ActivatorPath), pending.TargetVersion); err != nil {
+		return err
 	}
 	if pending.InstallRoot != "" && !sameFilesystemPath(filepath.FromSlash(pending.InstallRoot), installRoot) {
 		return fmt.Errorf("pending update installRoot must be %s, got %s", filepath.ToSlash(installRoot), pending.InstallRoot)
@@ -2210,6 +2225,49 @@ func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
 		return fmt.Errorf("pending staged root manifest digest mismatch: got %s, want %s", actualDigest, pending.StagedRootManifestSHA256)
 	}
 	return nil
+}
+
+func validatePendingActivatorPath(installRoot, activatorPath, targetVersion string) error {
+	versionSegment, err := safeUpdateTargetVersionSegment(targetVersion)
+	if err != nil {
+		return err
+	}
+	installRoot = filepath.Clean(installRoot)
+	activatorPath = filepath.Clean(activatorPath)
+	parent := filepath.Dir(installRoot)
+	activatorRoot := filepath.Dir(activatorPath)
+	if !sameFilesystemPath(filepath.Dir(activatorRoot), parent) {
+		return fmt.Errorf("pending activator must be under install parent %s, got %s", filepath.ToSlash(parent), filepath.ToSlash(activatorPath))
+	}
+	base := filepath.Base(installRoot)
+	prefix := "." + base + ".activator-" + versionSegment + "-"
+	if !strings.HasPrefix(filepath.Base(activatorRoot), prefix) {
+		return fmt.Errorf("pending activator must use prefix %q, got %s", prefix, filepath.ToSlash(activatorPath))
+	}
+	if filepath.Base(activatorPath) != pendingActivatorBinaryName() {
+		return fmt.Errorf("pending activator must be %s, got %s", pendingActivatorBinaryName(), filepath.ToSlash(activatorPath))
+	}
+	if err := rejectSymlinkAncestors(activatorRoot); err != nil {
+		return err
+	}
+	info, err := os.Lstat(activatorPath)
+	if err != nil {
+		return fmt.Errorf("pending activator is unavailable: %w", err)
+	}
+	if isSymlinkOrReparsePoint(activatorPath, info) {
+		return fmt.Errorf("pending activator must not be a symlink or reparse point: %s", filepath.ToSlash(activatorPath))
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("pending activator must be a regular file: %s", filepath.ToSlash(activatorPath))
+	}
+	return nil
+}
+
+func pendingActivatorBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "slidex.exe"
+	}
+	return "slidex"
 }
 
 func validatePendingStagedRootPath(installRoot, stagedRoot, targetVersion string) error {
