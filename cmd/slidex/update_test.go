@@ -2459,6 +2459,22 @@ func TestPendingUpdateIgnoresSerializedActivationCommand(t *testing.T) {
 	}
 }
 
+func TestShellQuoteCommandQuotesDollarPaths(t *testing.T) {
+	command := shellQuoteCommand([]string{
+		"/tmp/slidex-$USER/bin/slidex",
+		"update",
+		"activate-pending",
+		"--install-root",
+		"/tmp/slidex-$1/O'Hare",
+		"--yes",
+		"--json",
+	})
+	want := "'/tmp/slidex-$USER/bin/slidex' update activate-pending --install-root '/tmp/slidex-$1/O'\\''Hare' --yes --json"
+	if command != want {
+		t.Fatalf("quoted command = %s, want %s", command, want)
+	}
+}
+
 func TestValidatePendingUpdateRejectsExternalActivatorPath(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")

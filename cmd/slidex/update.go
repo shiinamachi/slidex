@@ -2074,7 +2074,7 @@ func shellQuoteCommand(args []string) string {
 			continue
 		}
 		if strings.IndexFunc(arg, func(r rune) bool {
-			return !(r == '/' || r == '.' || r == '-' || r == '_' || r == ':' || r == '=' || r == '+' || r == ',' || r == '@' || r == '^' || r == '$' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'))
+			return !(r == '/' || r == '.' || r == '-' || r == '_' || r == ':' || r == '=' || r == '+' || r == ',' || r == '@' || r == '^' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'))
 		}) < 0 {
 			quoted = append(quoted, arg)
 			continue
