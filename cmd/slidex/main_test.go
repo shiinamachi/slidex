@@ -1800,16 +1800,18 @@ func TestEnsureStrategyAndSpecConsumeCodexAuthoring(t *testing.T) {
 }
 
 func TestCodexExecResumeArgsKeepOutputSchema(t *testing.T) {
-	args := codexExecArgs("/tmp/deck", "schemas/app_stage_result.strict.schema.json", "last.json", true, "session-123", nil)
+	args, err := codexExecArgs("/tmp/deck", "schemas/app_stage_result.strict.schema.json", "last.json", true, "session-123", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := strings.Join(args, " ")
 	for _, want := range []string{"exec resume", "--json", "--output-schema schemas/app_stage_result.strict.schema.json", "--output-last-message last.json", "session-123", "-"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("resume args %q missing %q", got, want)
 		}
 	}
-	lastArgs := strings.Join(codexExecArgs("/tmp/deck", "schema.json", "last.json", true, "last", nil), " ")
-	if !strings.Contains(lastArgs, "--last") {
-		t.Fatalf("resume --last args missing --last: %q", lastArgs)
+	if _, err := codexExecArgs("/tmp/deck", "schema.json", "last.json", true, "last", nil); err == nil || !strings.Contains(err.Error(), "global --last") {
+		t.Fatalf("resume --last should be rejected, got %v", err)
 	}
 }
 
@@ -6651,17 +6653,21 @@ func TestCodexExecArgsIncludeSchemaForFreshAndResume(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWD) }()
 
-	fresh := codexExecArgs(deck, schema, "/tmp/last.json", false, "", []string{"/tmp/slide.png"})
+	fresh, err := codexExecArgs(deck, schema, "/tmp/last.json", false, "", []string{"/tmp/slide.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantFresh := []string{"exec", "--json", "--sandbox", "read-only", "--cd", deck, "--output-schema", schema, "--output-last-message", "/tmp/last.json", "--image", "/tmp/slide.png", "-"}
 	if !reflect.DeepEqual(fresh, wantFresh) {
 		t.Fatalf("fresh args = %#v, want %#v", fresh, wantFresh)
 	}
-	resumeLast := codexExecArgs(deck, schema, "/tmp/last.json", true, "last", nil)
-	wantResumeLast := []string{"exec", "resume", "--json", "--output-schema", schema, "--output-last-message", "/tmp/last.json", "--last", "-"}
-	if !reflect.DeepEqual(resumeLast, wantResumeLast) {
-		t.Fatalf("resume --last args = %#v, want %#v", resumeLast, wantResumeLast)
+	if _, err := codexExecArgs(deck, schema, "/tmp/last.json", true, "last", nil); err == nil || !strings.Contains(err.Error(), "global --last") {
+		t.Fatalf("resume --last should be rejected, got %v", err)
 	}
-	resumeSession := codexExecArgs(deck, schema, "/tmp/last.json", true, "019e-session", nil)
+	resumeSession, err := codexExecArgs(deck, schema, "/tmp/last.json", true, "019e-session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantResumeSession := []string{"exec", "resume", "--json", "--output-schema", schema, "--output-last-message", "/tmp/last.json", "019e-session", "-"}
 	if !reflect.DeepEqual(resumeSession, wantResumeSession) {
 		t.Fatalf("resume session args = %#v, want %#v", resumeSession, wantResumeSession)
@@ -6708,6 +6714,59 @@ func TestRunCodexExecStructuredRejectsSymlinkedSessionFile(t *testing.T) {
 	_, _, err := runCodexExecStructured(deck, "resolve_workspace", "{}", filepath.Join("schemas", "app_stage_result.strict.schema.json"), true, "last", nil)
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
 		t.Fatalf("expected symlinked session file rejection, got %v", err)
+	}
+}
+
+func TestRunCodexExecStructuredRejectsResumeWithoutLocalSession(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := os.MkdirAll(filepath.Join(deck, "out", "agent_runs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	schema := filepath.Join(deck, "schema.json")
+	if err := os.WriteFile(schema, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := runCodexExecStructured(deck, "resolve_workspace", "{}", schema, true, "last", nil)
+	if err == nil || !strings.Contains(err.Error(), "deck-local session file") {
+		t.Fatalf("expected missing local session rejection, got %v", err)
+	}
+}
+
+func TestResolveCodexExecResumeTargetRequiresDeckBoundMetadata(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	runDir := filepath.Join(deck, "out", "agent_runs")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	schema := filepath.Join(deck, "schema.json")
+	if err := os.WriteFile(schema, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(runDir, "codex_exec_last_session.txt")
+	if err := secureWriteFile(sessionPath, []byte("session-123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCodexExecResumeTarget(sessionPath, deck, schema, "last"); err == nil || !strings.Contains(err.Error(), "session metadata") {
+		t.Fatalf("expected missing metadata rejection, got %v", err)
+	}
+	if err := writeCodexExecSessionMetadata(sessionPath, "session-123", filepath.Join(t.TempDir(), "other-deck"), schema, []string{"exec"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCodexExecResumeTarget(sessionPath, deck, schema, "last"); err == nil || !strings.Contains(err.Error(), "different deck") {
+		t.Fatalf("expected mismatched deck metadata rejection, got %v", err)
+	}
+	if err := writeCodexExecSessionMetadata(sessionPath, "session-123", deck, schema, []string{"exec"}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := resolveCodexExecResumeTarget(sessionPath, deck, schema, "last")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "session-123" {
+		t.Fatalf("resume target = %q, want session-123", target)
+	}
+	if _, err := resolveCodexExecResumeTarget(sessionPath, deck, schema, "other-session"); err == nil || !strings.Contains(err.Error(), "not the deck-local session") {
+		t.Fatalf("expected explicit mismatched session rejection, got %v", err)
 	}
 }
 

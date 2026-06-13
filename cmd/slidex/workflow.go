@@ -32,13 +32,14 @@ import (
 )
 
 const (
-	requiredCodexVersion = "0.138.0"
-	stateSchemaVersion   = "slidex.state.v1"
-	threadsSchemaVersion = "slidex.codexThreads.v1"
-	maxDeckTextReadBytes = 2 * 1024 * 1024
-	maxCodexSessionBytes = 512
-	maxCodexMessageBytes = 8 * 1024 * 1024
-	maxMCPRequestBytes   = 8 * 1024 * 1024
+	requiredCodexVersion         = "0.138.0"
+	stateSchemaVersion           = "slidex.state.v1"
+	threadsSchemaVersion         = "slidex.codexThreads.v1"
+	maxDeckTextReadBytes         = 2 * 1024 * 1024
+	maxCodexSessionBytes         = 512
+	maxCodexSessionMetadataBytes = 32 * 1024
+	maxCodexMessageBytes         = 8 * 1024 * 1024
+	maxMCPRequestBytes           = 8 * 1024 * 1024
 )
 
 var (
@@ -6346,22 +6347,23 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 	if err := prepareCodexOutputMessagePath(lastMessage); err != nil {
 		return "", nil, err
 	}
-	requestedResumeTarget := resumeTarget
-	effectiveResumeTarget := resumeTarget
-	if resume && (effectiveResumeTarget == "" || effectiveResumeTarget == "last") {
-		local, err := readCodexExecSessionID(sessionPath)
-		if err != nil {
-			return "", nil, err
-		}
-		if local != "" {
-			effectiveResumeTarget = local
-		}
-	}
 	schemaForCodex := schemaPath
 	if !filepath.IsAbs(schemaForCodex) {
 		schemaForCodex = mustAbs(schemaForCodex)
 	}
-	args := codexExecArgs(deckAbs, schemaForCodex, lastMessage, resume, effectiveResumeTarget, images)
+	requestedResumeTarget := resumeTarget
+	effectiveResumeTarget := resumeTarget
+	if resume {
+		target, err := resolveCodexExecResumeTarget(sessionPath, deckAbs, schemaForCodex, resumeTarget)
+		if err != nil {
+			return "", nil, err
+		}
+		effectiveResumeTarget = target
+	}
+	args, err := codexExecArgs(deckAbs, schemaForCodex, lastMessage, resume, effectiveResumeTarget, images)
+	if err != nil {
+		return "", nil, err
+	}
 	out, err := runBufferedCommandWithInput(5*time.Minute, deckAbs, strings.NewReader(prompt), "codex", args...)
 	if writeErr := secureWriteFile(eventLog, out, 0o600); writeErr != nil {
 		return "", nil, writeErr
@@ -6369,6 +6371,7 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 	threadID := extractCodexExecThreadID(out)
 	if !resume && threadID != "" {
 		_ = secureWriteFile(sessionPath, []byte(threadID+"\n"), 0o600)
+		_ = writeCodexExecSessionMetadata(sessionPath, threadID, deckAbs, schemaForCodex, args)
 	}
 	run := map[string]any{
 		"schemaVersion":         "slidex.codexExecRun.v1",
@@ -6381,8 +6384,8 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 		"args":                  args,
 		"cwd":                   deckAbs,
 		"promptSha256":          sha256Bytes([]byte(prompt)),
-		"outputSchemaPath":      filepath.ToSlash(schemaPath),
-		"outputSchemaHash":      mustSHA256(schemaPath),
+		"outputSchemaPath":      filepath.ToSlash(schemaForCodex),
+		"outputSchemaHash":      mustSHA256(schemaForCodex),
 		"eventLog":              filepath.ToSlash(eventLog),
 		"lastMessage":           filepath.ToSlash(lastMessage),
 		"images":                images,
@@ -6434,6 +6437,121 @@ func prepareCodexOutputMessagePath(path string) error {
 		return err
 	}
 	return secureWriteFile(path, nil, 0o600)
+}
+
+const codexExecSessionMetadataSchemaVersion = "slidex.codexExecSession.v1"
+
+type codexExecSessionMetadata struct {
+	SchemaVersion      string   `json:"schemaVersion"`
+	GeneratedAt        string   `json:"generatedAt"`
+	SessionID          string   `json:"sessionId"`
+	DeckRoot           string   `json:"deckRoot"`
+	CWD                string   `json:"cwd"`
+	CommandMode        string   `json:"commandMode"`
+	Sandbox            string   `json:"sandbox"`
+	OutputSchemaPath   string   `json:"outputSchemaPath"`
+	OutputSchemaSHA256 string   `json:"outputSchemaSha256"`
+	Args               []string `json:"args,omitempty"`
+}
+
+func codexExecSessionMetadataPath(sessionPath string) string {
+	ext := filepath.Ext(sessionPath)
+	if ext == "" {
+		return sessionPath + ".json"
+	}
+	return strings.TrimSuffix(sessionPath, ext) + ".json"
+}
+
+func writeCodexExecSessionMetadata(sessionPath, sessionID, deckAbs, schemaPath string, args []string) error {
+	schemaHash, err := sha256File(schemaPath)
+	if err != nil {
+		return err
+	}
+	metadata := codexExecSessionMetadata{
+		SchemaVersion:      codexExecSessionMetadataSchemaVersion,
+		GeneratedAt:        time.Now().UTC().Format(time.RFC3339),
+		SessionID:          sessionID,
+		DeckRoot:           filepath.ToSlash(deckAbs),
+		CWD:                filepath.ToSlash(deckAbs),
+		CommandMode:        "fresh",
+		Sandbox:            "read-only",
+		OutputSchemaPath:   filepath.ToSlash(schemaPath),
+		OutputSchemaSHA256: schemaHash,
+		Args:               append([]string(nil), args...),
+	}
+	return secureWriteJSON(codexExecSessionMetadataPath(sessionPath), metadata)
+}
+
+func resolveCodexExecResumeTarget(sessionPath, deckAbs, schemaPath, requestedTarget string) (string, error) {
+	localSessionID, err := readCodexExecSessionID(sessionPath)
+	if err != nil {
+		return "", err
+	}
+	if localSessionID == "" {
+		return "", fmt.Errorf("codex exec resume requires a deck-local session file; run without --resume before resuming")
+	}
+	requestedTarget = strings.TrimSpace(requestedTarget)
+	if requestedTarget != "" && requestedTarget != "last" && requestedTarget != localSessionID {
+		return "", fmt.Errorf("codex exec resume target %q is not the deck-local session %q", requestedTarget, localSessionID)
+	}
+	metadata, err := readCodexExecSessionMetadata(codexExecSessionMetadataPath(sessionPath))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("codex exec resume requires deck-bound session metadata; run without --resume before resuming")
+		}
+		return "", err
+	}
+	if err := validateCodexExecSessionMetadata(metadata, localSessionID, deckAbs, schemaPath); err != nil {
+		return "", err
+	}
+	return localSessionID, nil
+}
+
+func readCodexExecSessionMetadata(path string) (codexExecSessionMetadata, error) {
+	var metadata codexExecSessionMetadata
+	raw, err := readRegularFileLimited(path, maxCodexSessionMetadataBytes)
+	if err != nil {
+		return metadata, err
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return metadata, fmt.Errorf("codex exec session metadata is invalid JSON: %s", filepath.ToSlash(path))
+	}
+	return metadata, nil
+}
+
+func validateCodexExecSessionMetadata(metadata codexExecSessionMetadata, sessionID, deckAbs, schemaPath string) error {
+	if metadata.SchemaVersion != codexExecSessionMetadataSchemaVersion {
+		return fmt.Errorf("codex exec session metadata has unsupported schema version %q", metadata.SchemaVersion)
+	}
+	if strings.TrimSpace(metadata.SessionID) == "" || !validCodexExecSessionID(metadata.SessionID) {
+		return fmt.Errorf("codex exec session metadata has an invalid session id")
+	}
+	if metadata.SessionID != sessionID {
+		return fmt.Errorf("codex exec session metadata session id does not match the deck-local session")
+	}
+	if !canonicalPathEqual(filepath.FromSlash(metadata.DeckRoot), deckAbs) {
+		return fmt.Errorf("codex exec session metadata belongs to a different deck")
+	}
+	if !canonicalPathEqual(filepath.FromSlash(metadata.CWD), deckAbs) {
+		return fmt.Errorf("codex exec session metadata was not created with the deck as cwd")
+	}
+	if metadata.CommandMode != "fresh" {
+		return fmt.Errorf("codex exec session metadata was not created by a fresh deck-scoped run")
+	}
+	if metadata.Sandbox != "read-only" {
+		return fmt.Errorf("codex exec session metadata was not created with read-only sandbox")
+	}
+	if !canonicalPathEqual(filepath.FromSlash(metadata.OutputSchemaPath), schemaPath) {
+		return fmt.Errorf("codex exec session metadata schema path does not match the requested schema")
+	}
+	schemaHash, err := sha256File(schemaPath)
+	if err != nil {
+		return err
+	}
+	if metadata.OutputSchemaSHA256 == "" || metadata.OutputSchemaSHA256 != schemaHash {
+		return fmt.Errorf("codex exec session metadata schema hash does not match the requested schema")
+	}
+	return nil
 }
 
 func readCodexExecSessionID(path string) (string, error) {
@@ -6515,26 +6633,29 @@ func extractCodexExecThreadID(raw []byte) string {
 	return ""
 }
 
-func codexExecArgs(cwd, schemaPath, lastMessage string, resume bool, resumeTarget string, images []string) []string {
+func codexExecArgs(cwd, schemaPath, lastMessage string, resume bool, resumeTarget string, images []string) ([]string, error) {
 	args := []string{"exec"}
 	if resume {
+		resumeTarget = strings.TrimSpace(resumeTarget)
+		if resumeTarget == "" || resumeTarget == "last" {
+			return nil, fmt.Errorf("codex exec resume requires a deck-local session id; refusing global --last")
+		}
+		if !validCodexExecSessionID(resumeTarget) {
+			return nil, fmt.Errorf("codex exec resume target contains unsupported characters")
+		}
 		args = append(args, "resume")
 		args = append(args, "--json", "--output-schema", schemaPath, "--output-last-message", lastMessage)
 		for _, image := range images {
 			args = append(args, "--image", image)
 		}
-		if resumeTarget == "" || resumeTarget == "last" {
-			args = append(args, "--last")
-		} else {
-			args = append(args, resumeTarget)
-		}
-		return append(args, "-")
+		args = append(args, resumeTarget)
+		return append(args, "-"), nil
 	}
 	args = append(args, "--json", "--sandbox", "read-only", "--cd", cwd, "--output-schema", schemaPath, "--output-last-message", lastMessage)
 	for _, image := range images {
 		args = append(args, "--image", image)
 	}
-	return append(args, "-")
+	return append(args, "-"), nil
 }
 
 func probeProtocolSchema() map[string]any {
