@@ -297,6 +297,36 @@ func TestWorkbenchSaveRequiresTokenAndSameOrigin(t *testing.T) {
 	}
 }
 
+func TestWorkbenchSaveRejectsTrailingAndOversizedJSON(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "secret-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+	base := `{"title":"Demo","audience":"Board","decisionGoal":"Approve pilot","sourceNotes":"Use confirmed notes","outputExpectations":"HTML/PDF"}`
+
+	trailing := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", strings.NewReader(base+` {}`))
+	trailing.Header.Set("Origin", "http://127.0.0.1:43210")
+	trailing.Header.Set("X-Slidex-Workbench-Token", token)
+	trailingRecorder := httptest.NewRecorder()
+	server.handleSave(trailingRecorder, trailing)
+	if trailingRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON status = %d body=%s", trailingRecorder.Code, trailingRecorder.Body.String())
+	}
+
+	oversizedPayload := `{"title":"` + strings.Repeat("x", workbenchJSONBodyMaxBytes) + `"}`
+	oversized := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", strings.NewReader(oversizedPayload))
+	oversized.Header.Set("Origin", "http://127.0.0.1:43210")
+	oversized.Header.Set("X-Slidex-Workbench-Token", token)
+	oversizedRecorder := httptest.NewRecorder()
+	server.handleSave(oversizedRecorder, oversized)
+	if oversizedRecorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized JSON status = %d body=%s", oversizedRecorder.Code, oversizedRecorder.Body.String())
+	}
+}
+
 func TestWorkbenchDraftRequiresTokenAndPersistsRecovery(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
@@ -1792,6 +1822,65 @@ func TestWorkbenchLogRejectsSymlinkTarget(t *testing.T) {
 	}
 	if got := readFileOrEmpty(outsideLog); got != "outside log\n" {
 		t.Fatalf("outside log was modified: %q", got)
+	}
+}
+
+func TestBoundedWorkbenchLogWriterCapsOutput(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(outDir, workbenchGenerationLogName)
+	writer, err := openBoundedWorkbenchLog(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte(strings.Repeat("x", workbenchLogMaxBytes+1024))); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > workbenchLogMaxBytes {
+		t.Fatalf("bounded log length = %d, want <= %d", len(raw), workbenchLogMaxBytes)
+	}
+	if !strings.Contains(string(raw), strings.TrimSpace(workbenchLogTruncationMarker)) {
+		t.Fatalf("bounded log missing truncation marker")
+	}
+}
+
+func TestPrepareWorkbenchServerOutputDiscardsChildStreams(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(outDir, "workbench_server.log")
+	sink, err := prepareWorkbenchServerOutput(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sink.Write([]byte(strings.Repeat("x", 1024))); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "discarded to avoid unbounded log growth") {
+		t.Fatalf("server log placeholder missing: %q", raw)
+	}
+	if strings.Contains(string(raw), strings.Repeat("x", 128)) {
+		t.Fatalf("server log captured discarded child output: %q", raw)
+	}
+	if len(raw) > 256 {
+		t.Fatalf("server log placeholder should remain small, got %d bytes", len(raw))
 	}
 }
 

@@ -51,7 +51,12 @@ const (
 	workbenchShutdownTokenEnv    = "SLIDEX_WORKBENCH_SHUTDOWN_TOKEN"
 	workbenchReadinessTokenEnv   = "SLIDEX_WORKBENCH_READINESS_TOKEN"
 	workbenchReadinessHeader     = "X-Slidex-Workbench-Readiness-Token"
+	workbenchJSONBodyMaxBytes    = 64 * 1024
+	workbenchLogMaxBytes         = 1024 * 1024
+	workbenchLogTruncationMarker = "\n[slidex] workbench log output exceeded maximum allowed size; further output truncated\n"
 )
+
+var errWorkbenchJSONTrailing = errors.New("request body must contain exactly one JSON value")
 
 type workbenchAssetManifest struct {
 	SchemaVersion string   `json:"schemaVersion"`
@@ -1322,7 +1327,7 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 		return result, workbenchManifest{}, false, err
 	}
 	logPath := filepath.Join(outDir, "workbench_server.log")
-	logFile, err := openSecureAppendFile(logPath, 0o600)
+	logFile, err := prepareWorkbenchServerOutput(logPath)
 	if err != nil {
 		return result, workbenchManifest{}, false, err
 	}
@@ -1455,6 +1460,10 @@ func serveWorkbench(deckAbs, workspace, sessionID, token, shutdownToken, readine
 		Addr:              workbenchListenAddr(port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
 	}
 	server.shutdown = func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1587,6 +1596,31 @@ func workbenchAssetContentType(name string) string {
 		return contentType
 	}
 	return "application/octet-stream"
+}
+
+func decodeWorkbenchJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, workbenchJSONBodyMaxBytes)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return errWorkbenchJSONTrailing
+}
+
+func writeWorkbenchJSONDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, "invalid JSON", http.StatusBadRequest)
 }
 
 func readWorkbenchAssetManifest() (workbenchAssetManifest, error) {
@@ -1758,8 +1792,8 @@ func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request
 		}
 		defer r.Body.Close()
 		var input workbenchSaveInput
-		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+		if err := decodeWorkbenchJSON(w, r, &input); err != nil {
+			writeWorkbenchJSONDecodeError(w, err)
 			return
 		}
 		input = normalizeWorkbenchInput(input)
@@ -1809,8 +1843,8 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 	}
 	defer r.Body.Close()
 	var input workbenchSaveInput
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if err := decodeWorkbenchJSON(w, r, &input); err != nil {
+		writeWorkbenchJSONDecodeError(w, err)
 		return
 	}
 	manifest, err := s.saveWorkbenchInput(input, "saved", "")
@@ -1841,8 +1875,8 @@ func (s *workbenchHTTPServer) handleComplete(w http.ResponseWriter, r *http.Requ
 	}
 	defer r.Body.Close()
 	var input workbenchSaveInput
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if err := decodeWorkbenchJSON(w, r, &input); err != nil {
+		writeWorkbenchJSONDecodeError(w, err)
 		return
 	}
 	input = normalizeWorkbenchInput(input)
@@ -1960,12 +1994,79 @@ func sanitizedWorkbenchChildEnv(env []string) []string {
 	return sanitized
 }
 
+type boundedWorkbenchLogWriter struct {
+	mu        sync.Mutex
+	file      *os.File
+	limit     int64
+	written   int64
+	truncated bool
+}
+
+func openBoundedWorkbenchLog(path string) (*boundedWorkbenchLogWriter, error) {
+	file, err := openSecureTruncateFile(path, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	return &boundedWorkbenchLogWriter{file: file, limit: workbenchLogMaxBytes}, nil
+}
+
+func prepareWorkbenchServerOutput(logPath string) (*os.File, error) {
+	placeholder := []byte("slidex workbench server output is discarded to avoid unbounded log growth.\n")
+	if err := secureWriteFile(logPath, placeholder, 0o600); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+}
+
+func (w *boundedWorkbenchLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil || w.limit <= 0 || w.written >= w.limit {
+		return len(p), nil
+	}
+	remaining := w.limit - w.written
+	toWrite := p
+	if int64(len(toWrite)) > remaining {
+		toWrite = toWrite[:remaining]
+	}
+	if !w.truncated && int64(len(p)) > remaining {
+		marker := []byte(workbenchLogTruncationMarker)
+		if remaining > int64(len(marker)) {
+			toWrite = append([]byte{}, p[:remaining-int64(len(marker))]...)
+			toWrite = append(toWrite, marker...)
+		} else {
+			toWrite = marker[:remaining]
+		}
+		w.truncated = true
+	}
+	if len(toWrite) == 0 {
+		return len(p), nil
+	}
+	n, err := w.file.Write(toWrite)
+	w.written += int64(n)
+	if err != nil {
+		return n, err
+	}
+	return len(p), nil
+}
+
+func (w *boundedWorkbenchLogWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		return nil
+	}
+	err := w.file.Close()
+	w.file = nil
+	return err
+}
+
 func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workbenchManifest, bool, error) {
 	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
 		return manifest, true, nil
 	}
 	logPath := filepath.Join(s.deckAbs, "out", workbenchGenerationLogName)
-	logFile, err := openSecureAppendFile(logPath, 0o600)
+	logFile, err := openBoundedWorkbenchLog(logPath)
 	if err != nil {
 		return manifest, false, err
 	}
@@ -2004,7 +2105,7 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 	return manifest, false, nil
 }
 
-func (s *workbenchHTTPServer) waitForGeneration(cmd *exec.Cmd, logFile *os.File, started workbenchManifest) {
+func (s *workbenchHTTPServer) waitForGeneration(cmd *exec.Cmd, logFile io.Closer, started workbenchManifest) {
 	err := cmd.Wait()
 	_ = logFile.Close()
 	endedAt := time.Now().UTC().Format(time.RFC3339)
