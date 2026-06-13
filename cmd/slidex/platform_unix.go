@@ -82,6 +82,9 @@ func appServerRuntimeBaseDir() string {
 	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
 		return base
 	}
+	if base, err := os.UserCacheDir(); err == nil && base != "" {
+		return filepath.Join(base, "slidex", "runtime")
+	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("slidex-%d", os.Getuid()))
 }
 
@@ -119,6 +122,17 @@ func secureFileLinkCount(_ string, info os.FileInfo) (uint64, bool, error) {
 
 func secureOpenFileLinkCount(path string, _ *os.File, info os.FileInfo) (uint64, bool, error) {
 	return secureFileLinkCount(path, info)
+}
+
+func fileOwnerID(info os.FileInfo) (any, bool) {
+	if info == nil {
+		return nil, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, false
+	}
+	return int(stat.Uid), true
 }
 
 func replaceFile(src, dst string) error {

@@ -279,6 +279,58 @@ func TestManagedAppServerSignalIdentityRejectsUntrustedMetadata(t *testing.T) {
 	}
 }
 
+func TestManagedAppServerSignalIdentityRequiresAppServerCommand(t *testing.T) {
+	dir := t.TempDir()
+	codexPath := filepath.Join(dir, "codex")
+	if runtime.GOOS == "windows" {
+		codexPath += ".exe"
+	}
+	goodArgs := []string{codexPath, "app-server", "--listen", "ws://127.0.0.1:1/app"}
+	goodMetadata := map[string]any{
+		"processExe":  codexPath,
+		"processArgs": goodArgs,
+	}
+	if !managedAppServerProcessIdentityMatchesMetadata(codexPath, goodArgs, goodMetadata) {
+		t.Fatal("codex app-server identity should match trusted command shape")
+	}
+	badArgs := []string{codexPath, "doctor"}
+	badMetadata := map[string]any{
+		"processExe":  codexPath,
+		"processArgs": badArgs,
+	}
+	if managedAppServerProcessIdentityMatchesMetadata(codexPath, badArgs, badMetadata) {
+		t.Fatal("non-app-server command must not be trusted for signaling")
+	}
+	otherCommandArgs := []string{filepath.Join(dir, "other"), "app-server"}
+	otherCommandMetadata := map[string]any{
+		"processExe":  otherCommandArgs[0],
+		"processArgs": otherCommandArgs,
+	}
+	if managedAppServerProcessIdentityMatchesMetadata(otherCommandArgs[0], otherCommandArgs, otherCommandMetadata) {
+		t.Fatal("app-server subcommand must be launched through codex")
+	}
+}
+
+func TestReadAppServerMetadataRejectsUnsafeRuntimeDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not reliable on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "runtime", "slidex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "codex-app-server.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"slidex.appServerProcess.v1","pid":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readAppServerMetadata(path); got != nil {
+		t.Fatalf("unsafe runtime directory metadata should be ignored, got %#v", got)
+	}
+}
+
 func TestReadJSONSchemaObjectRejectsOversizedSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schema.json")
 	if err := os.WriteFile(path, []byte(`{"padding":"`+strings.Repeat("x", int(maxProjectSchemaBytes)+1)+`"}`), 0o644); err != nil {

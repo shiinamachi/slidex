@@ -2477,6 +2477,10 @@ type webSocketAuthConfig struct {
 
 func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bool) error {
 	metaPath := appServerMetadataPath()
+	runtimeDir := filepath.Dir(metaPath)
+	if err := ensureSecureDir(runtimeDir); err != nil {
+		return err
+	}
 	if existing := readAppServerMetadata(metaPath); existing != nil {
 		if pid, _ := numberAsInt(existing["pid"]); pid > 0 && processAlive(pid) {
 			if !managedAppServerMetadataTrustedForSignal(pid, existing) {
@@ -2498,10 +2502,6 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 		if err := validateWebSocketAuth(actualListen, ws); err != nil {
 			return err
 		}
-	}
-	runtimeDir := filepath.Dir(metaPath)
-	if err := ensureSecureDir(runtimeDir); err != nil {
-		return err
 	}
 	stdoutPath := filepath.Join(runtimeDir, "codex-app-server.stdout.log")
 	stderrPath := filepath.Join(runtimeDir, "codex-app-server.stderr.log")
@@ -3059,6 +3059,9 @@ func unixSocketPathLimit(goos string) int {
 }
 
 func readAppServerMetadata(path string) map[string]any {
+	if err := validateAppServerMetadataReadPath(path); err != nil {
+		return nil
+	}
 	raw, err := readRegularFileWithMaxBytes(path, maxAppServerMetadataBytes)
 	if err != nil {
 		return nil
@@ -3068,6 +3071,36 @@ func readAppServerMetadata(path string) map[string]any {
 		return nil
 	}
 	return metadata
+}
+
+func validateAppServerMetadataReadPath(path string) error {
+	if err := ensureSecureExistingDirMode(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("managed app-server metadata must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("managed app-server metadata must be a regular file: %s", filepath.ToSlash(path))
+	}
+	if err := requireCurrentUserOwnedPath(path, info); err != nil {
+		return err
+	}
+	if modeBitsAreSecurityRelevant() && info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("managed app-server metadata must not be group/world accessible: %s", filepath.ToSlash(path))
+	}
+	links, ok, err := secureFileLinkCount(path, info)
+	if err != nil {
+		return err
+	}
+	if ok && links > 1 {
+		return fmt.Errorf("managed app-server metadata must not be hardlinked: %s", filepath.ToSlash(path))
+	}
+	return requirePlatformPrivateFile(path, "managed app-server metadata")
 }
 
 func addManagedAppServerProcessIdentity(metadata map[string]any, cmd *exec.Cmd) {
@@ -3151,7 +3184,21 @@ func managedAppServerProcessIdentityMatchesMetadata(processExe string, processAr
 	if expectedExe == "" || len(expectedArgs) == 0 || processExe == "" || len(processArgs) == 0 {
 		return false
 	}
+	if !managedAppServerCommandArgsMatch(expectedArgs) || !managedAppServerCommandArgsMatch(processArgs) {
+		return false
+	}
 	return sameFilesystemPath(expectedExe, processExe) && stringSlicesEqual(processArgs, expectedArgs)
+}
+
+func managedAppServerCommandArgsMatch(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	command := strings.ToLower(filepath.Base(strings.TrimSpace(args[0])))
+	if command != "codex" && command != "codex.exe" {
+		return false
+	}
+	return args[1] == "app-server"
 }
 
 func stringSlicesEqual(left, right []string) bool {
@@ -7352,7 +7399,52 @@ func ensureSecureDirMode(path string, mode os.FileMode) error {
 	if err := os.Chmod(path, mode); err != nil {
 		return err
 	}
-	return applyPlatformDirMode(path, mode)
+	if err := applyPlatformDirMode(path, mode); err != nil {
+		return err
+	}
+	return ensureSecureExistingDirMode(path, mode)
+}
+
+func ensureSecureExistingDirMode(path string, mode os.FileMode) error {
+	mode &= 0o777
+	if mode == 0 {
+		mode = 0o700
+	}
+	if err := rejectSymlinkAncestors(path); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if isSymlinkOrReparsePoint(path, info) {
+		return fmt.Errorf("secure directory must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("secure directory must be a directory: %s", filepath.ToSlash(path))
+	}
+	if err := requireCurrentUserOwnedPath(path, info); err != nil {
+		return err
+	}
+	if modeBitsAreSecurityRelevant() && mode&0o077 == 0 && info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("secure directory must not be group/world accessible: %s", filepath.ToSlash(path))
+	}
+	return nil
+}
+
+func requireCurrentUserOwnedPath(path string, info os.FileInfo) error {
+	owner, ok := fileOwnerID(info)
+	if !ok {
+		return nil
+	}
+	if metadataString(owner) != metadataString(currentOwnerID()) {
+		return fmt.Errorf("path must be owned by the current user: %s", filepath.ToSlash(path))
+	}
+	return nil
+}
+
+func modeBitsAreSecurityRelevant() bool {
+	return runtime.GOOS != "windows"
 }
 
 func rejectSecureWriteTarget(path string) error {

@@ -562,6 +562,10 @@ func secureOpenFileLinkCount(_ string, f *os.File, info os.FileInfo) (uint64, bo
 	return uint64(data.NumberOfLinks), true, nil
 }
 
+func fileOwnerID(os.FileInfo) (any, bool) {
+	return nil, false
+}
+
 func replaceFile(src, dst string) error {
 	srcPtr, err := syscall.UTF16PtrFromString(src)
 	if err != nil {
