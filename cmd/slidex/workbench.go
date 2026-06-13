@@ -1359,18 +1359,20 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 			return true, err
 		}
 		manifest = newWorkbenchManifest(deckAbs, workspaceRoot(workspace), sessionID, token, port, cmd.Process.Pid, "starting")
+		cleanupStarted := true
+		defer func() {
+			if cleanupStarted {
+				cleanupStartedWorkbenchCommand(cmd, manifest)
+				removeWorkbenchControl(deckAbs)
+			}
+		}()
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
-			stopWorkbenchProcess(manifest)
 			return false, err
 		}
 		if err := writeWorkbenchControl(deckAbs, newWorkbenchControl(manifest, shutdownToken, readinessToken)); err != nil {
-			stopWorkbenchProcess(manifest)
-			removeWorkbenchControl(deckAbs)
 			return false, err
 		}
 		if err := waitForWorkbenchReady(manifest, 3*time.Second); err != nil {
-			stopWorkbenchProcess(manifest)
-			removeWorkbenchControl(deckAbs)
 			manifest.Status = "stale"
 			manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 			_ = writeWorkbenchManifest(deckAbs, manifest)
@@ -1381,6 +1383,7 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 		if err := writeWorkbenchManifest(deckAbs, manifest); err != nil {
 			return false, err
 		}
+		cleanupStarted = false
 		return false, nil
 	})
 	if err != nil {
@@ -1394,7 +1397,9 @@ func startWorkbenchWithInput(workspace, deckID, deck, fromTemplate string, seed 
 		return result, workbenchManifest{}, false, err
 	}
 	if seeded, err := seedWorkbenchDraft(deckAbs, manifest, seed); err != nil {
-		return result, manifest, true, err
+		stopWorkbenchProcess(manifest)
+		removeWorkbenchControl(deckAbs)
+		return result, manifest, false, err
 	} else {
 		manifest = seeded
 	}
@@ -2119,9 +2124,7 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 		manifest.UpdatedAt = now
 	})
 	if err != nil {
-		cancel()
-		signalManagedProcess(cmd.Process.Pid)
-		_ = logFile.Close()
+		cleanupStartedGenerationCommand(cancel, cmd, logFile)
 		return manifest, false, err
 	}
 	s.setManifest(manifest)
@@ -2152,6 +2155,58 @@ func configureManagedGenerationCancel(cmd *exec.Cmd) {
 	}
 	if cmd.WaitDelay == 0 {
 		cmd.WaitDelay = 2 * time.Second
+	}
+}
+
+func cleanupStartedGenerationCommand(cancel context.CancelFunc, cmd *exec.Cmd, logFile io.Closer) {
+	if cancel != nil {
+		cancel()
+	}
+	if cmd != nil && cmd.Process != nil {
+		done := commandExitChan(cmd)
+		killManagedProcess(cmd.Process.Pid)
+		_ = waitForCommandExit(done, 2*time.Second)
+	}
+	if logFile != nil {
+		_ = logFile.Close()
+	}
+}
+
+func cleanupStartedWorkbenchCommand(cmd *exec.Cmd, manifest workbenchManifest) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	done := commandExitChan(cmd)
+	if workbenchManifestHasTrustedControl(manifest) {
+		stopWorkbenchProcess(manifest)
+	} else {
+		signalWorkbenchProcessFn(cmd.Process.Pid)
+	}
+	if waitForCommandExit(done, 1200*time.Millisecond) {
+		return
+	}
+	killWorkbenchProcessFn(cmd.Process.Pid)
+	_ = waitForCommandExit(done, 2*time.Second)
+}
+
+func commandExitChan(cmd *exec.Cmd) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	return done
+}
+
+func waitForCommandExit(done <-chan struct{}, timeout time.Duration) bool {
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 

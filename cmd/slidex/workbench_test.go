@@ -654,6 +654,41 @@ func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	}
 }
 
+func TestCleanupStartedGenerationCommandReapsProcess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+	cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=5s")
+	configureManagedAppServerCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	cleanupStartedGenerationCommand(cancel, cmd, closerFunc(func() error {
+		closed = true
+		return nil
+	}))
+	if !closed {
+		t.Fatal("generation cleanup should close log output")
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("generation cleanup should reap the started process")
+	}
+}
+
+func TestCleanupStartedWorkbenchCommandWithoutControlReapsProcess(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+	cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=5s")
+	configureWorkbenchCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	manifest := workbenchManifest{PID: cmd.Process.Pid}
+	cleanupStartedWorkbenchCommand(cmd, manifest)
+	if cmd.ProcessState == nil {
+		t.Fatal("workbench cleanup should reap the started process without requiring control metadata")
+	}
+}
+
 func TestWorkbenchGenerationHelperProcess(t *testing.T) {
 	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION") != "1" {
 		return
@@ -713,6 +748,12 @@ func waitForFileContent(t *testing.T, path string, timeout time.Duration) string
 	}
 	raw, _ := os.ReadFile(path)
 	return string(raw)
+}
+
+type closerFunc func() error
+
+func (fn closerFunc) Close() error {
+	return fn()
 }
 
 func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {
