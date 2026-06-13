@@ -7275,6 +7275,88 @@ func copyDir(src, dst string) error {
 	})
 }
 
+type copyDirBudget struct {
+	label         string
+	maxEntries    int
+	maxFileBytes  int64
+	maxTotalBytes int64
+}
+
+func defaultDeckTemplateCopyBudget() copyDirBudget {
+	return copyDirBudget{
+		label:         "deck template",
+		maxEntries:    maxDeckTemplateCopyEntries,
+		maxFileBytes:  maxDeckTemplateFileBytes,
+		maxTotalBytes: maxDeckTemplateTotalBytes,
+	}
+}
+
+func copyDeckTemplateDir(src, dst string) error {
+	return copyDirWithBudget(src, dst, defaultDeckTemplateCopyBudget())
+}
+
+func copyDirWithBudget(src, dst string, budget copyDirBudget) error {
+	cleanSrc := filepath.Clean(src)
+	cleanDst := filepath.Clean(dst)
+	if budget.label == "" {
+		budget.label = "directory"
+	}
+	var entries int
+	var totalBytes int64
+	return filepath.WalkDir(cleanSrc, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if isSymlinkOrReparsePoint(path, info) {
+			return fmt.Errorf("%s copy source must not contain symlinks or reparse points: %s", budget.label, filepath.ToSlash(path))
+		}
+		rel, err := filepath.Rel(cleanSrc, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(cleanDst, rel)
+		if !pathWithin(cleanDst, target) {
+			return fmt.Errorf("%s copy target escapes destination root: %s", budget.label, filepath.ToSlash(target))
+		}
+		if rel != "." {
+			entries++
+			if budget.maxEntries > 0 && entries > budget.maxEntries {
+				return fmt.Errorf("%s copy contains too many entries: %d > %d at %s", budget.label, entries, budget.maxEntries, filepath.ToSlash(rel))
+			}
+		}
+		if info.IsDir() {
+			mode := info.Mode().Perm()
+			if mode == 0 {
+				mode = 0o755
+			}
+			return ensureSecureDirMode(target, mode)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s copy source contains unsupported file type: %s", budget.label, filepath.ToSlash(path))
+		}
+		size := info.Size()
+		if size < 0 {
+			return fmt.Errorf("%s copy source has negative file size: %s", budget.label, filepath.ToSlash(path))
+		}
+		if budget.maxFileBytes > 0 && size > budget.maxFileBytes {
+			return fmt.Errorf("%s copy file exceeds maximum size: %s is %d bytes > %d", budget.label, filepath.ToSlash(rel), size, budget.maxFileBytes)
+		}
+		if budget.maxTotalBytes > 0 && totalBytes > budget.maxTotalBytes-size {
+			return fmt.Errorf("%s copy exceeds maximum total size at %s: %d bytes > %d", budget.label, filepath.ToSlash(rel), totalBytes+size, budget.maxTotalBytes)
+		}
+		totalBytes += size
+		maxFileBytes := budget.maxFileBytes
+		if maxFileBytes <= 0 {
+			maxFileBytes = -1
+		}
+		return copyFileWithMaxBytes(path, target, maxFileBytes)
+	})
+}
+
 func migrationFindings(deckAbs, from string) []string {
 	outDir := filepath.Join(deckAbs, "out")
 	var findings []string

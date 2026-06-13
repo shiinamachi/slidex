@@ -1667,7 +1667,11 @@ func ensureSmokeWorkspaceTemplate(workspace string) error {
 	if err := os.MkdirAll(filepath.Join(workspace, "decks"), 0o755); err != nil {
 		return err
 	}
-	return copyDir(source, template)
+	if err := copyDeckTemplateDir(source, template); err != nil {
+		_ = os.RemoveAll(template)
+		return err
+	}
+	return nil
 }
 
 func appServerWorkbenchToolCallParams(threadID, tool, workspace, deckID string) map[string]any {

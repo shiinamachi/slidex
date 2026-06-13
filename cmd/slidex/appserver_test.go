@@ -89,3 +89,35 @@ func TestReadJSONSchemaObjectRejectsOversizedSchema(t *testing.T) {
 		t.Fatalf("expected oversized schema rejection, got %v", err)
 	}
 }
+
+func TestEnsureSmokeWorkspaceTemplateRejectsOversizedSource(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	source := filepath.Join(root, "decks", "_template")
+	if err := os.MkdirAll(filepath.Join(source, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "brief.md"), []byte("# Brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	large := filepath.Join(source, "assets", "large.bin")
+	f, err := os.Create(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(large, maxDeckTemplateFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	err = ensureSmokeWorkspaceTemplate(workspace)
+	if err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("expected oversized smoke template rejection, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "decks", "_template")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed smoke template copy should remove partial template, stat err=%v", statErr)
+	}
+}

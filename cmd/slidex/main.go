@@ -77,6 +77,9 @@ const (
 	maxProjectSchemaBytes             = int64(4 << 20)
 	maxAppServerMetadataBytes         = int64(1 << 20)
 	maxWebSocketCredentialBytes       = int64(64 << 10)
+	maxDeckTemplateCopyEntries        = 4096
+	maxDeckTemplateFileBytes          = int64(64 << 20)
+	maxDeckTemplateTotalBytes         = int64(256 << 20)
 )
 
 func isReleaseBaseVersion(version string) bool {

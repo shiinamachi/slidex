@@ -2218,15 +2218,18 @@ func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExistin
 	}
 	templateAbs := resolveTemplateDir(root, fromTemplate)
 	if pathExists(templateAbs) {
-		if err := copyDir(templateAbs, deckAbs); err != nil {
+		if err := copyDeckTemplateDir(templateAbs, deckAbs); err != nil {
+			_ = os.RemoveAll(deckAbs)
 			return deckBootstrapResult{}, err
 		}
 	} else if isDefaultTemplateRef(fromTemplate) {
 		if err := copyEmbeddedDefaultTemplate(deckAbs); err != nil {
+			_ = os.RemoveAll(deckAbs)
 			return deckBootstrapResult{}, err
 		}
 	} else {
-		if err := copyDir(templateAbs, deckAbs); err != nil {
+		if err := copyDeckTemplateDir(templateAbs, deckAbs); err != nil {
+			_ = os.RemoveAll(deckAbs)
 			return deckBootstrapResult{}, err
 		}
 	}

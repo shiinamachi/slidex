@@ -115,6 +115,39 @@ func TestBootstrapDeckUsesEmbeddedTemplateWhenDefaultTemplateMissing(t *testing.
 	}
 }
 
+func TestBootstrapDeckRejectsOversizedFilesystemTemplate(t *testing.T) {
+	workspace := t.TempDir()
+	template := filepath.Join(workspace, "templates", "huge")
+	if err := os.MkdirAll(template, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "brief.md"), []byte("# Brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	large := filepath.Join(template, "assets", "large.bin")
+	if err := os.MkdirAll(filepath.Dir(large), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(large, maxDeckTemplateFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = bootstrapDeckWorkspace(workspace, "oversized-template", filepath.Join("templates", "huge"), true)
+	if err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("expected oversized template rejection, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "decks", "oversized-template")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed template bootstrap should remove partial deck, stat err=%v", statErr)
+	}
+}
+
 func TestEmbeddedDefaultTemplateMatchesRepoTemplate(t *testing.T) {
 	root := repoRootForTest(t)
 	repoTemplate := filepath.Join(root, defaultDeckTemplatePath)

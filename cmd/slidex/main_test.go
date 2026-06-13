@@ -4662,6 +4662,28 @@ func TestCopyDirRejectsSymlinkDestinationDirectories(t *testing.T) {
 	}
 }
 
+func TestCopyDirWithBudgetRejectsEntryAndTotalLimits(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "first.txt"), []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "second.txt"), []byte("67890"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entryErr := copyDirWithBudget(src, filepath.Join(t.TempDir(), "entry-dst"), copyDirBudget{label: "test", maxEntries: 1, maxFileBytes: 10, maxTotalBytes: 20})
+	if entryErr == nil || !strings.Contains(entryErr.Error(), "too many entries") {
+		t.Fatalf("expected entry budget error, got %v", entryErr)
+	}
+	totalErr := copyDirWithBudget(src, filepath.Join(t.TempDir(), "total-dst"), copyDirBudget{label: "test", maxEntries: 10, maxFileBytes: 10, maxTotalBytes: 8})
+	if totalErr == nil || !strings.Contains(totalErr.Error(), "maximum total size") {
+		t.Fatalf("expected total budget error, got %v", totalErr)
+	}
+}
+
 func TestCopyFileRejectsSymlinkEndpoints(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.txt")
