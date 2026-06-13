@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 )
@@ -22,15 +23,23 @@ import (
 const (
 	appServerPluginSmokeName = "app_server_plugin_smoke.json"
 	appServerSkillSmokeName  = "app_server_skill_smoke.json"
+
+	appServerLineBuffer           = 256
+	maxAppServerJSONLineBytes     = maxCodexMessageBytes
+	maxAppServerStderrBytes       = maxDeckLogBytes
+	maxAppServerNotifications     = 1024
+	maxAppServerNotificationBytes = maxDeckLogBytes
 )
 
 type appServerClient struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	lines  chan map[string]any
-	nextID int
-	stderr strings.Builder
-	stage  string
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	lines         chan map[string]any
+	nextID        int
+	stderr        *synchronizedLimitedBuffer
+	protocolErrMu sync.Mutex
+	protocolErr   error
+	stage         string
 }
 
 type appServerWorkflowRun struct {
@@ -39,6 +48,75 @@ type appServerWorkflowRun struct {
 	outDir   string
 	threadID string
 	snapshot map[string]any
+}
+
+type synchronizedLimitedBuffer struct {
+	mu  sync.Mutex
+	buf limitedOutputBuffer
+}
+
+func newSynchronizedLimitedBuffer(maxBytes int64) *synchronizedLimitedBuffer {
+	return &synchronizedLimitedBuffer{buf: limitedOutputBuffer{maxBytes: maxBytes}}
+}
+
+func (b *synchronizedLimitedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedLimitedBuffer) String(label string) string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	text := string(b.buf.Bytes())
+	if err := b.buf.Err(label); err != nil {
+		if strings.TrimSpace(text) == "" {
+			return err.Error()
+		}
+		return strings.TrimRight(text, "\n") + "\n[" + err.Error() + "]"
+	}
+	return text
+}
+
+type appServerNotificationCollector struct {
+	items    []map[string]any
+	bytes    int64
+	maxCount int
+	maxBytes int64
+}
+
+func newAppServerNotificationCollector(maxCount int, maxBytes int64) *appServerNotificationCollector {
+	return &appServerNotificationCollector{maxCount: maxCount, maxBytes: maxBytes}
+}
+
+func (c *appServerNotificationCollector) append(msg map[string]any) error {
+	if _, hasMethod := msg["method"]; !hasMethod {
+		return nil
+	}
+	if c.maxCount > 0 && len(c.items) >= c.maxCount {
+		return fmt.Errorf("app-server notification count exceeded maximum allowed size: %d > %d", len(c.items)+1, c.maxCount)
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("app-server notification cannot be measured: %w", err)
+	}
+	size := int64(len(raw))
+	if c.maxBytes > 0 && c.bytes > c.maxBytes-size {
+		return fmt.Errorf("app-server notification bytes exceeded maximum allowed size: %d bytes > %d", c.bytes+size, c.maxBytes)
+	}
+	c.items = append(c.items, msg)
+	c.bytes += size
+	return nil
+}
+
+func (c *appServerNotificationCollector) list() []map[string]any {
+	if c == nil {
+		return nil
+	}
+	return c.items
 }
 
 type appServerTurnResult struct {
@@ -157,9 +235,17 @@ func newUnixAppServerClient(sock string) (*appServerClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &appServerClient{stdin: conn, lines: make(chan map[string]any, 256)}
+	client := newAppServerClientState()
+	client.stdin = conn
 	go client.scanStdout(conn)
 	return client, nil
+}
+
+func newAppServerClientState() *appServerClient {
+	return &appServerClient{
+		lines:  make(chan map[string]any, appServerLineBuffer),
+		stderr: newSynchronizedLimitedBuffer(maxAppServerStderrBytes),
+	}
 }
 
 func newAppServerClientCommand(name string, args ...string) (*appServerClient, error) {
@@ -176,17 +262,15 @@ func newAppServerClientCommand(name string, args ...string) (*appServerClient, e
 	if err != nil {
 		return nil, err
 	}
-	client := &appServerClient{cmd: cmd, stdin: stdin, lines: make(chan map[string]any, 256)}
+	client := newAppServerClientState()
+	client.cmd = cmd
+	client.stdin = stdin
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 	go client.scanStdout(stdout)
 	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			client.stderr.WriteString(scanner.Text())
-			client.stderr.WriteByte('\n')
-		}
+		_, _ = io.Copy(client.stderr, stderr)
 	}()
 	return client, nil
 }
@@ -198,9 +282,24 @@ func appServerClientExecCommand(name string, args ...string) *exec.Cmd {
 }
 
 func (c *appServerClient) scanStdout(stdout io.Reader) {
+	c.scanStdoutWithMaxLineBytes(stdout, maxAppServerJSONLineBytes)
+}
+
+func (c *appServerClient) scanStdoutWithMaxLineBytes(stdout io.Reader, maxLineBytes int64) {
 	scanner := bufio.NewScanner(stdout)
-	buf := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buf, 16*1024*1024)
+	maxToken := int(maxLineBytes)
+	if maxToken <= 0 {
+		maxToken = 1024 * 1024
+	}
+	initialBuffer := 64 * 1024
+	if maxToken < initialBuffer {
+		initialBuffer = maxToken
+	}
+	if initialBuffer <= 0 {
+		initialBuffer = 1
+	}
+	buf := make([]byte, 0, initialBuffer)
+	scanner.Buffer(buf, maxToken)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -211,7 +310,38 @@ func (c *appServerClient) scanStdout(stdout io.Reader) {
 			c.lines <- msg
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		c.setProtocolErr(fmt.Errorf("app-server stdout scan failed: %w", err))
+	}
 	close(c.lines)
+}
+
+func (c *appServerClient) setProtocolErr(err error) {
+	if err == nil {
+		return
+	}
+	c.protocolErrMu.Lock()
+	defer c.protocolErrMu.Unlock()
+	if c.protocolErr == nil {
+		c.protocolErr = err
+	}
+}
+
+func (c *appServerClient) protocolError() error {
+	c.protocolErrMu.Lock()
+	defer c.protocolErrMu.Unlock()
+	return c.protocolErr
+}
+
+func (c *appServerClient) stderrText() string {
+	return c.stderr.String("app-server stderr")
+}
+
+func (c *appServerClient) closedStdoutError(context string) error {
+	if err := c.protocolError(); err != nil {
+		return fmt.Errorf("%s: %w; stderr: %s", context, err, c.stderrText())
+	}
+	return fmt.Errorf("%s: %s", context, c.stderrText())
 }
 
 func (c *appServerClient) close() {
@@ -277,40 +407,42 @@ func (c *appServerClient) request(method string, params map[string]any, timeout 
 		return nil, nil, err
 	}
 	deadline := time.After(timeout)
-	var notifications []map[string]any
+	notifications := newAppServerNotificationCollector(maxAppServerNotifications, maxAppServerNotificationBytes)
 	for {
 		select {
 		case msg, ok := <-c.lines:
 			if !ok {
-				return nil, notifications, fmt.Errorf("app-server closed stdout: %s", c.stderr.String())
+				return nil, notifications.list(), c.closedStdoutError("app-server closed stdout")
 			}
 			if got, ok := numberAsInt(msg["id"]); ok && got == id {
 				if errObj, exists := msg["error"]; exists {
-					return msg, notifications, fmt.Errorf("app-server %s error: %v", method, errObj)
+					return msg, notifications.list(), fmt.Errorf("app-server %s error: %v", method, errObj)
 				}
-				return msg, notifications, nil
+				return msg, notifications.list(), nil
 			}
-			if _, hasMethod := msg["method"]; hasMethod {
-				notifications = append(notifications, msg)
+			if err := notifications.append(msg); err != nil {
+				c.close()
+				return nil, notifications.list(), err
 			}
 		case <-deadline:
-			return nil, notifications, fmt.Errorf("app-server %s timed out", method)
+			return nil, notifications.list(), fmt.Errorf("app-server %s timed out", method)
 		}
 	}
 }
 
 func (c *appServerClient) waitForTurnCompletion(threadID, turnID string, timeout time.Duration) ([]map[string]any, map[string]any, error) {
 	deadline := time.After(timeout)
-	var notifications []map[string]any
+	notifications := newAppServerNotificationCollector(maxAppServerNotifications, maxAppServerNotificationBytes)
 	activeTurnID := turnID
 	for {
 		select {
 		case msg, ok := <-c.lines:
 			if !ok {
-				return notifications, nil, fmt.Errorf("app-server closed stdout while waiting for turn completion: %s", c.stderr.String())
+				return notifications.list(), nil, c.closedStdoutError("app-server closed stdout while waiting for turn completion")
 			}
-			if _, hasMethod := msg["method"]; hasMethod {
-				notifications = append(notifications, msg)
+			if err := notifications.append(msg); err != nil {
+				c.close()
+				return notifications.list(), nil, err
 			}
 			method, _ := msg["method"].(string)
 			params, _ := msg["params"].(map[string]any)
@@ -328,26 +460,27 @@ func (c *appServerClient) waitForTurnCompletion(threadID, turnID string, timeout
 				}
 				turn, _ := params["turn"].(map[string]any)
 				if id, _ := turn["id"].(string); id != "" && id == activeTurnID {
-					return notifications, params, nil
+					return notifications.list(), params, nil
 				}
 			}
 		case <-deadline:
-			return notifications, nil, fmt.Errorf("app-server turn/start timed out waiting for turn %s", turnID)
+			return notifications.list(), nil, fmt.Errorf("app-server turn/start timed out waiting for turn %s", turnID)
 		}
 	}
 }
 
 func (c *appServerClient) waitForThreadCompacted(threadID string, timeout time.Duration) ([]map[string]any, map[string]any, error) {
 	deadline := time.After(timeout)
-	var notifications []map[string]any
+	notifications := newAppServerNotificationCollector(maxAppServerNotifications, maxAppServerNotificationBytes)
 	for {
 		select {
 		case msg, ok := <-c.lines:
 			if !ok {
-				return notifications, nil, fmt.Errorf("app-server closed stdout while waiting for thread compact: %s", c.stderr.String())
+				return notifications.list(), nil, c.closedStdoutError("app-server closed stdout while waiting for thread compact")
 			}
-			if _, hasMethod := msg["method"]; hasMethod {
-				notifications = append(notifications, msg)
+			if err := notifications.append(msg); err != nil {
+				c.close()
+				return notifications.list(), nil, err
 			}
 			method, _ := msg["method"].(string)
 			if method != "thread/compacted" {
@@ -357,9 +490,9 @@ func (c *appServerClient) waitForThreadCompacted(threadID string, timeout time.D
 			if paramsThreadID, _ := params["threadId"].(string); paramsThreadID != "" && paramsThreadID != threadID {
 				continue
 			}
-			return notifications, params, nil
+			return notifications.list(), params, nil
 		case <-deadline:
-			return notifications, nil, fmt.Errorf("app-server thread/compact/start timed out waiting for thread %s", threadID)
+			return notifications.list(), nil, fmt.Errorf("app-server thread/compact/start timed out waiting for thread %s", threadID)
 		}
 	}
 }

@@ -2498,15 +2498,11 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	}
 	stdoutPath := filepath.Join(runtimeDir, "codex-app-server.stdout.log")
 	stderrPath := filepath.Join(runtimeDir, "codex-app-server.stderr.log")
-	stdout, err := openSecureTruncateFile(stdoutPath, 0o600)
+	stdout, stderr, err := prepareManagedAppServerOutput(stdoutPath, stderrPath)
 	if err != nil {
 		return err
 	}
 	defer stdout.Close()
-	stderr, err := openSecureTruncateFile(stderrPath, 0o600)
-	if err != nil {
-		return err
-	}
 	defer stderr.Close()
 	args := []string{"app-server", "--listen", actualListen}
 	if ws.Mode != "" {
@@ -2576,6 +2572,38 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	}
 	startCommitted = true
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
+}
+
+func prepareManagedAppServerOutput(stdoutPath, stderrPath string) (*os.File, *os.File, error) {
+	if err := writeManagedAppServerLogPlaceholder(stdoutPath, "stdout"); err != nil {
+		return nil, nil, err
+	}
+	if err := writeManagedAppServerLogPlaceholder(stderrPath, "stderr"); err != nil {
+		return nil, nil, err
+	}
+	stdout, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		_ = stdout.Close()
+		return nil, nil, err
+	}
+	return stdout, stderr, nil
+}
+
+func writeManagedAppServerLogPlaceholder(path, stream string) error {
+	f, err := openSecureTruncateFile(path, 0o600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := fmt.Fprintf(f, "managed app-server %s is discarded to avoid unbounded log growth\n", stream)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func terminateManagedProcess(pid int, grace time.Duration) {
