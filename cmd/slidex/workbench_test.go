@@ -3200,3 +3200,41 @@ func TestWorkbenchLockRejectsForgedLivePIDWithoutHanging(t *testing.T) {
 		t.Fatalf("expected bounded lock-held error, got %v", err)
 	}
 }
+
+func TestWorkbenchStaleLockReclaimDoesNotDeleteReplacement(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(outDir, workbenchLockName)
+	if err := os.WriteFile(lockPath, []byte("schema=old pid=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, stale := staleWorkbenchLockSnapshot(lockPath)
+	if !stale {
+		t.Fatal("expected stale workbench lock")
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	replacement := fmt.Sprintf("schema=%s tool=slidex pid=%d nonce=%s acquired=%s\n", workbenchLockSchemaMarker, os.Getpid(), newLockNonce(), time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(lockPath, []byte(replacement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if removeLockFileIfUnchanged(lockPath, snapshot, maxDeckLogBytes) {
+		t.Fatal("stale reclaim removed a replacement workbench lock")
+	}
+	got, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != replacement {
+		t.Fatalf("replacement lock changed:\n%s", string(got))
+	}
+}

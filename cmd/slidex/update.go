@@ -252,6 +252,33 @@ func resolveUpdateInstallRoot(installRootArg string) string {
 	return filepath.Clean(installRoot)
 }
 
+func canonicalUpdateInstallRoot(installRoot string) (string, error) {
+	root := filepath.Clean(strings.TrimSpace(installRoot))
+	if root == "" || root == "." {
+		root = defaultInstallRoot()
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	} else if os.IsNotExist(err) {
+		parent := filepath.Dir(root)
+		if resolvedParent, parentErr := filepath.EvalSymlinks(parent); parentErr == nil {
+			root = filepath.Join(resolvedParent, filepath.Base(root))
+		} else {
+			return "", parentErr
+		}
+	} else {
+		return "", err
+	}
+	root = filepath.Clean(root)
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	return root, nil
+}
+
 func resolveUpdateMetadataPath(installRoot, metadataPathArg string) string {
 	metadataPath := strings.TrimSpace(metadataPathArg)
 	if metadataPath == "" {
@@ -264,7 +291,11 @@ func resolveUpdateMetadataPath(installRoot, metadataPathArg string) string {
 }
 
 func acquireUpdateInstallLock(installRoot string) (func(), error) {
-	lockPath, err := updateInstallLockPath(installRoot)
+	canonicalRoot, err := canonicalUpdateInstallRoot(installRoot)
+	if err != nil {
+		return nil, err
+	}
+	lockPath, err := updateInstallLockPathForCanonicalRoot(canonicalRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -280,17 +311,15 @@ func acquireUpdateInstallLock(installRoot string) (func(), error) {
 				_ = os.Remove(lockPath)
 				return nil, err
 			}
-			_, _ = fmt.Fprintf(f, "schema=%s pid=%d installRoot=%s acquired=%s\n", updateInstallLockSchema, os.Getpid(), filepath.ToSlash(filepath.Clean(installRoot)), time.Now().UTC().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(f, "schema=%s pid=%d nonce=%s installRoot=%s acquired=%s\n", updateInstallLockSchema, os.Getpid(), newLockNonce(), filepath.ToSlash(canonicalRoot), time.Now().UTC().Format(time.RFC3339))
 			return func() {
-				_ = f.Close()
-				_ = os.Remove(lockPath)
+				releaseLockFile(lockPath, f)
 			}, nil
 		}
 		if !os.IsExist(err) {
 			return nil, err
 		}
-		if staleUpdateInstallLock(lockPath) {
-			_ = os.Remove(lockPath)
+		if snapshot, stale := staleUpdateInstallLockSnapshot(lockPath); stale && removeLockFileIfUnchanged(lockPath, snapshot, maxUpdateMetadataBytes) {
 			continue
 		}
 		now := time.Now()
@@ -309,33 +338,41 @@ func acquireUpdateInstallLock(installRoot string) (func(), error) {
 }
 
 func updateInstallLockPath(installRoot string) (string, error) {
-	ownerSum := sha256.Sum256([]byte(fmt.Sprint(currentOwnerID())))
-	lockDir := filepath.Join(os.TempDir(), "slidex-update-locks-"+hex.EncodeToString(ownerSum[:8]))
+	canonicalRoot, err := canonicalUpdateInstallRoot(installRoot)
+	if err != nil {
+		return "", err
+	}
+	return updateInstallLockPathForCanonicalRoot(canonicalRoot)
+}
+
+func updateInstallLockPathForCanonicalRoot(canonicalRoot string) (string, error) {
+	lockDir := filepath.Join(filepath.Dir(canonicalRoot), ".slidex-update-locks")
 	if err := ensureSecureDir(lockDir); err != nil {
 		return "", err
 	}
-	rootSum := sha256.Sum256([]byte(filepath.Clean(installRoot)))
+	rootSum := sha256.Sum256([]byte(filepath.ToSlash(canonicalRoot)))
 	return filepath.Join(lockDir, hex.EncodeToString(rootSum[:])+".lock"), nil
 }
 
 func staleUpdateInstallLock(lockPath string) bool {
-	info, err := os.Lstat(lockPath)
-	if err != nil {
-		return false
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return false
+	_, stale := staleUpdateInstallLockSnapshot(lockPath)
+	return stale
+}
+
+func staleUpdateInstallLockSnapshot(lockPath string) (lockFileSnapshot, bool) {
+	snapshot, ok := readLockFileSnapshot(lockPath, maxUpdateMetadataBytes)
+	if !ok {
+		return lockFileSnapshot{}, false
 	}
 	staleAfter := updateInstallLockStaleAfter
 	if staleAfter <= 0 {
 		staleAfter = 30 * time.Minute
 	}
-	raw, err := readRegularFileWithMaxBytes(lockPath, maxUpdateMetadataBytes)
-	if err != nil {
-		return time.Since(info.ModTime()) > staleAfter
+	if !snapshot.rawOK {
+		return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 	}
 	fields := map[string]string{}
-	for _, field := range strings.Fields(string(raw)) {
+	for _, field := range strings.Fields(string(snapshot.raw)) {
 		name, value, ok := strings.Cut(field, "=")
 		if ok {
 			fields[name] = value
@@ -344,11 +381,11 @@ func staleUpdateInstallLock(lockPath string) bool {
 	if fields["schema"] == updateInstallLockSchema {
 		pid, err := strconv.Atoi(fields["pid"])
 		if err != nil || pid <= 0 {
-			return time.Since(info.ModTime()) > staleAfter
+			return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 		}
-		return !processAlive(pid)
+		return snapshot, !processAlive(pid)
 	}
-	return time.Since(info.ModTime()) > staleAfter
+	return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 }
 
 func runUpdateStatus(args []string) error {

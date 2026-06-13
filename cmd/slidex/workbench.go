@@ -2741,17 +2741,15 @@ func acquireWorkbenchLock(outDir string) (func(), error) {
 				_ = os.Remove(lockPath)
 				return nil, err
 			}
-			_, _ = fmt.Fprintf(f, "schema=%s tool=slidex pid=%d acquired=%s\n", workbenchLockSchemaMarker, os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(f, "schema=%s tool=slidex pid=%d nonce=%s acquired=%s\n", workbenchLockSchemaMarker, os.Getpid(), newLockNonce(), time.Now().UTC().Format(time.RFC3339))
 			return func() {
-				_ = f.Close()
-				_ = os.Remove(lockPath)
+				releaseLockFile(lockPath, f)
 			}, nil
 		}
 		if !os.IsExist(err) {
 			return nil, err
 		}
-		if staleWorkbenchLock(lockPath) {
-			_ = os.Remove(lockPath)
+		if snapshot, stale := staleWorkbenchLockSnapshot(lockPath); stale && removeLockFileIfUnchanged(lockPath, snapshot, maxDeckLogBytes) {
 			continue
 		}
 		now := time.Now()
@@ -2770,23 +2768,24 @@ func acquireWorkbenchLock(outDir string) (func(), error) {
 }
 
 func staleWorkbenchLock(lockPath string) bool {
-	info, err := os.Lstat(lockPath)
-	if err != nil {
-		return false
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return false
+	_, stale := staleWorkbenchLockSnapshot(lockPath)
+	return stale
+}
+
+func staleWorkbenchLockSnapshot(lockPath string) (lockFileSnapshot, bool) {
+	snapshot, ok := readLockFileSnapshot(lockPath, maxDeckLogBytes)
+	if !ok {
+		return lockFileSnapshot{}, false
 	}
 	staleAfter := workbenchLockStaleAfter
 	if staleAfter <= 0 {
 		staleAfter = 5 * time.Second
 	}
-	raw, err := readRegularFileWithMaxBytes(lockPath, maxDeckLogBytes)
-	if err != nil {
-		return time.Since(info.ModTime()) > staleAfter
+	if !snapshot.rawOK {
+		return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 	}
 	fields := map[string]string{}
-	for _, field := range strings.Fields(string(raw)) {
+	for _, field := range strings.Fields(string(snapshot.raw)) {
 		name, value, ok := strings.Cut(field, "=")
 		if ok {
 			fields[name] = value
@@ -2795,11 +2794,11 @@ func staleWorkbenchLock(lockPath string) bool {
 	if fields["schema"] == workbenchLockSchemaMarker && fields["tool"] == "slidex" {
 		pid, err := strconv.Atoi(fields["pid"])
 		if err != nil || pid <= 0 {
-			return time.Since(info.ModTime()) > staleAfter
+			return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 		}
-		return !processAlive(pid)
+		return snapshot, !processAlive(pid)
 	}
-	return time.Since(info.ModTime()) > staleAfter
+	return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 }
 
 func stopWorkbenchProcess(manifest workbenchManifest) {

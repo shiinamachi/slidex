@@ -1585,6 +1585,98 @@ func TestUpdateInstallLockSerializesAccess(t *testing.T) {
 	}
 }
 
+func TestUpdateStaleInstallLockReclaimDoesNotDeleteReplacement(t *testing.T) {
+	installRoot := filepath.Join(t.TempDir(), "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath, err := updateInstallLockPath(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte("schema=old pid=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, stale := staleUpdateInstallLockSnapshot(lockPath)
+	if !stale {
+		t.Fatal("expected stale update install lock")
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := canonicalUpdateInstallRoot(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := fmt.Sprintf("schema=%s pid=%d nonce=%s installRoot=%s acquired=%s\n", updateInstallLockSchema, os.Getpid(), newLockNonce(), filepath.ToSlash(canonicalRoot), time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(lockPath, []byte(replacement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if removeLockFileIfUnchanged(lockPath, snapshot, maxUpdateMetadataBytes) {
+		t.Fatal("stale reclaim removed a replacement update lock")
+	}
+	got, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != replacement {
+		t.Fatalf("replacement lock changed:\n%s", string(got))
+	}
+}
+
+func TestUpdateInstallLockPathIgnoresTempAndOwnerEnvAliases(t *testing.T) {
+	installRoot := filepath.Join(t.TempDir(), "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first, err := updateInstallLockPath(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "tmpdir"))
+	t.Setenv("TEMP", filepath.Join(t.TempDir(), "temp"))
+	t.Setenv("TMP", filepath.Join(t.TempDir(), "tmp"))
+	t.Setenv("USERNAME", "forged-user")
+	t.Setenv("USER", "forged-user")
+	second, err := updateInstallLockPath(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatalf("lock path changed across temp/owner env aliases:\nfirst:  %s\nsecond: %s", first, second)
+	}
+}
+
+func TestUpdateInstallLockPathCanonicalizesSymlinkedRoot(t *testing.T) {
+	parent := t.TempDir()
+	realRoot := filepath.Join(parent, "real", "slidex")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := filepath.Join(parent, "alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	realLock, err := updateInstallLockPath(realRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasLock, err := updateInstallLockPath(aliasRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliasLock != realLock {
+		t.Fatalf("lock path did not canonicalize symlink alias:\nreal:  %s\nalias: %s", realLock, aliasLock)
+	}
+}
+
 func TestUpdateInternalStageDirUsesRandomUniqueDirs(t *testing.T) {
 	installRoot := filepath.Join(t.TempDir(), "slidex")
 	first, err := updateInternalStageDir(installRoot, "downloads", "0.2.0")
