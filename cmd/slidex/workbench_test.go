@@ -127,6 +127,56 @@ func TestBootstrapDeckUsesEmbeddedTemplateWhenDefaultTemplateMissing(t *testing.
 	}
 }
 
+func TestEmbeddedTemplateCopyRejectsSymlinkDestination(t *testing.T) {
+	workspace := t.TempDir()
+	decksRoot := filepath.Join(workspace, "decks")
+	if err := os.MkdirAll(decksRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deck := filepath.Join(decksRoot, "embedded-symlink")
+	if err := os.Symlink(outside, deck); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	err := copyEmbeddedDefaultTemplate(deck)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected embedded copy to reject symlink destination, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "brief.md")); !os.IsNotExist(err) {
+		t.Fatalf("embedded copy should not write through destination symlink, stat err=%v", err)
+	}
+}
+
+func TestPartialDeckCleanupRejectsSymlinkDeck(t *testing.T) {
+	workspace := t.TempDir()
+	decksRoot := filepath.Join(workspace, "decks")
+	if err := os.MkdirAll(decksRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(outside, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deck := filepath.Join(decksRoot, "cleanup-symlink")
+	if err := os.Symlink(outside, deck); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	err := removePartialDeckWorkspace(workspace, deck)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected cleanup to reject symlink deck, got %v", err)
+	}
+	if got := readFileOrEmpty(sentinel); got != "keep" {
+		t.Fatalf("cleanup followed symlink and modified outside sentinel: %q", got)
+	}
+}
+
 func TestBootstrapDeckRejectsOversizedFilesystemTemplate(t *testing.T) {
 	workspace := t.TempDir()
 	template := filepath.Join(workspace, "templates", "huge")

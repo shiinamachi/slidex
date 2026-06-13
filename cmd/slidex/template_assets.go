@@ -2,8 +2,8 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 )
 
@@ -23,6 +23,11 @@ const (
 var embeddedTemplateAssets embed.FS
 
 func copyEmbeddedDefaultTemplate(dst string) error {
+	cleanDst := filepath.Clean(dst)
+	budget := defaultDeckTemplateCopyBudget()
+	budget.label = "embedded deck template"
+	var entries int
+	var totalBytes int64
 	return fs.WalkDir(embeddedTemplateAssets, embeddedTemplateRoot, func(assetPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -32,18 +37,39 @@ func copyEmbeddedDefaultTemplate(dst string) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		target := filepath.Join(dst, filepath.FromSlash(rel))
+		target := filepath.Join(cleanDst, filepath.FromSlash(rel))
+		if !pathWithin(cleanDst, target) {
+			return fmt.Errorf("embedded deck template target escapes destination root: %s", filepath.ToSlash(target))
+		}
+		if rel != "." {
+			entries++
+			if budget.maxEntries > 0 && entries > budget.maxEntries {
+				return fmt.Errorf("embedded deck template contains too many entries: %d > %d at %s", entries, budget.maxEntries, rel)
+			}
+		}
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return ensureSecureDirMode(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("embedded deck template contains unsupported file type: %s", filepath.ToSlash(assetPath))
 		}
 		raw, err := embeddedTemplateAssets.ReadFile(assetPath)
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
+		size := int64(len(raw))
+		if budget.maxFileBytes > 0 && size > budget.maxFileBytes {
+			return fmt.Errorf("embedded deck template file exceeds maximum size: %s is %d bytes > %d", rel, size, budget.maxFileBytes)
 		}
-		return os.WriteFile(target, raw, 0o644)
+		if budget.maxTotalBytes > 0 && totalBytes > budget.maxTotalBytes-size {
+			return fmt.Errorf("embedded deck template exceeds maximum total size at %s: %d bytes > %d", rel, totalBytes+size, budget.maxTotalBytes)
+		}
+		totalBytes += size
+		return secureWriteFile(target, raw, 0o644)
 	})
 }
 

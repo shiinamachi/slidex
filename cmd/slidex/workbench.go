@@ -2358,21 +2358,46 @@ func bootstrapDeckWorkspace(workspace, deckID, fromTemplate string, allowExistin
 	templateAbs := resolveTemplateDir(root, fromTemplate)
 	if pathExists(templateAbs) {
 		if err := copyDeckTemplateDir(templateAbs, deckAbs); err != nil {
-			_ = os.RemoveAll(deckAbs)
+			_ = removePartialDeckWorkspace(root, deckAbs)
 			return deckBootstrapResult{}, err
 		}
 	} else if isDefaultTemplateRef(fromTemplate) {
 		if err := copyEmbeddedDefaultTemplate(deckAbs); err != nil {
-			_ = os.RemoveAll(deckAbs)
+			_ = removePartialDeckWorkspace(root, deckAbs)
 			return deckBootstrapResult{}, err
 		}
 	} else {
 		if err := copyDeckTemplateDir(templateAbs, deckAbs); err != nil {
-			_ = os.RemoveAll(deckAbs)
+			_ = removePartialDeckWorkspace(root, deckAbs)
 			return deckBootstrapResult{}, err
 		}
 	}
 	return deckBootstrapResult{Workspace: filepath.ToSlash(root), DeckID: deckID, DeckDir: filepath.ToSlash(displayDeckPath(root, deckAbs)), Status: "created"}, nil
+}
+
+func removePartialDeckWorkspace(root, deckAbs string) error {
+	decksRoot := filepath.Join(workspaceRoot(root), "decks")
+	cleanDeck := filepath.Clean(deckAbs)
+	if filepath.VolumeName(decksRoot) != filepath.VolumeName(cleanDeck) || !pathWithin(decksRoot, cleanDeck) {
+		return fmt.Errorf("partial deck cleanup target escapes decks root: %s", filepath.ToSlash(cleanDeck))
+	}
+	info, err := os.Lstat(cleanDeck)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if isSymlinkOrReparsePoint(cleanDeck, info) {
+		return fmt.Errorf("partial deck cleanup target must not be a symlink or reparse point: %s", filepath.ToSlash(cleanDeck))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("partial deck cleanup target must be a directory: %s", filepath.ToSlash(cleanDeck))
+	}
+	if err := rejectSymlinkAncestors(filepath.Dir(cleanDeck)); err != nil {
+		return err
+	}
+	return os.RemoveAll(cleanDeck)
 }
 
 func resolveTemplateDir(root, fromTemplate string) string {
