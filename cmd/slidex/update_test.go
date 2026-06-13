@@ -3361,6 +3361,65 @@ func TestReleasePackageArchiveIncludesInstallMetadata(t *testing.T) {
 	}
 }
 
+func TestPackageReleaseRejectsUnsafeDistDirsBeforeDeleting(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell release smoke uses the Unix package path")
+	}
+	root := repoRootForTest(t)
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeRM := filepath.Join(fakeBin, "rm")
+	if err := os.WriteFile(fakeRM, []byte("#!/usr/bin/env bash\necho fake rm invoked \"$@\" >&2\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nonEmptyDist := filepath.Join(t.TempDir(), "non-empty-dist")
+	if err := os.MkdirAll(nonEmptyDist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(nonEmptyDist, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		dist string
+		want string
+	}{
+		{name: "repo-root", dist: root, want: "refusing dangerous release dist dir"},
+		{name: "unmarked-non-empty", dist: nonEmptyDist, want: "refusing to clean unmarked non-empty release dist dir"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", filepath.Join(root, "scripts", "package-release.sh"))
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(),
+				"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"SLIDEX_RELEASE_VERSION=v"+toolVersion,
+				"SLIDEX_BUILD_CHANNEL=production",
+				"SLIDEX_TARGETS=linux/amd64",
+				"SLIDEX_DIST_DIR="+tc.dist,
+				"SLIDEX_BUILD_TIME=2026-06-10T00:00:00Z",
+				"SLIDEX_COMMIT_SHA=0123456789abcdef",
+			)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("package release should reject %s\n%s", tc.dist, out)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Fatalf("release rejection = %q, want %q", out, tc.want)
+			}
+			if strings.Contains(string(out), "fake rm invoked") {
+				t.Fatalf("release script reached rm before rejecting unsafe dist dir:\n%s", out)
+			}
+		})
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "keep" {
+		t.Fatalf("unmarked dist sentinel should remain, raw=%q err=%v", raw, err)
+	}
+}
+
 func TestCandidateBinaryVersionRejectsOversizedOutput(t *testing.T) {
 	temp := t.TempDir()
 	binary := filepath.Join(temp, "slidex")

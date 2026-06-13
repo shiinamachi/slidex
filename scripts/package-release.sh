@@ -60,6 +60,54 @@ build_time="${SLIDEX_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 dist_dir="${SLIDEX_DIST_DIR:-dist}"
 targets="${SLIDEX_TARGETS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}"
 
+prepare_dist_dir() {
+  local requested="$1"
+  if [[ -z "$requested" ]]; then
+    printf 'SLIDEX_DIST_DIR must not be empty\n' >&2
+    return 2
+  fi
+
+  local parent leaf parent_abs dist_abs repo_abs repo_parent home_abs
+  parent="$(dirname -- "$requested")"
+  leaf="$(basename -- "$requested")"
+  if [[ -z "$leaf" || "$leaf" == "/" || "$leaf" == "." ]]; then
+    printf 'refusing dangerous release dist dir: %s\n' "$requested" >&2
+    return 2
+  fi
+
+  mkdir -p "$parent"
+  parent_abs="$(cd "$parent" && pwd -P)"
+  dist_abs="${parent_abs}/${leaf}"
+  repo_abs="$(cd "$repo_root" && pwd -P)"
+  repo_parent="$(dirname "$repo_abs")"
+  home_abs=""
+  if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
+    home_abs="$(cd "$HOME" && pwd -P)"
+  fi
+
+  if [[ "$dist_abs" == "/" || "$dist_abs" == "$repo_abs" || "$dist_abs" == "$repo_parent" || ( -n "$home_abs" && "$dist_abs" == "$home_abs" ) ]]; then
+    printf 'refusing dangerous release dist dir: %s\n' "$dist_abs" >&2
+    return 2
+  fi
+  if [[ -e "$dist_abs" && ! -d "$dist_abs" ]]; then
+    printf 'release dist path is not a directory: %s\n' "$dist_abs" >&2
+    return 2
+  fi
+
+  if [[ -d "$dist_abs" ]]; then
+    if [[ ! -e "$dist_abs/.slidex-dist" && -n "$(find "$dist_abs" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      printf 'refusing to clean unmarked non-empty release dist dir: %s\n' "$dist_abs" >&2
+      return 2
+    fi
+  else
+    mkdir -p "$dist_abs"
+  fi
+
+  : > "$dist_abs/.slidex-dist"
+  find "$dist_abs" -mindepth 1 -maxdepth 1 ! -name .slidex-dist -exec rm -rf -- {} +
+  printf '%s\n' "$dist_abs"
+}
+
 runtime_paths=(
   ".agents/plugins/marketplace.json"
   ".agents/skills/slidex"
@@ -94,9 +142,7 @@ if (( ${#missing[@]} > 0 )); then
   exit 1
 fi
 
-rm -rf "$dist_dir"
-mkdir -p "$dist_dir"
-dist_abs="$(cd "$dist_dir" && pwd)"
+dist_abs="$(prepare_dist_dir "$dist_dir")"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
