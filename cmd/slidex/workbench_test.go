@@ -1096,6 +1096,38 @@ func TestWorkbenchServeArgsMatchRequiresTopLevelSubcommand(t *testing.T) {
 	if workbenchServeArgsMatch(forged, manifest) {
 		t.Fatal("workbench serve tail under another subcommand should not match")
 	}
+	duplicate := append(append([]string{"/usr/bin/slidex", "workbench", "serve"}, flags...), "--port", "1")
+	if workbenchServeArgsMatch(duplicate, manifest) {
+		t.Fatal("duplicate critical workbench serve flag should not match")
+	}
+	extraOperand := append(append([]string{"/usr/bin/slidex", "workbench", "serve"}, flags...), "extra")
+	if workbenchServeArgsMatch(extraOperand, manifest) {
+		t.Fatal("workbench serve argv with extra operands should not match")
+	}
+	rawToken := append(append([]string{"/usr/bin/slidex", "workbench", "serve"}, flags...), "--token", "secret")
+	if workbenchServeArgsMatch(rawToken, manifest) {
+		t.Fatal("workbench serve argv with raw token flag should not match")
+	}
+}
+
+func TestRunWorkbenchServeRejectsDuplicateCriticalFlagsAndOperands(t *testing.T) {
+	duplicate := []string{
+		"--workspace", t.TempDir(),
+		"--workspace", t.TempDir(),
+		"--deck", "decks/demo",
+		"--session", "session-1",
+		"--token-env", workbenchTokenEnv,
+		"--shutdown-token-env", workbenchShutdownTokenEnv,
+		"--readiness-token-env", workbenchReadinessTokenEnv,
+		"--port", "54321",
+	}
+	if err := runWorkbenchServe(duplicate); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate flag rejection, got %v", err)
+	}
+	operand := []string{"--deck", "decks/demo", "extra"}
+	if err := runWorkbenchServe(operand); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("expected extra operand rejection, got %v", err)
+	}
 }
 
 func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {

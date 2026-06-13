@@ -75,6 +75,44 @@ func workbenchProcessMatchesManifest(manifest workbenchManifest) bool {
 	return workbenchServeArgsMatch(splitWindowsCommandLine(commandLine), manifest)
 }
 
+func managedAppServerProcessMatchesMetadata(pid int, metadata map[string]any) bool {
+	if pid <= 0 {
+		return false
+	}
+	expectedExe := resolvedExecutablePath(metadataString(metadata["processExe"]))
+	expectedArgs := metadataStringSlice(metadata["processArgs"])
+	if expectedExe == "" || len(expectedArgs) == 0 {
+		return false
+	}
+	processExe, processArgs, ok := windowsObservedProcessIdentity(pid)
+	if !ok {
+		return false
+	}
+	return sameFilesystemPath(expectedExe, processExe) && stringSlicesEqual(processArgs, expectedArgs)
+}
+
+func observedManagedAppServerProcessIdentity(pid int, _ *exec.Cmd) (string, []string, bool) {
+	return windowsObservedProcessIdentity(pid)
+}
+
+func windowsObservedProcessIdentity(pid int) (string, []string, bool) {
+	if pid <= 0 {
+		return "", nil, false
+	}
+	processExe, ok := windowsProcessImagePath(pid)
+	if !ok {
+		return "", nil, false
+	}
+	if resolved, err := filepath.EvalSymlinks(processExe); err == nil {
+		processExe = resolved
+	}
+	commandLine, ok := windowsProcessCommandLine(pid)
+	if !ok {
+		return "", nil, false
+	}
+	return processExe, splitWindowsCommandLine(commandLine), true
+}
+
 func windowsProcessImagePath(pid int) (string, bool) {
 	if pid <= 0 {
 		return "", false
@@ -513,6 +551,17 @@ func secureFileLinkCount(path string, info os.FileInfo) (uint64, bool, error) {
 	defer windows.CloseHandle(handle)
 	var data windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &data); err != nil {
+		return 0, false, err
+	}
+	return uint64(data.NumberOfLinks), true, nil
+}
+
+func secureOpenFileLinkCount(_ string, f *os.File, info os.FileInfo) (uint64, bool, error) {
+	if f == nil || info == nil || !info.Mode().IsRegular() {
+		return 0, false, nil
+	}
+	var data windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &data); err != nil {
 		return 0, false, err
 	}
 	return uint64(data.NumberOfLinks), true, nil

@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -2478,17 +2479,22 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	metaPath := appServerMetadataPath()
 	if existing := readAppServerMetadata(metaPath); existing != nil {
 		if pid, _ := numberAsInt(existing["pid"]); pid > 0 && processAlive(pid) {
+			if !managedAppServerMetadataTrustedForSignal(pid, existing) {
+				return managedAppServerSignalRefusedError(pid)
+			}
 			if !force {
 				return exitCodeError(1, "managed app-server already appears active with pid %d; use --force to replace it", pid)
 			}
-			_ = stopManagedAppServer(true)
+			if err := stopManagedAppServer(true); err != nil {
+				return err
+			}
 		}
 	}
 	actualListen, err := normalizeManagedListenURL(listen)
 	if err != nil {
 		return err
 	}
-	if strings.HasPrefix(actualListen, "ws://") {
+	if isWebSocketListen(actualListen) {
 		if err := validateWebSocketAuth(actualListen, ws); err != nil {
 			return err
 		}
@@ -2563,6 +2569,7 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 		"retryPolicy":     map[string]any{"overloadCode": -32001, "initialDelayMs": 250, "maxDelayMs": 5000, "maxAttempts": 5},
 		"stopPolicy":      map[string]any{"gracefulSignal": "interrupt", "forceSignal": "kill", "gracePeriodSeconds": 5},
 	}
+	addManagedAppServerProcessIdentity(metadata, cmd)
 	if err := secureWriteJSON(metaPath, metadata); err != nil {
 		return err
 	}
@@ -2698,6 +2705,11 @@ func stopManagedAppServer(force bool) error {
 	pid, _ := numberAsInt(metadata["pid"])
 	stopped := false
 	if pid > 0 && processAlive(pid) {
+		if !managedAppServerMetadataTrustedForSignal(pid, metadata) {
+			metadata["stopRefusedAt"] = time.Now().UTC().Format(time.RFC3339)
+			_ = secureWriteJSON(metaPath, metadata)
+			return managedAppServerSignalRefusedError(pid)
+		}
 		if force {
 			killManagedProcess(pid)
 		} else {
@@ -2749,8 +2761,18 @@ func validateManagedListenURLForOS(goos, listen string) error {
 	if err != nil {
 		return exitCodeError(4, "invalid managed app-server listen URL: %v", err)
 	}
-	if u.Scheme != "unix" {
+	switch u.Scheme {
+	case "ws", "wss":
+		if u.Host == "" {
+			return exitCodeError(4, "managed app-server %s listen must include a host: %s", u.Scheme, listen)
+		}
+		if u.User != nil {
+			return exitCodeError(4, "managed app-server WebSocket listen must not include URL credentials")
+		}
 		return nil
+	case "unix":
+	default:
+		return exitCodeError(4, "unsupported managed app-server listen URL scheme %q; use unix://, ws://, or wss://", u.Scheme)
 	}
 	if goos == "windows" {
 		return exitCodeError(4, "managed app-server unix socket listen is not supported on Windows; omit --listen or use ws://127.0.0.1:<port>/app")
@@ -2935,9 +2957,96 @@ func readAppServerMetadata(path string) map[string]any {
 	return metadata
 }
 
+func addManagedAppServerProcessIdentity(metadata map[string]any, cmd *exec.Cmd) {
+	if metadata == nil || cmd == nil {
+		return
+	}
+	if cmd.Process != nil {
+		if exe, args, ok := observedManagedAppServerProcessIdentity(cmd.Process.Pid, cmd); ok {
+			metadata["processExe"] = exe
+			metadata["processArgs"] = args
+			metadata["processCwd"] = cmd.Dir
+			return
+		}
+	}
+	metadata["processExe"] = resolvedExecutablePath(cmd.Path)
+	metadata["processArgs"] = append([]string(nil), cmd.Args...)
+	metadata["processCwd"] = cmd.Dir
+}
+
+func resolvedExecutablePath(path string) string {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		return ""
+	}
+	if looked, err := exec.LookPath(candidate); err == nil {
+		candidate = looked
+	}
+	if abs, err := filepath.Abs(candidate); err == nil {
+		candidate = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+		candidate = resolved
+	}
+	return candidate
+}
+
+func managedAppServerMetadataTrustedForSignal(pid int, metadata map[string]any) bool {
+	if pid <= 0 || !managedAppServerMetadataOwnerMatchesCurrentUser(metadata) {
+		return false
+	}
+	return managedAppServerProcessMatchesMetadata(pid, metadata)
+}
+
+func managedAppServerMetadataOwnerMatchesCurrentUser(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+	owner, ok := metadata["ownerUid"]
+	if !ok {
+		return false
+	}
+	return metadataString(owner) == metadataString(currentOwnerID())
+}
+
+func managedAppServerSignalRefusedError(pid int) error {
+	return exitCodeError(1, "managed app-server metadata pid %d does not match a slidex-launched app-server for this user; refusing to signal it", pid)
+}
+
+func metadataStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok || text == "" {
+				return nil
+			}
+			values = append(values, text)
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func probeManagedAppServer(metadata map[string]any) (map[string]any, error) {
 	listen, _ := metadata["listen"].(string)
-	if strings.HasPrefix(listen, "ws://") {
+	if isWebSocketListen(listen) {
 		return probeWebSocketAppServer(listen, webSocketAuthConfigFromMetadata(metadata)), nil
 	}
 	if !strings.HasPrefix(listen, "unix://") {
@@ -3212,8 +3321,8 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 	if err != nil {
 		return err
 	}
-	if u.Scheme != "ws" {
-		return fmt.Errorf("websocket ping supports ws:// only")
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("websocket ping supports ws:// or wss:// only")
 	}
 	auth, err := webSocketAuthorizationHeader(ws)
 	if err != nil {
@@ -3221,9 +3330,19 @@ func webSocketPingOnce(listen string, ws webSocketAuthConfig, timeout time.Durat
 	}
 	host := u.Host
 	if !strings.Contains(host, ":") {
-		host += ":80"
+		if u.Scheme == "wss" {
+			host += ":443"
+		} else {
+			host += ":80"
+		}
 	}
-	conn, err := net.DialTimeout("tcp", host, timeout)
+	var conn net.Conn
+	if u.Scheme == "wss" {
+		dialer := &net.Dialer{Timeout: timeout}
+		conn, err = tls.DialWithDialer(dialer, "tcp", host, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname()})
+	} else {
+		conn, err = net.DialTimeout("tcp", host, timeout)
+	}
 	if err != nil {
 		return err
 	}
@@ -3563,7 +3682,7 @@ func parseTomlStringArray(value string) []string {
 }
 
 func transportRiskForListen(listen string) string {
-	if strings.HasPrefix(listen, "ws://") {
+	if isWebSocketListen(listen) {
 		if isLoopbackWebSocketListen(listen) {
 			return ""
 		}
@@ -3572,9 +3691,17 @@ func transportRiskForListen(listen string) string {
 	return ""
 }
 
+func isWebSocketListen(listen string) bool {
+	u, err := url.Parse(listen)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "ws" || u.Scheme == "wss"
+}
+
 func isLoopbackWebSocketListen(listen string) bool {
 	u, err := url.Parse(listen)
-	if err != nil || u.Scheme != "ws" {
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
 		return false
 	}
 	host := u.Hostname()
@@ -7065,7 +7192,7 @@ func verifySecureOpenFile(path string, f *os.File) error {
 	if !fileInfo.Mode().IsRegular() {
 		return fmt.Errorf("secure write target must be a regular file: %s", filepath.ToSlash(path))
 	}
-	links, ok, err := secureFileLinkCount(path, fileInfo)
+	links, ok, err := secureOpenFileLinkCount(path, f, fileInfo)
 	if err != nil {
 		return err
 	}

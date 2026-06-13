@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -35,6 +36,44 @@ func workbenchProcessMatchesManifest(manifest workbenchManifest) bool {
 		return false
 	}
 	return workbenchServeArgsMatch(splitProcCmdline(raw), manifest)
+}
+
+func managedAppServerProcessMatchesMetadata(pid int, metadata map[string]any) bool {
+	if pid <= 0 {
+		return false
+	}
+	expectedExe := resolvedExecutablePath(metadataString(metadata["processExe"]))
+	expectedArgs := metadataStringSlice(metadata["processArgs"])
+	if expectedExe == "" || len(expectedArgs) == 0 {
+		return false
+	}
+	processExe, processArgs, ok := procProcessIdentity(pid)
+	if !ok {
+		return false
+	}
+	return sameFilesystemPath(expectedExe, processExe) && stringSlicesEqual(processArgs, expectedArgs)
+}
+
+func observedManagedAppServerProcessIdentity(pid int, _ *exec.Cmd) (string, []string, bool) {
+	return procProcessIdentity(pid)
+}
+
+func procProcessIdentity(pid int) (string, []string, bool) {
+	if pid <= 0 {
+		return "", nil, false
+	}
+	processExe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return "", nil, false
+	}
+	if resolved, err := filepath.EvalSymlinks(processExe); err == nil {
+		processExe = resolved
+	}
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || len(raw) == 0 {
+		return "", nil, false
+	}
+	return processExe, splitProcCmdline(raw), true
 }
 
 func splitProcCmdline(raw []byte) []string {

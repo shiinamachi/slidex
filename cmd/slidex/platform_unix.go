@@ -117,6 +117,10 @@ func secureFileLinkCount(_ string, info os.FileInfo) (uint64, bool, error) {
 	return uint64(stat.Nlink), true, nil
 }
 
+func secureOpenFileLinkCount(path string, _ *os.File, info os.FileInfo) (uint64, bool, error) {
+	return secureFileLinkCount(path, info)
+}
+
 func replaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }

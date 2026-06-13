@@ -3877,6 +3877,9 @@ func TestTransportRiskForListenTreatsLoopbackWebSocketAsSupported(t *testing.T) 
 	if risk := transportRiskForListen("ws://0.0.0.0:49200/app"); !strings.Contains(risk, "Non-loopback") {
 		t.Fatalf("non-loopback websocket should require explicit network protection, got %q", risk)
 	}
+	if risk := transportRiskForListen("wss://0.0.0.0:49200/app"); !strings.Contains(risk, "Non-loopback") {
+		t.Fatalf("non-loopback secure websocket should still require explicit auth policy, got %q", risk)
+	}
 }
 
 func TestVerifyDeliverySummaryPolicyRequiresHashesQAAndBlockers(t *testing.T) {
@@ -4100,6 +4103,9 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	if err := validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{}); err != nil {
 		t.Fatalf("loopback websocket without auth should pass: %v", err)
 	}
+	if err := validateWebSocketAuth("wss://127.0.0.1:1234", webSocketAuthConfig{}); err != nil {
+		t.Fatalf("loopback secure websocket without auth should pass: %v", err)
+	}
 	err = validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("0", 64)})
 	if err == nil || !strings.Contains(err.Error(), "sha256") {
 		t.Fatalf("expected loopback capability token hash mismatch to fail, got %v", err)
@@ -4111,6 +4117,10 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: tokenHash})
 	if err == nil {
 		t.Fatal("expected capability token without tunnel acknowledgement to fail")
+	}
+	err = validateWebSocketAuth("wss://10.0.0.2:1234", webSocketAuthConfig{})
+	if err == nil || !strings.Contains(err.Error(), "non-loopback") {
+		t.Fatalf("expected non-loopback secure websocket without auth to fail, got %v", err)
 	}
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "1")
 	err = validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("0", 64)})
@@ -6182,7 +6192,7 @@ func TestRenderWrapperFilenameDoesNotUseRawSlideID(t *testing.T) {
 }
 
 func TestLoopbackWebSocketListenParsing(t *testing.T) {
-	for _, listen := range []string{"ws://127.0.0.1:1234/app", "ws://[::1]:1234/app", "ws://localhost:1234/app"} {
+	for _, listen := range []string{"ws://127.0.0.1:1234/app", "ws://[::1]:1234/app", "ws://localhost:1234/app", "wss://localhost:1234/app"} {
 		if !isLoopbackWebSocketListen(listen) {
 			t.Fatalf("expected loopback websocket listen to pass: %s", listen)
 		}
@@ -6244,6 +6254,15 @@ func TestManagedListenURLRejectsUnsupportedUnixSocketPaths(t *testing.T) {
 	}
 	if err := validateManagedListenURLForOS("windows", "ws://127.0.0.1:49200/app"); err != nil {
 		t.Fatalf("windows should accept loopback websocket listen URLs: %v", err)
+	}
+	if err := validateManagedListenURLForOS("linux", "wss://127.0.0.1:49200/app"); err != nil {
+		t.Fatalf("linux should accept secure websocket listen URLs: %v", err)
+	}
+	if err := validateManagedListenURLForOS("linux", "http://127.0.0.1:49200/app"); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("managed listen should reject unsupported schemes, got %v", err)
+	}
+	if err := validateManagedListenURLForOS("linux", "ws:///app"); err == nil || !strings.Contains(err.Error(), "host") {
+		t.Fatalf("managed websocket listen should require a host, got %v", err)
 	}
 }
 

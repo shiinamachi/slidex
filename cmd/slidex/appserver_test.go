@@ -80,6 +80,24 @@ func TestPrepareManagedAppServerOutputDiscardsChildStreams(t *testing.T) {
 	}
 }
 
+func TestManagedAppServerSignalIdentityRejectsUntrustedMetadata(t *testing.T) {
+	if managedAppServerMetadataTrustedForSignal(os.Getpid(), map[string]any{"ownerUid": currentOwnerID()}) {
+		t.Fatal("metadata without process identity must not be trusted for signaling")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]any{
+		"ownerUid":    "definitely-not-current-user",
+		"processExe":  exe,
+		"processArgs": append([]string(nil), os.Args...),
+	}
+	if managedAppServerMetadataTrustedForSignal(os.Getpid(), metadata) {
+		t.Fatal("metadata for a different owner must not be trusted for signaling")
+	}
+}
+
 func TestReadJSONSchemaObjectRejectsOversizedSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schema.json")
 	if err := os.WriteFile(path, []byte(`{"padding":"`+strings.Repeat("x", int(maxProjectSchemaBytes)+1)+`"}`), 0o644); err != nil {

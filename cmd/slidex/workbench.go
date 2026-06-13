@@ -403,6 +403,9 @@ func addWorkbenchBrowserOpenFields(response map[string]any, manifest workbenchMa
 }
 
 func runWorkbenchServe(args []string) error {
+	if err := rejectDuplicateWorkbenchServeFlags(args); err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("workbench serve", flag.ContinueOnError)
 	deck := fs.String("deck", "", "deck workspace directory")
 	workspace := fs.String("workspace", ".", "workspace root")
@@ -416,6 +419,9 @@ func runWorkbenchServe(args []string) error {
 	port := fs.Int("port", 0, "loopback port")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if fs.NArg() != 0 {
+		return exitCodeError(2, "usage: slidex workbench serve --deck DIR --session ID --token-env ENV --shutdown-token-env ENV --readiness-token-env ENV --port PORT")
 	}
 	if *token != "" {
 		return exitCodeError(2, "--token is not supported; use --token-env to keep the workbench token out of process arguments")
@@ -2963,29 +2969,33 @@ func workbenchServeArgsMatch(args []string, manifest workbenchManifest) bool {
 	if !ok {
 		return false
 	}
-	workspace, ok := flagValueFromArgs(flagArgs, "--workspace")
+	values, ok := workbenchServeFlagValues(flagArgs)
+	if !ok {
+		return false
+	}
+	workspace, ok := values["--workspace"]
 	if !ok || !sameFilesystemPath(workspace, manifest.Workspace) {
 		return false
 	}
-	deck, ok := flagValueFromArgs(flagArgs, "--deck")
+	deck, ok := values["--deck"]
 	if !ok || !sameFilesystemPath(deck, manifest.DeckDir) {
 		return false
 	}
-	sessionID, ok := flagValueFromArgs(flagArgs, "--session")
+	sessionID, ok := values["--session"]
 	if !ok || sessionID != manifest.SessionID {
 		return false
 	}
-	port, ok := flagValueFromArgs(flagArgs, "--port")
+	port, ok := values["--port"]
 	if !ok || port != strconv.Itoa(manifest.Port) {
 		return false
 	}
-	if tokenEnv, ok := flagValueFromArgs(flagArgs, "--token-env"); !ok || tokenEnv != workbenchTokenEnv {
+	if tokenEnv, ok := values["--token-env"]; !ok || tokenEnv != workbenchTokenEnv {
 		return false
 	}
-	if shutdownEnv, ok := flagValueFromArgs(flagArgs, "--shutdown-token-env"); !ok || shutdownEnv != workbenchShutdownTokenEnv {
+	if shutdownEnv, ok := values["--shutdown-token-env"]; !ok || shutdownEnv != workbenchShutdownTokenEnv {
 		return false
 	}
-	if readinessEnv, ok := flagValueFromArgs(flagArgs, "--readiness-token-env"); !ok || readinessEnv != workbenchReadinessTokenEnv {
+	if readinessEnv, ok := values["--readiness-token-env"]; !ok || readinessEnv != workbenchReadinessTokenEnv {
 		return false
 	}
 	return true
@@ -3001,20 +3011,73 @@ func workbenchServeFlagArgs(args []string) ([]string, bool) {
 	return args[3:], true
 }
 
-func flagValueFromArgs(args []string, name string) (string, bool) {
-	prefix := name + "="
+func workbenchServeFlagValues(args []string) (map[string]string, bool) {
+	allowed := expectedWorkbenchServeFlagNames()
+	values := map[string]string{}
 	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == name:
-			if i+1 >= len(args) {
-				return "", false
-			}
-			return args[i+1], true
-		case strings.HasPrefix(args[i], prefix):
-			return strings.TrimPrefix(args[i], prefix), true
+		arg := args[i]
+		if !strings.HasPrefix(arg, "--") {
+			return nil, false
 		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		if !allowed[name] {
+			return nil, false
+		}
+		if _, exists := values[name]; exists {
+			return nil, false
+		}
+		if !hasValue {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return nil, false
+			}
+			value = args[i+1]
+			i++
+		}
+		if value == "" {
+			return nil, false
+		}
+		values[name] = value
 	}
-	return "", false
+	return values, true
+}
+
+func rejectDuplicateWorkbenchServeFlags(args []string) error {
+	names := declaredWorkbenchServeFlagNames()
+	seen := map[string]bool{}
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "--") {
+			continue
+		}
+		name, _, _ := strings.Cut(arg, "=")
+		if !names[name] {
+			continue
+		}
+		if seen[name] {
+			return exitCodeError(2, "duplicate workbench serve flag %s is not allowed", name)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func expectedWorkbenchServeFlagNames() map[string]bool {
+	return map[string]bool{
+		"--workspace":           true,
+		"--deck":                true,
+		"--session":             true,
+		"--port":                true,
+		"--token-env":           true,
+		"--shutdown-token-env":  true,
+		"--readiness-token-env": true,
+	}
+}
+
+func declaredWorkbenchServeFlagNames() map[string]bool {
+	names := expectedWorkbenchServeFlagNames()
+	names["--token"] = true
+	names["--shutdown-token"] = true
+	names["--readiness-token"] = true
+	return names
 }
 
 func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid int, status string) workbenchManifest {
