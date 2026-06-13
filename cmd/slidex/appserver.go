@@ -1364,8 +1364,18 @@ func shellQuote(s string) string {
 }
 
 func windowsPowerShellCommand(name string, args ...string) string {
+	return windowsPowerShellCommandInDir("", name, args...)
+}
+
+func windowsPowerShellCommandInDir(workDir, name string, args ...string) string {
 	var script strings.Builder
-	script.WriteString("$ErrorActionPreference='Stop'; & ")
+	script.WriteString("$ErrorActionPreference='Stop'; ")
+	if strings.TrimSpace(workDir) != "" {
+		script.WriteString("Set-Location -LiteralPath ")
+		script.WriteString(powershellSingleQuote(workDir))
+		script.WriteString("; ")
+	}
+	script.WriteString("& ")
 	script.WriteString(powershellSingleQuote(name))
 	for _, arg := range args {
 		script.WriteByte(' ')

@@ -2086,12 +2086,14 @@ func shellQuoteCommand(args []string) string {
 
 func pendingActivationCommand(activatorPath, installRoot string) string {
 	command := "slidex"
+	workDir := ""
 	if strings.TrimSpace(activatorPath) != "" {
 		command = filepath.ToSlash(activatorPath)
+		workDir = filepath.ToSlash(filepath.Dir(filepath.FromSlash(activatorPath)))
 	}
 	args := []string{"update", "activate-pending", "--install-root", filepath.ToSlash(installRoot), "--yes", "--json"}
 	if runtime.GOOS == "windows" {
-		return windowsPowerShellCommand(command, args...)
+		return windowsPowerShellCommandInDir(workDir, command, args...)
 	}
 	return shellQuoteCommand(append([]string{command}, args...))
 }
@@ -2241,6 +2243,10 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 		_ = os.RemoveAll(activatorRoot)
 		return "", err
 	}
+	if err := stagePendingActivatorSupportFiles(candidateRoot, activatorRoot); err != nil {
+		_ = os.RemoveAll(activatorRoot)
+		return "", err
+	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(destination, 0o755); err != nil {
 			return "", err
@@ -2251,6 +2257,28 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 		return "", err
 	}
 	return destination, nil
+}
+
+func stagePendingActivatorSupportFiles(candidateRoot, activatorRoot string) error {
+	source := filepath.Join(candidateRoot, "schemas")
+	destination := filepath.Join(activatorRoot, "schemas")
+	if err := copyLocalCandidateTreeWithBudget(source, destination, defaultUpdateArchiveExtractionBudget()); err != nil {
+		return fmt.Errorf("stage pending activator schemas: %w", err)
+	}
+	for _, schemaFile := range []string{installMetadataSchemaFile, updateStateSchemaFile, pendingUpdateSchemaFile} {
+		path := filepath.Join(destination, schemaFile)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("pending activator schema is unavailable: %s: %w", filepath.ToSlash(path), err)
+		}
+		if isSymlinkOrReparsePoint(path, info) {
+			return fmt.Errorf("pending activator schema must not be a symlink or reparse point: %s", filepath.ToSlash(path))
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("pending activator schema must be a regular file: %s", filepath.ToSlash(path))
+		}
+	}
+	return nil
 }
 
 func pendingUpdatePath(installRoot string) string {

@@ -2430,6 +2430,12 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 			t.Fatalf("decoded windows command missing %q:\n%s", want, windowsScript)
 		}
 	}
+	windowsCommandWithDir := windowsPowerShellCommandInDir(`C:\Safe Root`, `C:\Tools\slidex.exe`, "version")
+	windowsScriptWithDir := decodeWindowsPowerShellCommandForTest(t, windowsCommandWithDir)
+	wantWindowsScriptWithDir := "Set-Location -LiteralPath 'C:\\Safe Root'; & 'C:\\Tools\\slidex.exe' 'version'"
+	if !strings.Contains(windowsScriptWithDir, wantWindowsScriptWithDir) {
+		t.Fatalf("decoded windows command should set working directory before invocation:\n%s", windowsScriptWithDir)
+	}
 	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
 	if !strings.Contains(prompt, "Do not run render, QA, package") {
 		t.Fatalf("prompt must keep skill smoke scoped: %s", prompt)

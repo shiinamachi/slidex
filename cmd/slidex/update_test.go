@@ -2416,6 +2416,11 @@ func TestStagePendingActivatorUsesUniqueSiblingRoots(t *testing.T) {
 	if err := validatePendingActivatorPath(installRoot, first, "0.2.0"); err != nil {
 		t.Fatalf("staged activator should validate: %v", err)
 	}
+	for _, schemaFile := range []string{installMetadataSchemaFile, updateStateSchemaFile, pendingUpdateSchemaFile} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(first), "schemas", schemaFile)); err != nil {
+			t.Fatalf("staged activator should include schema %s: %v", schemaFile, err)
+		}
+	}
 }
 
 func TestPendingUpdateIgnoresSerializedActivationCommand(t *testing.T) {
@@ -3416,7 +3421,33 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 			t.Fatal(err)
 		}
 	}
+	copySchemaFixturesForTest(t, root)
 	writeCandidateBinaryForTest(t, filepath.Join(root, binary), baseVersion)
+}
+
+func copySchemaFixturesForTest(t *testing.T, root string) {
+	t.Helper()
+	sourceRoot := repoRelativePath("schemas")
+	entries, err := os.ReadDir(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationRoot := filepath.Join(root, "schemas")
+	if err := os.MkdirAll(destinationRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(sourceRoot, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(destinationRoot, entry.Name()), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func writeCandidateBinaryForTest(t *testing.T, path, version string) {

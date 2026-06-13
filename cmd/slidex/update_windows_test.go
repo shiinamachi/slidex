@@ -60,8 +60,14 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	if !strings.HasSuffix(filepath.FromSlash(pending.ActivatorPath), "slidex.exe") {
 		t.Fatalf("windows activator should be an exe, got %s", pending.ActivatorPath)
 	}
+	activatorRoot := filepath.Dir(filepath.FromSlash(pending.ActivatorPath))
 	if pathWithin(installRoot, filepath.FromSlash(pending.ActivatorPath)) || pathWithin(filepath.FromSlash(pending.StagedRoot), filepath.FromSlash(pending.ActivatorPath)) {
 		t.Fatalf("activator should be outside active and staged roots, got %s", pending.ActivatorPath)
+	}
+	for _, schemaFile := range []string{installMetadataSchemaFile, updateStateSchemaFile, pendingUpdateSchemaFile} {
+		if _, err := os.Stat(filepath.Join(activatorRoot, "schemas", schemaFile)); err != nil {
+			t.Fatalf("pending activator should stage schema %s: %v", schemaFile, err)
+		}
 	}
 
 	status, err = currentUpdateStatus(installRoot, installMetadataPath(installRoot))
@@ -75,6 +81,10 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 		t.Fatalf("pending activation command should use encoded PowerShell: %s", status.PendingActivationCommand)
 	}
 	script := decodeWindowsPowerShellCommandForTest(t, status.PendingActivationCommand)
+	location := "Set-Location -LiteralPath " + powershellSingleQuote(filepath.ToSlash(activatorRoot)) + "; & "
+	if !strings.Contains(script, location) {
+		t.Fatalf("pending activation command should run from activator root before invocation:\n%s", script)
+	}
 	if !strings.Contains(script, "& "+powershellSingleQuote(filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath)))) {
 		t.Fatalf("pending activation command should invoke activator with PowerShell call operator:\n%s", script)
 	}
