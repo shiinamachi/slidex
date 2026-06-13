@@ -2787,8 +2787,14 @@ func stopWorkbench(workspace, deckID, deck string) (workbenchManifest, error) {
 	}
 	defer unlock()
 	manifest := workbenchStatusForDeck(deckAbs)
-	if manifest.PID > 0 && manifest.Status == "running" {
-		stopWorkbenchProcess(manifest)
+	stoppedOrGone := manifest.PID <= 0 || !processAlive(manifest.PID)
+	if manifest.PID > 0 && workbenchManifestHasTrustedControl(manifest) {
+		stoppedOrGone = stopWorkbenchProcess(manifest)
+	}
+	if !stoppedOrGone {
+		manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		_ = writeWorkbenchManifest(deckAbs, manifest)
+		return manifest, fmt.Errorf("workbench process %d could not be stopped safely", manifest.PID)
 	}
 	removeWorkbenchControl(deckAbs)
 	manifest.Status = "stopped"
@@ -2887,34 +2893,42 @@ func staleWorkbenchLockSnapshot(lockPath string) (lockFileSnapshot, bool) {
 	return snapshot, time.Since(snapshot.info.ModTime()) > staleAfter
 }
 
-func stopWorkbenchProcess(manifest workbenchManifest) {
+func stopWorkbenchProcess(manifest workbenchManifest) bool {
 	if manifest.PID <= 0 {
-		return
+		return true
 	}
 	if !workbenchManifestHasTrustedControl(manifest) {
-		return
+		return !processAlive(manifest.PID)
 	}
 	if requestWorkbenchShutdown(manifest) {
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
 			if !isWorkbenchReady(manifest) {
-				return
+				return true
 			}
 			time.Sleep(80 * time.Millisecond)
 		}
 	}
 	if !workbenchProcessMatchesManifest(manifest) {
-		return
+		return !processAlive(manifest.PID)
 	}
 	signalWorkbenchProcessFn(manifest.PID)
 	deadline := time.Now().Add(1200 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if !isWorkbenchReady(manifest) {
-			return
+			return true
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
 	killWorkbenchProcessFn(manifest.PID)
+	deadline = time.Now().Add(1200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !isWorkbenchReady(manifest) {
+			return true
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	return !isWorkbenchReady(manifest)
 }
 
 func requestWorkbenchShutdown(manifest workbenchManifest) bool {

@@ -74,7 +74,7 @@ func reclaimStaleLockFile(path string, maxBytes int64, staleSnapshot func(string
 
 func acquireLockReclaimGuard(lockPath string) (func(), bool) {
 	guardPath := lockPath + ".reclaim"
-	if err := rejectSecureWriteTarget(guardPath); err != nil {
+	if err := rejectSecureInPlaceWriteTarget(guardPath); err != nil {
 		return nil, false
 	}
 	f, err := os.OpenFile(guardPath, os.O_CREATE|os.O_RDWR, 0o600)
@@ -92,6 +92,15 @@ func acquireLockReclaimGuard(lockPath string) (func(), bool) {
 	}
 	pathInfo, err := os.Lstat(guardPath)
 	if err != nil || isSymlinkOrReparsePoint(guardPath, pathInfo) || !os.SameFile(fileInfo, pathInfo) {
+		_ = f.Close()
+		return nil, false
+	}
+	if !fileInfo.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, false
+	}
+	links, ok, err := secureFileLinkCount(guardPath, fileInfo)
+	if err != nil || (ok && links > 1) {
 		_ = f.Close()
 		return nil, false
 	}

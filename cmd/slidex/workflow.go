@@ -4222,12 +4222,17 @@ func serveMCPStdioWithLimit(in io.Reader, out io.Writer, maxBytes int64) error {
 			continue
 		}
 		method, _ := req["method"].(string)
-		result, err := handleMCPRequest(req)
-		if err != nil {
-			_ = writeMCPError(enc, req["id"], -32000, method, err.Error())
+		id, hasID := req["id"]
+		if !hasID {
+			handleMCPNotification(req)
 			continue
 		}
-		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": result})
+		result, err := handleMCPRequest(req)
+		if err != nil {
+			_ = writeMCPError(enc, id, -32000, method, err.Error())
+			continue
+		}
+		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 	}
 }
 
@@ -4281,6 +4286,12 @@ func writeMCPError(enc *json.Encoder, id any, code int, method, message string) 
 		errObj["method"] = method
 	}
 	return enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": errObj})
+}
+
+func handleMCPNotification(req map[string]any) {
+	// JSON-RPC notifications deliberately have no response. MCP sends
+	// notifications/initialized after initialize; unknown notifications are also
+	// ignored to keep stdout a valid response stream.
 }
 
 func handleMCPRequest(req map[string]any) (any, error) {

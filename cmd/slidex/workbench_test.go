@@ -2786,6 +2786,35 @@ func TestMCPStdioOversizedRequestReturnsErrorAndContinues(t *testing.T) {
 	}
 }
 
+func TestMCPStdioIgnoresNotifications(t *testing.T) {
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize"}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	if err := serveMCPStdio(strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stdio response lines = %d, want 2: %q", len(lines), out.String())
+	}
+	for i, line := range lines {
+		var resp map[string]any
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			t.Fatal(err)
+		}
+		wantID := float64(i + 1)
+		if resp["id"] != wantID {
+			t.Fatalf("response %d id = %#v, want %v", i, resp["id"], wantID)
+		}
+		if resp["id"] == nil {
+			t.Fatalf("response %d should not have null id: %#v", i, resp)
+		}
+	}
+}
+
 func TestMCPRenderToolSchemaExposesChromeOptions(t *testing.T) {
 	result, err := handleMCPRequest(map[string]any{"method": "tools/list"})
 	if err != nil {
@@ -3166,6 +3195,40 @@ func TestWorkbenchStatusMarksUnreadyManifestStaleAndStopRecordsStopped(t *testin
 	}
 }
 
+func TestStopWorkbenchKeepsControlWhenLiveProcessCannotBeVerified(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "token", 1, os.Getpid(), "running")
+	if err := writeWorkbenchManifest(deck, manifest); err != nil {
+		t.Fatal(err)
+	}
+	control := newWorkbenchControl(manifest, "shutdown-token", "ready-token")
+	if err := writeWorkbenchControl(deck, control); err != nil {
+		t.Fatal(err)
+	}
+
+	stopped, err := stopWorkbench(workspace, "demo", "")
+	if err == nil {
+		t.Fatalf("expected stop to refuse unverifiable live process, got manifest %#v", stopped)
+	}
+	if !strings.Contains(err.Error(), "could not be stopped safely") {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+	if _, ok := readWorkbenchControl(deck); !ok {
+		t.Fatal("trusted control should remain when live process could not be verified/stopped")
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing after failed stop")
+	}
+	if recorded.Status == "stopped" {
+		t.Fatalf("failed stop should not record stopped manifest: %#v", recorded)
+	}
+}
+
 func TestWorkbenchStatusAndStopNormalizeCorruptManifestPaths(t *testing.T) {
 	workspace := t.TempDir()
 	deck := filepath.Join(workspace, "decks", "demo")
@@ -3417,5 +3480,35 @@ func TestWorkbenchStaleLockReclaimSerializesUnlink(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("first reclaimer did not finish")
+	}
+}
+
+func TestWorkbenchStaleLockReclaimRejectsHardlinkedGuard(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(outDir, workbenchLockName)
+	if err := os.WriteFile(lockPath, []byte("schema=old pid=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkOrSkip(t, outside, lockPath+".reclaim")
+
+	if reclaimStaleLockFile(lockPath, maxDeckLogBytes, staleWorkbenchLockSnapshot) {
+		t.Fatal("stale reclaim should reject hardlinked reclaim guard")
+	}
+	if got := readFileOrEmpty(outside); got != "outside\n" {
+		t.Fatalf("outside hardlinked file was modified: %q", got)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock should remain after rejected hardlinked guard: %v", err)
 	}
 }
