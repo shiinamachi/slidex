@@ -206,16 +206,19 @@ slidex workbench start --deck-id customer-retention
 ```
 
 Open the returned `http://127.0.0.1:<port>/workbench/<session>` URL in the
-Codex App browser. Plugin startup emits a Browser-first `browserOpen` intent:
-Codex should use the Browser plugin / `@Browser` when available, with URL click
-or manual navigation as fallback. New deck creation through the plugin must
-display this local Workbench first; do not fall back to `slidex init`, manual
-directory creation, or direct `out/final_deck.html` authoring. The CLI embeds
-the default `decks/_template`, so installed binaries can bootstrap the
-workbench even when the active workspace has no template folder. For production
-or canary release installs, startup automatically checks and applies a newer
-verified release before opening the Workbench; if an update is applied, it returns
-a restart or pending-activation instruction instead of opening the Workbench.
+Codex App browser. Packaged plugin startup defaults to
+`SLIDEX_BROWSER_OPEN=agent`, so it returns an `agentBrowserInstruction` telling
+Codex to use the Browser plugin / `@Browser` and suppresses the legacy
+structured `browserOpen` intent. URL click, manual navigation, or explicit
+structured browser-open mode are fallbacks for environments that cannot use
+`@Browser`. New deck creation through the plugin must display this local
+Workbench first; do not fall back to `slidex init`, manual directory creation,
+or direct `out/final_deck.html` authoring. The CLI embeds the default
+`decks/_template`, so installed binaries can bootstrap the workbench even when
+the active workspace has no template folder. For production or canary release
+installs, startup automatically checks and applies a newer verified release
+before opening the Workbench; if an update is applied, it returns a restart or
+pending-activation instruction instead of opening the Workbench.
 Selecting `Complete & generate` writes `brief.md` and workbench artifacts to
 the deck's `out/` directory, then starts `slidex run --deck decks/<deck_id>
 --non-interactive` in the background.

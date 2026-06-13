@@ -202,15 +202,16 @@ slidex workbench start --deck-id customer-retention
 ```
 
 반환된 `http://127.0.0.1:<port>/workbench/<session>` URL을 Codex App 브라우저에서
-엽니다. Plugin startup은 Browser-first `browserOpen` intent를 내보내므로 Codex는
-가능하면 Browser plugin / `@Browser`로 이동하고, 불가능하면 URL 클릭 또는 수동
-navigation으로 폴백합니다. Plugin을 통한 새 deck 생성은 반드시 이 local Workbench를
-먼저 표시해야 하며, `slidex init`, 수동 디렉터리 생성, `out/final_deck.html` 직접
-작성으로 폴백하지 않습니다. CLI는 기본 `decks/_template`을 바이너리에 내장하므로
-사용자 workspace에 템플릿 폴더가 없어도 workbench를 bootstrap할 수 있습니다.
-production 또는 canary release 설치본에서는 startup이 새 verified release를 자동
-확인/적용한 뒤 Workbench를 엽니다. 업데이트가 적용되면 Workbench 대신 재시작 또는
-pending activation 안내를 반환합니다. Workbench에서 `Complete & generate`를 선택하면 `brief.md`,
+엽니다. 패키지된 plugin startup은 기본적으로 `SLIDEX_BROWSER_OPEN=agent`를 설정하므로
+legacy structured `browserOpen` intent를 내보내지 않고, Codex가 Browser plugin /
+`@Browser`를 사용하도록 `agentBrowserInstruction`을 반환합니다. `@Browser`를 사용할 수
+없는 환경에서는 URL 클릭, 수동 navigation, 또는 명시적인 structured browser-open mode로
+폴백합니다. Plugin을 통한 새 deck 생성은 반드시 이 local Workbench를 먼저 표시해야 하며,
+`slidex init`, 수동 디렉터리 생성, `out/final_deck.html` 직접 작성으로 폴백하지 않습니다.
+CLI는 기본 `decks/_template`을 바이너리에 내장하므로 사용자 workspace에 템플릿 폴더가 없어도
+workbench를 bootstrap할 수 있습니다. production 또는 canary release 설치본에서는 startup이 새
+verified release를 자동 확인/적용한 뒤 Workbench를 엽니다. 업데이트가 적용되면 Workbench 대신
+재시작 또는 pending activation 안내를 반환합니다. Workbench에서 `Complete & generate`를 선택하면 `brief.md`,
 `out/workbench_draft.json`, `out/workbench_manifest.json`이 저장되고
 `slidex run --deck decks/<deck_id> --non-interactive`가 백그라운드로 시작됩니다.
 생성 상태와 로그 경로는 `out/workbench_manifest.json`에 기록됩니다.
