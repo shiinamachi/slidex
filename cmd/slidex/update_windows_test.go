@@ -87,6 +87,13 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	if !strings.Contains(status.PendingActivationCommand, location) {
 		t.Fatalf("pending activation command should move the caller session to activator root before invocation:\n%s", status.PendingActivationCommand)
 	}
+	restore := "} finally { Set-Location -LiteralPath " + powershellSingleQuote(filepath.ToSlash(installRoot)) + " }"
+	if !strings.Contains(status.PendingActivationCommand, restore) {
+		t.Fatalf("pending activation command should restore caller session to install root after invocation:\n%s", status.PendingActivationCommand)
+	}
+	if !strings.Contains(status.PendingActivationCommand, "$slidexActivationExitCode") || strings.Contains(status.PendingActivationCommand, "exit $LASTEXITCODE") {
+		t.Fatalf("pending activation command should preserve failures without exiting the caller shell:\n%s", status.PendingActivationCommand)
+	}
 	if !strings.Contains(status.PendingActivationCommand, "& "+powershellSingleQuote(filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath)))) {
 		t.Fatalf("pending activation command should invoke activator with PowerShell call operator:\n%s", status.PendingActivationCommand)
 	}
@@ -96,7 +103,9 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	if _, err := exec.LookPath("powershell.exe"); err != nil {
 		t.Skipf("powershell.exe unavailable: %v", err)
 	}
-	run := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", status.PendingActivationCommand)
+	callerCwdSentinel := filepath.Join(parent, "caller-cwd.txt")
+	runScript := status.PendingActivationCommand + "; [System.IO.File]::WriteAllText(" + powershellSingleQuote(filepath.ToSlash(callerCwdSentinel)) + ", (Get-Location).ProviderPath)"
+	run := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", runScript)
 	run.Dir = filepath.Join(installRoot, ".slidex")
 	if out, err := run.CombinedOutput(); err != nil {
 		t.Fatalf("pending activation command should launch activator from install-root child cwd: %v\n%s", err, out)
@@ -104,5 +113,9 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	gotCwd := strings.TrimSpace(readFileOrEmpty(activatorCwdSentinel))
 	if !sameFilesystemPath(gotCwd, activatorRoot) {
 		t.Fatalf("activator cwd = %s, want %s", gotCwd, activatorRoot)
+	}
+	gotCallerCwd := strings.TrimSpace(readFileOrEmpty(callerCwdSentinel))
+	if !sameFilesystemPath(gotCallerCwd, installRoot) {
+		t.Fatalf("caller PowerShell cwd after activation command = %s, want %s", gotCallerCwd, installRoot)
 	}
 }

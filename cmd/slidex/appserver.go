@@ -1377,17 +1377,25 @@ func windowsPowerShellInlineCommandInDir(workDir, name string, args ...string) s
 	var script strings.Builder
 	script.WriteString("$ErrorActionPreference='Stop'; ")
 	if strings.TrimSpace(workDir) != "" {
-		script.WriteString("Set-Location -LiteralPath ")
-		script.WriteString(powershellSingleQuote(workDir))
+		writeWindowsPowerShellSetLocation(&script, workDir)
 		script.WriteString("; ")
 	}
+	writeWindowsPowerShellInvocation(&script, name, args...)
+	return script.String()
+}
+
+func writeWindowsPowerShellSetLocation(script *strings.Builder, workDir string) {
+	script.WriteString("Set-Location -LiteralPath ")
+	script.WriteString(powershellSingleQuote(workDir))
+}
+
+func writeWindowsPowerShellInvocation(script *strings.Builder, name string, args ...string) {
 	script.WriteString("& ")
 	script.WriteString(powershellSingleQuote(name))
 	for _, arg := range args {
 		script.WriteByte(' ')
 		script.WriteString(powershellSingleQuote(arg))
 	}
-	return script.String()
 }
 
 func powershellSingleQuote(s string) string {

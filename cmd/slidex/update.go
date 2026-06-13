@@ -2093,9 +2093,25 @@ func pendingActivationCommand(activatorPath, installRoot string) string {
 	}
 	args := []string{"update", "activate-pending", "--install-root", filepath.ToSlash(installRoot), "--yes", "--json"}
 	if runtime.GOOS == "windows" {
-		return windowsPowerShellInlineCommandInDir(workDir, command, args...)
+		if workDir != "" {
+			return windowsPendingActivationPowerShellCommand(workDir, filepath.ToSlash(installRoot), command, args...)
+		}
+		return windowsPowerShellInlineCommandInDir("", command, args...)
 	}
 	return shellQuoteCommand(append([]string{command}, args...))
+}
+
+func windowsPendingActivationPowerShellCommand(activatorRoot, installRoot, name string, args ...string) string {
+	var script strings.Builder
+	script.WriteString("$ErrorActionPreference='Stop'; $slidexActivationExitCode = 0; try { ")
+	writeWindowsPowerShellSetLocation(&script, activatorRoot)
+	script.WriteString("; ")
+	writeWindowsPowerShellInvocation(&script, name, args...)
+	script.WriteString("; $slidexActivationExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }")
+	script.WriteString(" } finally { ")
+	writeWindowsPowerShellSetLocation(&script, installRoot)
+	script.WriteString(" }; if ($slidexActivationExitCode -ne 0) { throw ('slidex pending activation failed with exit code ' + $slidexActivationExitCode) }")
+	return script.String()
 }
 
 func truncateForJSON(value string, limit int) string {

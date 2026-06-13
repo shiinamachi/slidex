@@ -2444,6 +2444,21 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if strings.Contains(windowsInlineCommandWithDir, "powershell.exe") || strings.Contains(windowsInlineCommandWithDir, "-EncodedCommand") {
 		t.Fatalf("inline windows command should not spawn a child PowerShell: %s", windowsInlineCommandWithDir)
 	}
+	pendingInlineCommand := windowsPendingActivationPowerShellCommand(`C:\Activator Root`, `C:\Install Root`, `C:\Activator Root\slidex.exe`, "update", "activate-pending")
+	for _, want := range []string{
+		"$ErrorActionPreference='Stop'",
+		"$slidexActivationExitCode = 0",
+		"try { Set-Location -LiteralPath 'C:\\Activator Root'; & 'C:\\Activator Root\\slidex.exe' 'update' 'activate-pending'",
+		"} finally { Set-Location -LiteralPath 'C:\\Install Root' }",
+		"throw ('slidex pending activation failed with exit code ' + $slidexActivationExitCode)",
+	} {
+		if !strings.Contains(pendingInlineCommand, want) {
+			t.Fatalf("pending inline windows command missing %q:\n%s", want, pendingInlineCommand)
+		}
+	}
+	if strings.Contains(pendingInlineCommand, "powershell.exe") || strings.Contains(pendingInlineCommand, "exit $LASTEXITCODE") {
+		t.Fatalf("pending inline windows command should not spawn or exit caller shell: %s", pendingInlineCommand)
+	}
 	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
 	if !strings.Contains(prompt, "Do not run render, QA, package") {
 		t.Fatalf("prompt must keep skill smoke scoped: %s", prompt)
