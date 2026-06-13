@@ -298,6 +298,8 @@ exit 13
 	t.Setenv("GITHUB_TOKEN", "ghp-test")
 	t.Setenv("SLIDEX_TEST_SECRET", "secret")
 	t.Setenv("AWS_ACCESS_KEY_ID", "access")
+	t.Setenv("SSH_AUTH_SOCK", filepath.Join(root, "agent.sock"))
+	t.Setenv("SSH_AGENT_PID", "12345")
 	t.Setenv("SAFE_VALUE", "keep")
 
 	err := startManagedAppServer("ws://127.0.0.1:1/app", "", webSocketAuthConfig{}, false)
@@ -309,7 +311,7 @@ exit 13
 		t.Fatal(readErr)
 	}
 	joined := "\n" + string(raw)
-	for _, forbidden := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET", "AWS_ACCESS_KEY_ID"} {
+	for _, forbidden := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET", "AWS_ACCESS_KEY_ID", "SSH_AUTH_SOCK", "SSH_AGENT_PID"} {
 		if strings.Contains(joined, "\n"+forbidden+"=") {
 			t.Fatalf("managed app-server child retained %s in env:\n%s", forbidden, raw)
 		}

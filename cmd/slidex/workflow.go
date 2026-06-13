@@ -6267,7 +6267,7 @@ func sensitiveSubprocessEnvName(name string) bool {
 		return false
 	}
 	switch name {
-	case "OPENAI_API_KEY", "CODEX_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS":
+	case "OPENAI_API_KEY", "CODEX_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS", "SSH_AUTH_SOCK", "SSH_AGENT_PID":
 		return true
 	}
 	for _, fragment := range []string{

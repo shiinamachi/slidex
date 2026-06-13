@@ -6741,11 +6741,13 @@ func TestSanitizedCodexChildEnvDropsSensitiveAmbientValues(t *testing.T) {
 		"GITHUB_TOKEN=ghp-test",
 		"SLIDEX_TEST_SECRET=secret",
 		"AWS_ACCESS_KEY_ID=access",
+		"SSH_AUTH_SOCK=/tmp/agent.sock",
+		"SSH_AGENT_PID=12345",
 		"SAFE_VALUE=keep",
 	}
 	sanitized := sanitizedCodexChildEnv(env)
 	joined := "\n" + strings.Join(sanitized, "\n") + "\n"
-	for _, forbidden := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET", "AWS_ACCESS_KEY_ID"} {
+	for _, forbidden := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "SLIDEX_TEST_SECRET", "AWS_ACCESS_KEY_ID", "SSH_AUTH_SOCK", "SSH_AGENT_PID"} {
 		if strings.Contains(joined, "\n"+forbidden+"=") {
 			t.Fatalf("sanitized env retained %s in %q", forbidden, joined)
 		}
@@ -6753,6 +6755,19 @@ func TestSanitizedCodexChildEnvDropsSensitiveAmbientValues(t *testing.T) {
 	for _, want := range []string{"PATH=/bin", "HOME=/home/slidex", "SAFE_VALUE=keep"} {
 		if !strings.Contains(joined, "\n"+want+"\n") {
 			t.Fatalf("sanitized env dropped %s: %q", want, joined)
+		}
+	}
+}
+
+func TestSensitiveSubprocessEnvNameDropsCredentialDelegation(t *testing.T) {
+	for _, name := range []string{"SSH_AUTH_SOCK", "ssh_agent_pid", " OPENAI_API_KEY ", "AWS_ACCESS_KEY_ID"} {
+		if !sensitiveSubprocessEnvName(name) {
+			t.Fatalf("expected %q to be sensitive", name)
+		}
+	}
+	for _, name := range []string{"PATH", "HOME", "SAFE_VALUE"} {
+		if sensitiveSubprocessEnvName(name) {
+			t.Fatalf("expected %q to be retained", name)
 		}
 	}
 }
