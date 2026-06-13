@@ -1602,7 +1602,7 @@ func TestUpdateStaleInstallLockReclaimDoesNotDeleteReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snapshot, stale := staleUpdateInstallLockSnapshot(lockPath)
+	_, stale := staleUpdateInstallLockSnapshot(lockPath)
 	if !stale {
 		t.Fatal("expected stale update install lock")
 	}
@@ -1618,7 +1618,7 @@ func TestUpdateStaleInstallLockReclaimDoesNotDeleteReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if removeLockFileIfUnchanged(lockPath, snapshot, maxUpdateMetadataBytes) {
+	if reclaimStaleLockFile(lockPath, maxUpdateMetadataBytes, staleUpdateInstallLockSnapshot) {
 		t.Fatal("stale reclaim removed a replacement update lock")
 	}
 	got, err := os.ReadFile(lockPath)
@@ -1674,6 +1674,73 @@ func TestUpdateInstallLockPathCanonicalizesSymlinkedRoot(t *testing.T) {
 	}
 	if aliasLock != realLock {
 		t.Fatalf("lock path did not canonicalize symlink alias:\nreal:  %s\nalias: %s", realLock, aliasLock)
+	}
+}
+
+func TestCurrentUpdateStatusCanonicalizesSymlinkedInstallRoot(t *testing.T) {
+	parent := t.TempDir()
+	realRoot := filepath.Join(parent, "real", "slidex")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := releaseInstallMetadataForTest(t, toolVersion)
+	meta.InstallRoot = filepath.ToSlash(realRoot)
+	writeInstallMetadataForTest(t, installMetadataPath(realRoot), meta)
+
+	aliasRoot := filepath.Join(parent, "alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	status, err := currentUpdateStatus(aliasRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.InstallRoot != filepath.ToSlash(realRoot) {
+		t.Fatalf("status used non-canonical install root: got %s want %s", status.InstallRoot, filepath.ToSlash(realRoot))
+	}
+	if status.MetadataPath != filepath.ToSlash(installMetadataPath(realRoot)) {
+		t.Fatalf("status used non-canonical metadata path: got %s want %s", status.MetadataPath, filepath.ToSlash(installMetadataPath(realRoot)))
+	}
+}
+
+func TestRunUpdateApplyCanonicalizesSymlinkedInstallRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
+	parent := t.TempDir()
+	realRoot := filepath.Join(parent, "real", "slidex")
+	if err := os.MkdirAll(filepath.Join(realRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := releaseInstallMetadataForTest(t, toolVersion)
+	meta.InstallRoot = filepath.ToSlash(realRoot)
+	writeInstallMetadataForTest(t, installMetadataPath(realRoot), meta)
+
+	aliasRoot := filepath.Join(parent, "alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	if err := runUpdateApply([]string{"--install-root", aliasRoot, "--candidate", candidate, "--target-version", "0.2.0", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(realRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("apply used non-canonical install root, VERSION = %q", got)
+	}
+	status, err := currentUpdateStatus(aliasRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.InstallRoot != filepath.ToSlash(realRoot) {
+		t.Fatalf("post-apply status used non-canonical install root: got %s want %s", status.InstallRoot, filepath.ToSlash(realRoot))
+	}
+	if status.InstalledMetadata == nil || status.InstalledMetadata.InstallRoot != filepath.ToSlash(realRoot) {
+		t.Fatalf("post-apply metadata used non-canonical install root: %#v", status.InstalledMetadata)
 	}
 }
 

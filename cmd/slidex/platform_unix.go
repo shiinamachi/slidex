@@ -110,6 +110,14 @@ func processAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
+func tryLockReclaimGuardFile(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
+func unlockReclaimGuardFile(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+}
+
 func currentOwnerID() any {
 	return os.Getuid()
 }

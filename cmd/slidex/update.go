@@ -291,40 +291,54 @@ func resolveUpdateMetadataPath(installRoot, metadataPathArg string) string {
 }
 
 func acquireUpdateInstallLock(installRoot string) (func(), error) {
+	_, unlock, err := acquireCanonicalUpdateInstallLock(installRoot)
+	return unlock, err
+}
+
+func lockResolvedUpdateInstallRoot(installRoot string) (string, func(), error) {
+	resolvedRoot := resolveUpdateInstallRoot(installRoot)
+	canonicalRoot, unlock, err := acquireCanonicalUpdateInstallLock(resolvedRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	return canonicalRoot, unlock, nil
+}
+
+func acquireCanonicalUpdateInstallLock(installRoot string) (string, func(), error) {
 	canonicalRoot, err := canonicalUpdateInstallRoot(installRoot)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	lockPath, err := updateInstallLockPathForCanonicalRoot(canonicalRoot)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	deadline := time.Now().Add(updateInstallLockWaitTimeout)
 	for {
 		if err := rejectSecureWriteTarget(lockPath); err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			if err := applyPlatformFileMode(lockPath, 0o600); err != nil {
 				_ = f.Close()
 				_ = os.Remove(lockPath)
-				return nil, err
+				return "", nil, err
 			}
 			_, _ = fmt.Fprintf(f, "schema=%s pid=%d nonce=%s installRoot=%s acquired=%s\n", updateInstallLockSchema, os.Getpid(), newLockNonce(), filepath.ToSlash(canonicalRoot), time.Now().UTC().Format(time.RFC3339))
-			return func() {
+			return canonicalRoot, func() {
 				releaseLockFile(lockPath, f)
 			}, nil
 		}
 		if !os.IsExist(err) {
-			return nil, err
+			return "", nil, err
 		}
-		if snapshot, stale := staleUpdateInstallLockSnapshot(lockPath); stale && removeLockFileIfUnchanged(lockPath, snapshot, maxUpdateMetadataBytes) {
+		if reclaimStaleLockFile(lockPath, maxUpdateMetadataBytes, staleUpdateInstallLockSnapshot) {
 			continue
 		}
 		now := time.Now()
 		if updateInstallLockWaitTimeout <= 0 || !deadline.After(now) {
-			return nil, fmt.Errorf("update install lock %s is still held after %s", filepath.ToSlash(lockPath), updateInstallLockWaitTimeout)
+			return "", nil, fmt.Errorf("update install lock %s is still held after %s", filepath.ToSlash(lockPath), updateInstallLockWaitTimeout)
 		}
 		sleepFor := updateInstallLockRetryDelay
 		if sleepFor <= 0 {
@@ -399,11 +413,11 @@ func runUpdateStatus(args []string) error {
 	if fs.NArg() != 0 {
 		return exitCodeError(2, "usage: slidex update status [--json] [--metadata FILE] [--install-root DIR]")
 	}
-	*installRoot = resolveUpdateInstallRoot(*installRoot)
-	unlock, err := acquireUpdateInstallLock(*installRoot)
+	lockedRoot, unlock, err := lockResolvedUpdateInstallRoot(*installRoot)
 	if err != nil {
 		return err
 	}
+	*installRoot = lockedRoot
 	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -428,11 +442,11 @@ func runUpdateCheck(args []string) error {
 	if fs.NArg() != 0 {
 		return exitCodeError(2, "usage: slidex update check [--json] [--metadata FILE] [--install-root DIR] [--api-url URL]")
 	}
-	*installRoot = resolveUpdateInstallRoot(*installRoot)
-	unlock, err := acquireUpdateInstallLock(*installRoot)
+	lockedRoot, unlock, err := lockResolvedUpdateInstallRoot(*installRoot)
 	if err != nil {
 		return err
 	}
+	*installRoot = lockedRoot
 	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -496,11 +510,11 @@ func runUpdateApply(args []string) error {
 	if *candidate != "" && *archive != "" {
 		return exitCodeError(2, "provide only one of --candidate or --archive")
 	}
-	*installRoot = resolveUpdateInstallRoot(*installRoot)
-	unlock, err := acquireUpdateInstallLock(*installRoot)
+	lockedRoot, unlock, err := lockResolvedUpdateInstallRoot(*installRoot)
 	if err != nil {
 		return err
 	}
+	*installRoot = lockedRoot
 	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -600,11 +614,11 @@ func runUpdateVerify(args []string) error {
 	if fs.NArg() != 0 {
 		return exitCodeError(2, "usage: slidex update verify [--json] [--metadata FILE] [--install-root DIR] [--candidate DIR --target-version VERSION [--execute-candidate-checks]]")
 	}
-	*installRoot = resolveUpdateInstallRoot(*installRoot)
-	unlock, err := acquireUpdateInstallLock(*installRoot)
+	lockedRoot, unlock, err := lockResolvedUpdateInstallRoot(*installRoot)
 	if err != nil {
 		return err
 	}
+	*installRoot = lockedRoot
 	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -662,11 +676,11 @@ func runUpdateActivatePending(args []string) error {
 	if !*yes {
 		return exitCodeError(2, "slidex update activate-pending requires --yes before replacing the install root")
 	}
-	*installRoot = resolveUpdateInstallRoot(*installRoot)
-	unlock, err := acquireUpdateInstallLock(*installRoot)
+	lockedRoot, unlock, err := lockResolvedUpdateInstallRoot(*installRoot)
 	if err != nil {
 		return err
 	}
+	*installRoot = lockedRoot
 	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
@@ -739,6 +753,11 @@ func updateVerificationFindings(status updateStatus) []qaFinding {
 
 func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, error) {
 	installRoot := resolveUpdateInstallRoot(installRootArg)
+	canonicalRoot, err := canonicalUpdateInstallRoot(installRoot)
+	if err != nil {
+		return updateStatus{}, err
+	}
+	installRoot = canonicalRoot
 	metadataPath := resolveUpdateMetadataPath(installRoot, metadataPathArg)
 
 	metadata, metadataErr := readInstallMetadata(metadataPath)

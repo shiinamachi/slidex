@@ -245,6 +245,16 @@ func processAlive(pid int) bool {
 	return err == nil && status == windowsWaitTimeout
 }
 
+func tryLockReclaimGuardFile(f *os.File) error {
+	var overlapped windows.Overlapped
+	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped)
+}
+
+func unlockReclaimGuardFile(f *os.File) error {
+	var overlapped windows.Overlapped
+	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &overlapped)
+}
+
 func currentOwnerID() any {
 	for _, name := range []string{"USERNAME", "USER"} {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {

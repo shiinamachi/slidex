@@ -3215,7 +3215,7 @@ func TestWorkbenchStaleLockReclaimDoesNotDeleteReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snapshot, stale := staleWorkbenchLockSnapshot(lockPath)
+	_, stale := staleWorkbenchLockSnapshot(lockPath)
 	if !stale {
 		t.Fatal("expected stale workbench lock")
 	}
@@ -3227,7 +3227,7 @@ func TestWorkbenchStaleLockReclaimDoesNotDeleteReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if removeLockFileIfUnchanged(lockPath, snapshot, maxDeckLogBytes) {
+	if reclaimStaleLockFile(lockPath, maxDeckLogBytes, staleWorkbenchLockSnapshot) {
 		t.Fatal("stale reclaim removed a replacement workbench lock")
 	}
 	got, err := os.ReadFile(lockPath)
@@ -3236,5 +3236,62 @@ func TestWorkbenchStaleLockReclaimDoesNotDeleteReplacement(t *testing.T) {
 	}
 	if string(got) != replacement {
 		t.Fatalf("replacement lock changed:\n%s", string(got))
+	}
+}
+
+func TestWorkbenchStaleLockReclaimSerializesUnlink(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "decks", "demo", "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(outDir, workbenchLockName)
+	if err := os.WriteFile(lockPath, []byte("schema=old pid=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	oldHook := lockFileBeforeRemoveHook
+	lockFileBeforeRemoveHook = func(path string) {
+		if path != lockPath {
+			return
+		}
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	t.Cleanup(func() {
+		lockFileBeforeRemoveHook = oldHook
+	})
+
+	reclaimed := make(chan bool, 1)
+	go func() {
+		reclaimed <- reclaimStaleLockFile(lockPath, maxDeckLogBytes, staleWorkbenchLockSnapshot)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reclaimer did not reach guarded unlink")
+	}
+	if reclaimStaleLockFile(lockPath, maxDeckLogBytes, staleWorkbenchLockSnapshot) {
+		t.Fatal("second reclaimer should not reclaim while guard is held")
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock disappeared while first reclaimer held guard: %v", err)
+	}
+	close(release)
+	select {
+	case ok := <-reclaimed:
+		if !ok {
+			t.Fatal("first reclaimer did not remove stale lock")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reclaimer did not finish")
 	}
 }
