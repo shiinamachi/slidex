@@ -691,6 +691,99 @@ func TestWorkbenchCompleteReusesRunningGenerationWithoutSavingInput(t *testing.T
 	waitForWorkbenchGenerationStatus(t, deck, "completed", 3*time.Second)
 }
 
+func TestWorkbenchSaveRejectsRunningGeneration(t *testing.T) {
+	oldCommand := newWorkbenchGenerationCommand
+	var starts int32
+	newWorkbenchGenerationCommand = func(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
+		atomic.AddInt32(&starts, 1)
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=800ms")
+		return cmd, []string{"slidex-test-generation", deckAbs}, nil
+	}
+	defer func() { newWorkbenchGenerationCommand = oldCommand }()
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+
+	first := postWorkbenchCompleteForTest(t, server, token, "First generation title")
+	if first["status"] != "generation_started" {
+		t.Fatalf("first complete response = %#v", first)
+	}
+	rec := postWorkbenchSaveForTest(t, server, token, "Conflicting saved title")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("save during generation status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	draftRec := postWorkbenchDraftForTest(t, server, token, "Conflicting draft title")
+	if draftRec.Code != http.StatusConflict {
+		t.Fatalf("draft during generation status = %d body=%s", draftRec.Code, draftRec.Body.String())
+	}
+	if atomic.LoadInt32(&starts) != 1 {
+		t.Fatalf("save conflict should not start another generation, starts=%d", starts)
+	}
+	brief := readFileOrEmpty(filepath.Join(deck, "brief.md"))
+	if !strings.Contains(brief, "First generation title") {
+		t.Fatalf("brief should retain generation input:\n%s", brief)
+	}
+	if strings.Contains(brief, "Conflicting saved title") {
+		t.Fatalf("save during generation should not overwrite brief:\n%s", brief)
+	}
+	draft, ok := readWorkbenchDraft(deck)
+	if !ok {
+		t.Fatal("draft missing after generation start")
+	}
+	if draft.Input.Title != "First generation title" {
+		t.Fatalf("draft during generation should not overwrite input: %#v", draft.Input)
+	}
+	waitForWorkbenchGenerationStatus(t, deck, "completed", 3*time.Second)
+}
+
+func TestWorkbenchStaleGenerationFinalizerDoesNotOverwriteCurrentGeneration(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: manifest}
+
+	startedA := manifest
+	startedA.Status = "generating"
+	startedA.GenerationID = "generation-a"
+	startedA.GenerationStatus = "running"
+	startedA.GenerationStartedAt = "2026-06-14T01:00:00Z"
+	startedA.GenerationPID = 111
+	currentB := startedA
+	currentB.GenerationID = "generation-b"
+	currentB.GenerationStartedAt = "2026-06-14T01:01:00Z"
+	currentB.GenerationPID = 222
+	currentB.Notes = []string{"new generation is still running"}
+	if err := writeWorkbenchManifest(deck, currentB); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stale, err := server.recordWorkbenchGenerationExit(startedA, "2026-06-14T01:02:00Z", 0, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale {
+		t.Fatal("expected stale generation finalizer to be ignored")
+	}
+	recorded, ok := readWorkbenchManifest(deck)
+	if !ok {
+		t.Fatal("manifest missing")
+	}
+	if recorded.GenerationID != "generation-b" || recorded.GenerationStatus != "running" || recorded.GenerationPID != 222 || recorded.GenerationEndedAt != "" {
+		t.Fatalf("stale finalizer overwrote current generation: %#v", recorded)
+	}
+	if len(recorded.Notes) != 1 || recorded.Notes[0] != "new generation is still running" {
+		t.Fatalf("stale finalizer lost current manifest notes: %#v", recorded)
+	}
+}
+
 func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	oldCommand := newWorkbenchGenerationCommand
 	oldTimeout := workbenchGenerationTimeout
@@ -883,6 +976,56 @@ func postWorkbenchCompleteForTest(t *testing.T, server *workbenchHTTPServer, tok
 		t.Fatal(err)
 	}
 	return response
+}
+
+func postWorkbenchSaveForTest(t *testing.T, server *workbenchHTTPServer, token, title string) *httptest.ResponseRecorder {
+	t.Helper()
+	input := workbenchSaveInput{
+		InitialRequest:     "Create an investor update deck for the Q3 pilot decision.",
+		Title:              title,
+		Audience:           "Executive investment committee",
+		DecisionGoal:       "Approve whether to fund the Q3 pilot.",
+		SourceNotes:        "Use only the confirmed customer interviews and budget notes supplied by the user.",
+		KeyMessages:        "Pilot scope, budget ask, implementation risk, and decision timeline.",
+		RequiredClaims:     "Do not claim ROI, certifications, or customer counts unless sourced.",
+		Constraints:        "Avoid unsupported security claims and keep confidential names out.",
+		OutputExpectations: "HTML and PDF deck suitable for executive review.",
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/save", bytes.NewReader(raw))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleSave(rec, req)
+	return rec
+}
+
+func postWorkbenchDraftForTest(t *testing.T, server *workbenchHTTPServer, token, title string) *httptest.ResponseRecorder {
+	t.Helper()
+	input := workbenchSaveInput{
+		InitialRequest:     "Create an investor update deck for the Q3 pilot decision.",
+		Title:              title,
+		Audience:           "Executive investment committee",
+		DecisionGoal:       "Approve whether to fund the Q3 pilot.",
+		SourceNotes:        "Use only the confirmed customer interviews and budget notes supplied by the user.",
+		KeyMessages:        "Pilot scope, budget ask, implementation risk, and decision timeline.",
+		RequiredClaims:     "Do not claim ROI, certifications, or customer counts unless sourced.",
+		Constraints:        "Avoid unsupported security claims and keep confidential names out.",
+		OutputExpectations: "HTML and PDF deck suitable for executive review.",
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/draft", bytes.NewReader(raw))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleDraft(rec, req)
+	return rec
 }
 
 func waitForWorkbenchGenerationStatus(t *testing.T, deck, want string, timeout time.Duration) workbenchManifest {

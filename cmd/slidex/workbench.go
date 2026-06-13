@@ -124,6 +124,7 @@ type workbenchManifest struct {
 	DraftSavedAt        string            `json:"draftSavedAt,omitempty"`
 	DraftPath           string            `json:"draftPath,omitempty"`
 	SavedFieldLengths   map[string]int    `json:"savedFieldLengths,omitempty"`
+	GenerationID        string            `json:"generationId,omitempty"`
 	GenerationStatus    string            `json:"generationStatus,omitempty"`
 	GenerationStartedAt string            `json:"generationStartedAt,omitempty"`
 	GenerationEndedAt   string            `json:"generationEndedAt,omitempty"`
@@ -1825,22 +1826,15 @@ func (s *workbenchHTTPServer) handleDraft(w http.ResponseWriter, r *http.Request
 			http.Error(w, "draft is empty", http.StatusBadRequest)
 			return
 		}
-		draft, err := writeWorkbenchDraft(s.deckAbs, input, "draft")
+		draft, manifest, err := s.saveWorkbenchDraftIfIdle(input, manifestSnapshot)
 		if err != nil {
+			if errors.Is(err, errWorkbenchGenerationRunning) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		manifest, err := updateWorkbenchManifest(s.deckAbs, manifestSnapshot, func(manifest *workbenchManifest) {
-			manifest.Status = "draft"
-			manifest.DraftSavedAt = draft.UpdatedAt
-			manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
-			manifest.UpdatedAt = draft.UpdatedAt
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.setManifest(manifest)
 		_ = writeJSONResponse(w, map[string]any{"status": "draft_saved", "draft": draft, "manifest": publicWorkbenchStatus(manifest)})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1871,8 +1865,12 @@ func (s *workbenchHTTPServer) handleSave(w http.ResponseWriter, r *http.Request)
 		writeWorkbenchJSONDecodeError(w, err)
 		return
 	}
-	manifest, err := s.saveWorkbenchInput(input, "saved", "")
+	manifest, err := s.saveWorkbenchInputIfIdle(input, "saved", "")
 	if err != nil {
+		if errors.Is(err, errWorkbenchGenerationRunning) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1947,6 +1945,52 @@ func (s *workbenchHTTPServer) saveWorkbenchInput(input workbenchSaveInput, statu
 	}
 	s.setManifest(manifest)
 	return manifest, nil
+}
+
+var errWorkbenchGenerationRunning = errors.New("workbench generation is already running")
+
+func (s *workbenchHTTPServer) saveWorkbenchInputIfIdle(input workbenchSaveInput, status, wizardCompletedAt string) (workbenchManifest, error) {
+	s.generationMu.Lock()
+	defer s.generationMu.Unlock()
+
+	manifest := s.currentManifest()
+	if current, ok := readWorkbenchManifest(s.deckAbs); ok {
+		manifest = current
+		s.setManifest(manifest)
+	}
+	if workbenchGenerationRunning(manifest) {
+		return manifest, errWorkbenchGenerationRunning
+	}
+	return s.saveWorkbenchInput(input, status, wizardCompletedAt)
+}
+
+func (s *workbenchHTTPServer) saveWorkbenchDraftIfIdle(input workbenchSaveInput, fallback workbenchManifest) (workbenchDraft, workbenchManifest, error) {
+	s.generationMu.Lock()
+	defer s.generationMu.Unlock()
+
+	manifest := fallback
+	if current, ok := readWorkbenchManifest(s.deckAbs); ok {
+		manifest = current
+		s.setManifest(manifest)
+	}
+	if workbenchGenerationRunning(manifest) {
+		return workbenchDraft{}, manifest, errWorkbenchGenerationRunning
+	}
+	draft, err := writeWorkbenchDraft(s.deckAbs, input, "draft")
+	if err != nil {
+		return workbenchDraft{}, workbenchManifest{}, err
+	}
+	manifest, err = updateWorkbenchManifest(s.deckAbs, manifest, func(manifest *workbenchManifest) {
+		manifest.Status = "draft"
+		manifest.DraftSavedAt = draft.UpdatedAt
+		manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
+		manifest.UpdatedAt = draft.UpdatedAt
+	})
+	if err != nil {
+		return workbenchDraft{}, workbenchManifest{}, err
+	}
+	s.setManifest(manifest)
+	return draft, manifest, nil
 }
 
 func validateWorkbenchCompletionInput(input workbenchSaveInput) error {
@@ -2025,7 +2069,7 @@ func (s *workbenchHTTPServer) completeWorkbenchInputAndStartGeneration(input wor
 		manifest = current
 		s.setManifest(manifest)
 	}
-	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
+	if workbenchGenerationRunning(manifest) {
 		return manifest, true, nil
 	}
 	manifest, err := s.saveWorkbenchInput(input, "saved", wizardCompletedAt)
@@ -2033,6 +2077,10 @@ func (s *workbenchHTTPServer) completeWorkbenchInputAndStartGeneration(input wor
 		return workbenchManifest{}, false, err
 	}
 	return s.startGenerationLocked(manifest)
+}
+
+func workbenchGenerationRunning(manifest workbenchManifest) bool {
+	return manifest.GenerationStatus == "running" && manifest.GenerationPID > 0 && processAlive(manifest.GenerationPID)
 }
 
 type boundedWorkbenchLogWriter struct {
@@ -2114,7 +2162,7 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 }
 
 func (s *workbenchHTTPServer) startGenerationLocked(manifest workbenchManifest) (workbenchManifest, bool, error) {
-	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
+	if workbenchGenerationRunning(manifest) {
 		return manifest, true, nil
 	}
 	logPath := filepath.Join(s.deckAbs, "out", workbenchGenerationLogName)
@@ -2140,8 +2188,10 @@ func (s *workbenchHTTPServer) startGenerationLocked(manifest workbenchManifest) 
 		return manifest, false, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	generationID := newLockNonce()
 	manifest, err = updateWorkbenchManifest(s.deckAbs, manifest, func(manifest *workbenchManifest) {
 		manifest.Status = "generating"
+		manifest.GenerationID = generationID
 		manifest.GenerationStatus = "running"
 		manifest.GenerationStartedAt = now
 		manifest.GenerationEndedAt = ""
@@ -2253,16 +2303,28 @@ func (s *workbenchHTTPServer) waitForGeneration(ctx context.Context, cancel cont
 	cancel()
 	_ = logFile.Close()
 	endedAt := time.Now().UTC().Format(time.RFC3339)
+	manifest, staleGeneration, writeErr := s.recordWorkbenchGenerationExit(started, endedAt, generationExitCode(cmd), timedOut, err)
+	if writeErr == nil && !staleGeneration {
+		s.setManifest(manifest)
+	}
+}
+
+func (s *workbenchHTTPServer) recordWorkbenchGenerationExit(started workbenchManifest, endedAt string, exitCode int, timedOut bool, runErr error) (workbenchManifest, bool, error) {
+	staleGeneration := false
 	manifest, writeErr := updateWorkbenchManifest(s.deckAbs, started, func(manifest *workbenchManifest) {
+		if !sameWorkbenchGeneration(*manifest, started) {
+			staleGeneration = true
+			return
+		}
 		manifest.GenerationEndedAt = endedAt
 		manifest.UpdatedAt = endedAt
-		manifest.GenerationExitCode = generationExitCode(cmd)
+		manifest.GenerationExitCode = exitCode
 		switch {
 		case timedOut:
 			manifest.Status = "generation_failed"
 			manifest.GenerationStatus = "timeout"
 			manifest.Notes = append(manifest.Notes, fmt.Sprintf("Workbench generation exceeded %s and was terminated.", workbenchGenerationTimeout))
-		case err == nil:
+		case runErr == nil:
 			manifest.Status = "generated"
 			manifest.GenerationStatus = "completed"
 		default:
@@ -2270,9 +2332,14 @@ func (s *workbenchHTTPServer) waitForGeneration(ctx context.Context, cancel cont
 			manifest.GenerationStatus = "failed"
 		}
 	})
-	if writeErr == nil {
-		s.setManifest(manifest)
-	}
+	return manifest, staleGeneration, writeErr
+}
+
+func sameWorkbenchGeneration(current, started workbenchManifest) bool {
+	return current.GenerationID != "" &&
+		current.GenerationID == started.GenerationID &&
+		current.GenerationPID == started.GenerationPID &&
+		current.GenerationStartedAt == started.GenerationStartedAt
 }
 
 func generationExitCode(cmd *exec.Cmd) int {
@@ -3794,6 +3861,7 @@ func publicWorkbenchStatusWithBrowserOpenMode(manifest workbenchManifest, mode w
 		"browserOpenStrategy": manifest.BrowserOpenStrategy,
 		"manifest":            filepath.ToSlash(filepath.Join(manifest.OutDir, workbenchManifestName)),
 		"wizardCompletedAt":   manifest.WizardCompletedAt,
+		"generationId":        manifest.GenerationID,
 		"generationStatus":    manifest.GenerationStatus,
 		"generationStartedAt": manifest.GenerationStartedAt,
 		"generationEndedAt":   manifest.GenerationEndedAt,
