@@ -2849,13 +2849,23 @@ func validateInstallMetadataSchema(metadata *installMetadata) error {
 	return validatePayloadAgainstBundledSchema(*metadata, installMetadataSchemaFile)
 }
 
-func defaultInstallRoot() string {
+var resolveExecutableInstallRoot = executableInstallRoot
+
+func executableInstallRoot() (string, error) {
 	exe, err := os.Executable()
-	if err == nil {
-		if real, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = real
-		}
-		return filepath.Dir(exe)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	return filepath.Dir(exe), nil
+}
+
+func defaultInstallRoot() string {
+	root, err := executableInstallRoot()
+	if err == nil && root != "" {
+		return root
 	}
 	return mustAbs(".")
 }
@@ -2869,29 +2879,55 @@ func updateStatePath(installRoot string) string {
 }
 
 func bundledSchemaPath(schemaName string) string {
+	path, err := bundledSchemaPathStrict(schemaName)
+	if err == nil {
+		return path
+	}
+	return missingBundledSchemaPath(schemaName)
+}
+
+func bundledSchemaPathStrict(schemaName string) (string, error) {
 	rel := filepath.Join("schemas", filepath.FromSlash(schemaName))
-	installCandidate := ""
-	if installRoot := defaultInstallRoot(); installRoot != "" {
-		installCandidate = filepath.Join(installRoot, rel)
+	var firstErr error
+	if installRoot, err := resolveExecutableInstallRoot(); err == nil && installRoot != "" {
+		installCandidate := filepath.Join(installRoot, rel)
 		if _, err := os.Stat(installCandidate); err == nil {
-			return installCandidate
+			return installCandidate, nil
+		} else if firstErr == nil {
+			firstErr = err
 		}
+	} else if err != nil {
+		firstErr = err
 	}
-	if candidate := sourceRelativePath(rel); candidate != "" {
-		return candidate
+	if candidate := resolveSourceRelativePath(rel); candidate != "" {
+		return candidate, nil
 	}
-	if installCandidate != "" {
-		return installCandidate
+	return "", trustedSchemaResolutionError(schemaName, firstErr)
+}
+
+func missingBundledSchemaPath(schemaName string) string {
+	rel := filepath.Join("schemas", filepath.FromSlash(schemaName))
+	root := string(filepath.Separator)
+	if volume := filepath.VolumeName(mustAbs(".")); volume != "" {
+		root = volume + string(filepath.Separator)
 	}
-	return filepath.Join(mustAbs("."), rel)
+	return filepath.Join(root, "__slidex_missing_trusted_builtin_schema__", rel)
 }
 
 func validatePayloadAgainstBundledSchema(payload any, schemaName string) error {
-	return validatePayloadAgainstSchema(payload, bundledSchemaPath(schemaName))
+	schemaPath, err := bundledSchemaPathStrict(schemaName)
+	if err != nil {
+		return err
+	}
+	return validatePayloadAgainstSchema(payload, schemaPath)
 }
 
 func validateRawJSONAgainstBundledSchema(raw []byte, schemaName string) error {
-	return validateRawJSONAgainstSchema(raw, bundledSchemaPath(schemaName))
+	schemaPath, err := bundledSchemaPathStrict(schemaName)
+	if err != nil {
+		return err
+	}
+	return validateRawJSONAgainstSchema(raw, schemaPath)
 }
 
 func readInstallMetadata(path string) (*installMetadata, error) {

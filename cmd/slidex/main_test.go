@@ -1707,6 +1707,57 @@ func TestBuiltInSchemaValidationIgnoresCallerCWD(t *testing.T) {
 	}
 }
 
+func TestBuiltInSchemaResolutionFailsClosedWithoutTrustedRoots(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := t.TempDir()
+	fakeSchemaDir := filepath.Join(temp, "schemas")
+	if err := os.MkdirAll(fakeSchemaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appSchemaPath := filepath.Join(fakeSchemaDir, "app_stage_result.strict.schema.json")
+	fakeSchema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}`)
+	if err := os.WriteFile(appSchemaPath, fakeSchema, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeSchemaDir, "deck_spec.schema.json"), []byte(`{"x_fake_schema":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(temp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	oldExecutableRoot := resolveExecutableInstallRoot
+	oldSourceRelativePath := resolveSourceRelativePath
+	resolveExecutableInstallRoot = func() (string, error) {
+		return "", errors.New("executable lookup failed")
+	}
+	resolveSourceRelativePath = func(string) string {
+		return ""
+	}
+	t.Cleanup(func() {
+		resolveExecutableInstallRoot = oldExecutableRoot
+		resolveSourceRelativePath = oldSourceRelativePath
+	})
+
+	resolved := resolveBuiltInSchemaPath(filepath.Join("schemas", "app_stage_result.strict.schema.json"))
+	if !filepath.IsAbs(resolved) {
+		t.Fatalf("missing built-in schema path should still be absolute, got %q", resolved)
+	}
+	if canonicalPathEqual(resolved, appSchemaPath) {
+		t.Fatalf("built-in schema resolved to caller cwd fake schema: %s", resolved)
+	}
+	if err := validatePayloadAgainstSchema(map[string]any{}, filepath.Join("schemas", "app_stage_result.strict.schema.json")); err == nil || !strings.Contains(err.Error(), "could not be resolved from a trusted install or source root") {
+		t.Fatalf("expected trusted-root resolution error, got %v", err)
+	}
+	if _, err := loadSpecSchema(); err == nil || !strings.Contains(err.Error(), "could not be resolved from a trusted install or source root") {
+		t.Fatalf("expected loadSpecSchema to fail closed, got %v", err)
+	}
+}
+
 func TestLoadSpecSchemaUsesTrustedBuiltInSchemaFromArbitraryCWD(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {

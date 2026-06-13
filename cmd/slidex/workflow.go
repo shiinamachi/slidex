@@ -8402,7 +8402,14 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 }
 
 func validateRawJSONAgainstSchema(instanceRaw []byte, schemaPath string) error {
-	schemaPath = resolveBuiltInSchemaPath(schemaPath)
+	if resolved, ok, err := resolveBuiltInSchemaPathStrict(schemaPath); ok {
+		if err != nil {
+			return err
+		}
+		schemaPath = resolved
+	} else {
+		schemaPath = resolveBuiltInSchemaPath(schemaPath)
+	}
 	schemaRaw, err := readRegularFileWithMaxBytes(schemaPath, maxProjectSchemaBytes)
 	if err != nil {
 		return err

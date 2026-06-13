@@ -1883,7 +1883,10 @@ func runeLen(text string) int {
 }
 
 func loadSpecSchema() (map[string]any, error) {
-	schemaPath := builtinSchemaPath("deck_spec.schema.json")
+	schemaPath, err := builtinSchemaPathStrict("deck_spec.schema.json")
+	if err != nil {
+		return nil, err
+	}
 	raw, err := readRegularFileWithMaxBytes(schemaPath, maxProjectSchemaBytes)
 	if err != nil {
 		return nil, err
