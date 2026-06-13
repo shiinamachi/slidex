@@ -30,7 +30,9 @@
     },
     "version": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-canary\\.[0-9]{14})?$"
     },
     "channel": {
       "type": "string",
@@ -38,7 +40,9 @@
     },
     "tag": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 97,
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-canary\\.[0-9]{14})?$"
     },
     "commit": {
       "type": "string",
@@ -53,7 +57,8 @@
     },
     "releaseAssetName": {
       "type": "string",
-      "pattern": "^slidex_.+_(linux|darwin|windows)_(amd64|arm64)\\.(tar\\.gz|zip)$"
+      "maxLength": 160,
+      "pattern": "^slidex_[0-9]+\\.[0-9]+\\.[0-9]+(-canary\\.[0-9]{14})?_(linux|darwin|windows)_(amd64|arm64)\\.(tar\\.gz|zip)$"
     },
     "installedAt": {
       "type": "string"

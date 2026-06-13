@@ -63,6 +63,7 @@ const (
 	maxUpdateReleasePages           = 20
 	maxUpdateCandidateJSONBytes     = int64(4 << 20)
 	maxUpdateVersionBytes           = int64(64 << 10)
+	maxReleasePackageVersionLength  = 96
 	updateReleaseFetchTimeout       = 30 * time.Second
 	updateAssetDownloadTimeout      = 2 * time.Minute
 	updateHTTPClientTimeout         = 2 * time.Minute
@@ -1322,8 +1323,7 @@ func canonicalUpdateTargetVersion(targetVersion string) (string, error) {
 	if version == "" {
 		return "", errors.New("target version is required")
 	}
-	channel := channelFromPackageVersion(version)
-	if channel != updateChannelProduction && channel != updateChannelCanary {
+	if !isReleasePackageVersion(version) {
 		return "", fmt.Errorf("target version must be a stable or canary package version, got %q", targetVersion)
 	}
 	return version, nil
@@ -2958,7 +2958,7 @@ func releasePackageVersionFromTag(tag string) (string, error) {
 		return "", errors.New("release tag is required")
 	}
 	version := strings.TrimPrefix(tag, "v")
-	if !isReleaseBaseVersion(version) {
+	if !isReleasePackageVersion(version) {
 		return "", fmt.Errorf("release tag %q does not map to a valid slidex package version", tag)
 	}
 	return version, nil
@@ -2989,6 +2989,9 @@ func releaseAssetContractFor(tag, goos, goarch string) (releaseAssetContract, er
 
 func channelFromPackageVersion(version string) string {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if !isReleasePackageVersion(version) {
+		return updateChannelLocalDevelopment
+	}
 	switch {
 	case canaryPackageVersionPattern.MatchString(version):
 		return updateChannelCanary
@@ -2997,6 +3000,21 @@ func channelFromPackageVersion(version string) string {
 	default:
 		return updateChannelLocalDevelopment
 	}
+}
+
+func isReleasePackageVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" || len(version) > maxReleasePackageVersionLength {
+		return false
+	}
+	if strings.HasPrefix(version, "v") {
+		return false
+	}
+	if !stablePackageVersionPattern.MatchString(version) && !canaryPackageVersionPattern.MatchString(version) {
+		return false
+	}
+	_, ok := parseReleaseBaseVersionParts(version)
+	return ok
 }
 
 func releaseBaseVersion(version string) string {
@@ -3158,7 +3176,7 @@ func selectUpdateReleaseForStatus(status updateStatus, releases []updateRelease)
 
 func selectUpdateReleaseForCurrent(channel, currentVersion string, releases []updateRelease) (updateRelease, error) {
 	currentVersion = strings.TrimPrefix(strings.TrimSpace(currentVersion), "v")
-	if channel == updateChannelCanary && canaryPackageVersionPattern.MatchString(currentVersion) {
+	if channel == updateChannelCanary && isReleasePackageVersion(currentVersion) && canaryPackageVersionPattern.MatchString(currentVersion) {
 		return selectCanaryUpdateRelease(currentVersion, releases)
 	}
 	var candidates []updateRelease

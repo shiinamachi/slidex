@@ -25,10 +25,14 @@
     },
     "targetVersion": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-canary\\.[0-9]{14})?$"
     },
     "targetTag": {
-      "type": "string"
+      "type": "string",
+      "maxLength": 97,
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-canary\\.[0-9]{14})?$"
     },
     "installRoot": {
       "type": "string",

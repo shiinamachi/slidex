@@ -48,6 +48,7 @@ func TestReleaseAssetContractStripsTagVFromAssetNames(t *testing.T) {
 }
 
 func TestChannelFromPackageVersionOnlyAcceptsStableAndCanary(t *testing.T) {
+	huge := strings.Repeat("9", 128)
 	tests := []struct {
 		version string
 		want    string
@@ -58,6 +59,8 @@ func TestChannelFromPackageVersionOnlyAcceptsStableAndCanary(t *testing.T) {
 		{"0.1.0-e9c033e", updateChannelLocalDevelopment},
 		{"0.1.0-beta.1", updateChannelLocalDevelopment},
 		{"dev-local", updateChannelLocalDevelopment},
+		{huge + ".0.0", updateChannelLocalDevelopment},
+		{huge + ".0.0-canary.20260610090000", updateChannelLocalDevelopment},
 	}
 	for _, tc := range tests {
 		if got := channelFromPackageVersion(tc.version); got != tc.want {
@@ -549,6 +552,29 @@ func TestCompareReleaseBaseVersionsRejectsHugeComponents(t *testing.T) {
 	}
 }
 
+func TestReleaseVersionTrustBoundariesRejectHugeComponents(t *testing.T) {
+	huge := strings.Repeat("9", 128) + ".0.0"
+	hugeCanary := huge + "-canary.20260610090000"
+	if _, err := canonicalUpdateTargetVersion(huge); err == nil {
+		t.Fatal("canonical target version should reject huge release components")
+	}
+	if _, err := canonicalUpdateTargetVersion(hugeCanary); err == nil {
+		t.Fatal("canonical canary target version should reject huge release components")
+	}
+	if _, err := releasePackageVersionFromTag("v" + huge); err == nil {
+		t.Fatal("release tag parser should reject huge release components")
+	}
+	if _, err := releasePackageVersionFromTag("v" + hugeCanary); err == nil {
+		t.Fatal("canary release tag parser should reject huge release components")
+	}
+	if _, err := canonicalUpdateTargetVersion("vv0.1.0"); err == nil {
+		t.Fatal("canonical target version should reject double-v input")
+	}
+	if _, err := releasePackageVersionFromTag("vv0.1.0"); err == nil {
+		t.Fatal("release tag parser should reject double-v input")
+	}
+}
+
 func TestUpdateDiscoveryIgnoresOverflowingReleaseVersions(t *testing.T) {
 	huge := strings.Repeat("9", 128)
 	releases, err := parseUpdateReleases([]byte(`[
@@ -558,12 +584,44 @@ func TestUpdateDiscoveryIgnoresOverflowingReleaseVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(releases) != 1 {
+		t.Fatalf("overflowing release should be ignored during parse, got %d releases", len(releases))
+	}
 	release, err := selectUpdateReleaseForCurrent(updateChannelProduction, "0.1.0", releases)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if release.Version != "0.3.0" {
 		t.Fatalf("production selected %s", release.Version)
+	}
+}
+
+func TestInstalledReleaseMetadataIssueRejectsOverflowingVersion(t *testing.T) {
+	huge := strings.Repeat("9", 128) + ".0.0"
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	metadata.Version = huge
+	metadata.Channel = updateChannelProduction
+	metadata.Tag = "v" + huge
+	metadata.ReleaseAssetName = fmt.Sprintf("slidex_%s_%s_%s.tar.gz", huge, runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		metadata.ReleaseAssetName = fmt.Sprintf("slidex_%s_%s_%s.zip", huge, runtime.GOOS, runtime.GOARCH)
+	}
+	if issue := installedReleaseMetadataIssue(&metadata); issue == "" || !strings.Contains(issue, "version") {
+		t.Fatalf("expected overflowing install metadata version issue, got %q", issue)
+	}
+}
+
+func TestInstallMetadataSchemaRejectsOverflowingVersion(t *testing.T) {
+	huge := strings.Repeat("9", 128) + ".0.0"
+	metadata := releaseInstallMetadataForTest(t, toolVersion)
+	metadata.Version = huge
+	metadata.Tag = "v" + huge
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRawJSONAgainstBundledSchema(raw, installMetadataSchemaFile); err == nil || !strings.Contains(err.Error(), "validation") {
+		t.Fatalf("install metadata schema should reject overflowing version, got %v", err)
 	}
 }
 
@@ -2686,6 +2744,38 @@ func TestReadPendingUpdateRejectsAdditionalProperties(t *testing.T) {
 	}
 	if !hasStatusBannerForTest(updateStatusBanners(status), "pending_update_invalid") {
 		t.Fatalf("pending-invalid banner missing: %#v", updateStatusBanners(status))
+	}
+}
+
+func TestReadPendingUpdateRejectsOverflowingTargetVersion(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	path := pendingUpdatePath(installRoot)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	huge := strings.Repeat("9", 128) + ".0.0"
+	payload["targetVersion"] = huge
+	payload["targetTag"] = "v" + huge
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readPendingUpdate(installRoot); err == nil || !strings.Contains(err.Error(), "validation") {
+		t.Fatalf("pending update with overflowing targetVersion should fail schema validation, got %v", err)
 	}
 }
 
