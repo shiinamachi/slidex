@@ -591,6 +591,106 @@ func TestWorkbenchCompleteStartsGeneration(t *testing.T) {
 	}
 }
 
+func TestWorkbenchStartGenerationSerializesConcurrentStarts(t *testing.T) {
+	oldCommand := newWorkbenchGenerationCommand
+	var starts int32
+	newWorkbenchGenerationCommand = func(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
+		atomic.AddInt32(&starts, 1)
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=800ms")
+		return cmd, []string{"slidex-test-generation", deckAbs}, nil
+	}
+	defer func() { newWorkbenchGenerationCommand = oldCommand }()
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+
+	type generationResult struct {
+		manifest workbenchManifest
+		reused   bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan generationResult, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			manifest, reused, err := server.startGeneration(manifest)
+			results <- generationResult{manifest: manifest, reused: reused, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var started, reused int
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.reused {
+			reused++
+			continue
+		}
+		started++
+		if result.manifest.GenerationStatus != "running" || result.manifest.GenerationPID <= 0 {
+			t.Fatalf("started generation should be running: %#v", result.manifest)
+		}
+	}
+	if started != 1 || reused != 1 || atomic.LoadInt32(&starts) != 1 {
+		t.Fatalf("generation should start once and reuse once, started=%d reused=%d starts=%d", started, reused, starts)
+	}
+	waitForWorkbenchGenerationStatus(t, deck, "completed", 3*time.Second)
+}
+
+func TestWorkbenchCompleteReusesRunningGenerationWithoutSavingInput(t *testing.T) {
+	oldCommand := newWorkbenchGenerationCommand
+	var starts int32
+	newWorkbenchGenerationCommand = func(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
+		atomic.AddInt32(&starts, 1)
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=800ms")
+		return cmd, []string{"slidex-test-generation", deckAbs}, nil
+	}
+	defer func() { newWorkbenchGenerationCommand = oldCommand }()
+
+	deck := filepath.Join(t.TempDir(), "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token := "complete-token"
+	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", token, 43210, 123, "running")
+	server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: token, manifest: manifest}
+
+	first := postWorkbenchCompleteForTest(t, server, token, "First generation title")
+	if first["status"] != "generation_started" {
+		t.Fatalf("first complete response = %#v", first)
+	}
+	second := postWorkbenchCompleteForTest(t, server, token, "Second conflicting title")
+	if second["status"] != "generation_reused" {
+		t.Fatalf("second complete response = %#v", second)
+	}
+	if atomic.LoadInt32(&starts) != 1 {
+		t.Fatalf("complete should start one generation, starts=%d", starts)
+	}
+	brief := readFileOrEmpty(filepath.Join(deck, "brief.md"))
+	if !strings.Contains(brief, "First generation title") {
+		t.Fatalf("brief should retain first completion input:\n%s", brief)
+	}
+	if strings.Contains(brief, "Second conflicting title") {
+		t.Fatalf("reused completion should not overwrite in-flight generation input:\n%s", brief)
+	}
+	waitForWorkbenchGenerationStatus(t, deck, "completed", 3*time.Second)
+}
+
 func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	oldCommand := newWorkbenchGenerationCommand
 	oldTimeout := workbenchGenerationTimeout
@@ -751,6 +851,54 @@ func TestWorkbenchGenerationHelperProcess(t *testing.T) {
 	}
 	fmt.Println("generation helper complete")
 	os.Exit(0)
+}
+
+func postWorkbenchCompleteForTest(t *testing.T, server *workbenchHTTPServer, token, title string) map[string]any {
+	t.Helper()
+	input := workbenchSaveInput{
+		InitialRequest:     "Create an investor update deck for the Q3 pilot decision.",
+		Title:              title,
+		Audience:           "Executive investment committee",
+		DecisionGoal:       "Approve whether to fund the Q3 pilot.",
+		SourceNotes:        "Use only the confirmed customer interviews and budget notes supplied by the user.",
+		KeyMessages:        "Pilot scope, budget ask, implementation risk, and decision timeline.",
+		RequiredClaims:     "Do not claim ROI, certifications, or customer counts unless sourced.",
+		Constraints:        "Avoid unsupported security claims and keep confidential names out.",
+		OutputExpectations: "HTML and PDF deck suitable for executive review.",
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session-1/api/complete", bytes.NewReader(raw))
+	req.Header.Set("Origin", "http://127.0.0.1:43210")
+	req.Header.Set("X-Slidex-Workbench-Token", token)
+	rec := httptest.NewRecorder()
+	server.handleComplete(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func waitForWorkbenchGenerationStatus(t *testing.T, deck, want string, timeout time.Duration) workbenchManifest {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var manifest workbenchManifest
+	for time.Now().Before(deadline) {
+		manifest, _ = readWorkbenchManifest(deck)
+		if manifest.GenerationStatus == want {
+			return manifest
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	manifest, _ = readWorkbenchManifest(deck)
+	t.Fatalf("generation status = %q, want %q: %#v", manifest.GenerationStatus, want, manifest)
+	return manifest
 }
 
 func waitForFileContent(t *testing.T, path string, timeout time.Duration) string {

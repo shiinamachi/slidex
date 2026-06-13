@@ -1514,6 +1514,7 @@ type workbenchHTTPServer struct {
 	shutdown       func()
 	manifestMu     sync.RWMutex
 	manifest       workbenchManifest
+	generationMu   sync.Mutex
 }
 
 func (s *workbenchHTTPServer) currentManifest() workbenchManifest {
@@ -1907,12 +1908,7 @@ func (s *workbenchHTTPServer) handleComplete(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	manifest, err := s.saveWorkbenchInput(input, "saved", time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	manifest, reused, err := s.startGeneration(manifest)
+	manifest, reused, err := s.completeWorkbenchInputAndStartGeneration(input, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2020,6 +2016,25 @@ func sanitizedWorkbenchChildEnv(env []string) []string {
 	return sanitized
 }
 
+func (s *workbenchHTTPServer) completeWorkbenchInputAndStartGeneration(input workbenchSaveInput, wizardCompletedAt string) (workbenchManifest, bool, error) {
+	s.generationMu.Lock()
+	defer s.generationMu.Unlock()
+
+	manifest := s.currentManifest()
+	if current, ok := readWorkbenchManifest(s.deckAbs); ok {
+		manifest = current
+		s.setManifest(manifest)
+	}
+	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
+		return manifest, true, nil
+	}
+	manifest, err := s.saveWorkbenchInput(input, "saved", wizardCompletedAt)
+	if err != nil {
+		return workbenchManifest{}, false, err
+	}
+	return s.startGenerationLocked(manifest)
+}
+
 type boundedWorkbenchLogWriter struct {
 	mu        sync.Mutex
 	file      *os.File
@@ -2088,6 +2103,17 @@ func (w *boundedWorkbenchLogWriter) Close() error {
 }
 
 func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workbenchManifest, bool, error) {
+	s.generationMu.Lock()
+	defer s.generationMu.Unlock()
+
+	if current, ok := readWorkbenchManifest(s.deckAbs); ok {
+		manifest = current
+		s.setManifest(manifest)
+	}
+	return s.startGenerationLocked(manifest)
+}
+
+func (s *workbenchHTTPServer) startGenerationLocked(manifest workbenchManifest) (workbenchManifest, bool, error) {
 	if manifest.GenerationStatus == "running" && processAlive(manifest.GenerationPID) {
 		return manifest, true, nil
 	}
