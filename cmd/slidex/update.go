@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,6 +39,7 @@ const (
 	updateStateSchemaVersion     = "slidex.updateState.v1"
 	pendingUpdateSchemaVersion   = "slidex.pendingUpdate.v1"
 	updateGitHubReleasesAPI      = "https://api.github.com/repos/shiinamachi/slidex/releases"
+	updateGitHubReleasesPerPage  = 100
 
 	installMetadataSchemaFile   = "slidex_install_metadata.schema.json"
 	updateStateSchemaFile       = "slidex_update_state.schema.json"
@@ -58,6 +60,7 @@ const (
 	maxUpdateArchiveExpandedBytes   = int64(1024 << 20)
 	maxUpdateZipCentralDirBytes     = int64(64 << 20)
 	maxUpdateMetadataBytes          = int64(1 << 20)
+	maxUpdateReleasePages           = 5
 	maxUpdateCandidateJSONBytes     = int64(4 << 20)
 	maxUpdateVersionBytes           = int64(64 << 10)
 	updateReleaseFetchTimeout       = 30 * time.Second
@@ -914,7 +917,23 @@ func defaultUpdateAPIURL() string {
 	if value := strings.TrimSpace(os.Getenv(updateAPIURLEnv)); value != "" {
 		return value
 	}
-	return updateGitHubReleasesAPI
+	return updateAPIURLWithPerPage(updateGitHubReleasesAPI, updateGitHubReleasesPerPage)
+}
+
+func updateAPIURLWithPerPage(rawURL string, perPage int) string {
+	if perPage <= 0 {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	if query.Get("per_page") == "" {
+		query.Set("per_page", strconv.Itoa(perPage))
+		parsed.RawQuery = query.Encode()
+	}
+	return parsed.String()
 }
 
 func automaticUpdatesAllowed() bool {
@@ -2999,26 +3018,66 @@ func releaseBaseVersion(version string) string {
 func fetchUpdateReleases(ctx context.Context, apiURL string) ([]updateRelease, error) {
 	ctx, cancel := contextWithDefaultTimeout(ctx, updateReleaseFetchTimeout)
 	defer cancel()
+	var releases []updateRelease
+	nextURL := strings.TrimSpace(apiURL)
+	if nextURL == "" {
+		return nil, errors.New("update API URL is required")
+	}
+	for page := 0; nextURL != ""; page++ {
+		if page >= maxUpdateReleasePages {
+			return nil, fmt.Errorf("GitHub Releases API pagination exceeded %d pages", maxUpdateReleasePages)
+		}
+		pageReleases, linkHeader, err := fetchUpdateReleasePage(ctx, nextURL)
+		if err != nil {
+			return nil, err
+		}
+		releases = append(releases, pageReleases...)
+		nextURL = nextUpdateReleasePageURL(linkHeader)
+	}
+	return releases, nil
+}
+
+func fetchUpdateReleasePage(ctx context.Context, apiURL string) ([]updateRelease, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "slidex-update/"+toolVersion)
 	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("GitHub Releases API returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return nil, "", fmt.Errorf("GitHub Releases API returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return parseUpdateReleases(raw)
+	releases, err := parseUpdateReleases(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	return releases, resp.Header.Get("Link"), nil
+}
+
+func nextUpdateReleasePageURL(linkHeader string) string {
+	for _, part := range strings.Split(linkHeader, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start < 0 || end <= start+1 {
+			continue
+		}
+		return strings.TrimSpace(part[start+1 : end])
+	}
+	return ""
 }
 
 func contextWithDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

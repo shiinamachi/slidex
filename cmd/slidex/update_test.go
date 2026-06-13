@@ -418,6 +418,48 @@ func TestFetchUpdateReleasesHonorsContextTimeout(t *testing.T) {
 	}
 }
 
+func TestDefaultUpdateAPIURLRequestsLargePage(t *testing.T) {
+	t.Setenv(updateAPIURLEnv, "")
+	got := defaultUpdateAPIURL()
+	if !strings.Contains(got, "per_page=100") {
+		t.Fatalf("default update API URL should request a larger page, got %s", got)
+	}
+}
+
+func TestFetchUpdateReleasesFollowsPagination(t *testing.T) {
+	var requests []string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.String())
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = io.WriteString(w, `[
+			  {"tag_name":"v0.3.0","draft":false,"prerelease":false,"published_at":"2026-03-01T00:00:00Z","assets":[]}
+			]`)
+			return
+		}
+		w.Header().Set("Link", "<"+server.URL+"/releases?per_page=100&page=2>; rel=\"next\"")
+		_, _ = io.WriteString(w, `[
+		  {"tag_name":"v0.4.0-canary.20260610010000","draft":false,"prerelease":true,"published_at":"2026-04-01T00:00:00Z","assets":[]}
+		]`)
+	}))
+	defer server.Close()
+
+	releases, err := fetchUpdateReleases(context.Background(), server.URL+"/releases?per_page=100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("expected two paginated requests, got %d: %#v", len(requests), requests)
+	}
+	release, err := selectUpdateReleaseForCurrent(updateChannelProduction, "0.2.0", releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v0.3.0" {
+		t.Fatalf("production release = %s, want v0.3.0", release.TagName)
+	}
+}
+
 func TestDownloadUpdateAssetHonorsContextTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
