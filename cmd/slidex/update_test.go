@@ -1526,6 +1526,130 @@ func TestActivateStagedInstallRootRollsBackWhenActivationFails(t *testing.T) {
 	}
 }
 
+func TestUpdateInstallLockSerializesAccess(t *testing.T) {
+	oldWait := updateInstallLockWaitTimeout
+	oldRetry := updateInstallLockRetryDelay
+	updateInstallLockWaitTimeout = time.Second
+	updateInstallLockRetryDelay = 5 * time.Millisecond
+	t.Cleanup(func() {
+		updateInstallLockWaitTimeout = oldWait
+		updateInstallLockRetryDelay = oldRetry
+	})
+
+	installRoot := filepath.Join(t.TempDir(), "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := acquireUpdateInstallLock(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired := make(chan error, 1)
+	releaseSecond := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		unlockSecond, err := acquireUpdateInstallLock(installRoot)
+		if err != nil {
+			acquired <- err
+			return
+		}
+		acquired <- nil
+		<-releaseSecond
+		unlockSecond()
+	}()
+	select {
+	case err := <-acquired:
+		unlock()
+		close(releaseSecond)
+		<-secondDone
+		t.Fatalf("second update lock acquired before first release: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-acquired:
+		if err != nil {
+			close(releaseSecond)
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		close(releaseSecond)
+		t.Fatal("second update lock did not acquire after first release")
+	}
+	close(releaseSecond)
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second update lock did not release")
+	}
+}
+
+func TestUpdateInternalStageDirUsesRandomUniqueDirs(t *testing.T) {
+	installRoot := filepath.Join(t.TempDir(), "slidex")
+	first, err := updateInternalStageDir(installRoot, "downloads", "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := updateInternalStageDir(installRoot, "downloads", "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("staging dirs should be unique, both were %s", first)
+	}
+	root := filepath.Join(installRoot, ".slidex", "downloads")
+	for _, dir := range []string{first, second} {
+		if !pathWithin(root, dir) {
+			t.Fatalf("stage dir escaped root: %s", dir)
+		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("stage dir missing: %s stat=%v", dir, err)
+		}
+	}
+}
+
+func TestActivateStagedInstallRootUsesUniqueBackupRoots(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte("0.1.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stagedOne := filepath.Join(parent, "staged-one")
+	if err := os.MkdirAll(stagedOne, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedOne, "VERSION"), []byte("0.2.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backupOne, err := activateStagedInstallRoot(installRoot, stagedOne, "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedTwo := filepath.Join(parent, "staged-two")
+	if err := os.MkdirAll(stagedTwo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedTwo, "VERSION"), []byte("0.3.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backupTwo, err := activateStagedInstallRoot(installRoot, stagedTwo, "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backupOne == backupTwo {
+		t.Fatalf("backup roots should be unique, both were %s", backupOne)
+	}
+	for _, backup := range []string{backupOne, backupTwo} {
+		if info, err := os.Stat(backup); err != nil || !info.IsDir() {
+			t.Fatalf("backup root missing: %s stat=%v", backup, err)
+		}
+	}
+}
+
 func TestRunUpdateApplyDownloadsReleaseAssets(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows uses pending update handoff because the running executable can be locked")

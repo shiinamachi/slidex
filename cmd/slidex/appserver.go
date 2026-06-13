@@ -1511,7 +1511,15 @@ func firstJSONTextByKey(v any, keys ...string) string {
 }
 
 func applyPostRestartPluginVerification(result *appServerPluginSmokeResult) {
-	status, err := currentUpdateStatus("", "")
+	installRoot := resolveUpdateInstallRoot("")
+	unlock, err := acquireUpdateInstallLock(installRoot)
+	if err != nil {
+		result.PluginVerificationStatus = "unknown"
+		result.Checks["pluginVerificationError"] = err.Error()
+		return
+	}
+	defer unlock()
+	status, err := currentUpdateStatus(installRoot, "")
 	if err != nil {
 		result.PluginVerificationStatus = "unknown"
 		result.Checks["pluginVerificationError"] = err.Error()

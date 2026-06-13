@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,6 +49,7 @@ const (
 	updateInstallMetadataEnv = "SLIDEX_INSTALL_METADATA"
 	updateAPIURLEnv          = "SLIDEX_UPDATE_API_URL"
 	updateAutoEnv            = "SLIDEX_AUTO_UPDATE"
+	updateInstallLockSchema  = "slidex.updateLock.v1"
 
 	maxUpdateArchiveCompressedBytes = int64(512 << 20)
 	maxUpdateChecksumBytes          = int64(4 << 20)
@@ -74,10 +76,13 @@ const (
 )
 
 var (
-	stablePackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	canaryPackageVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{14}$`)
-	gitCommitPattern            = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
-	updateHTTPClient            = &http.Client{Timeout: updateHTTPClientTimeout}
+	stablePackageVersionPattern  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	canaryPackageVersionPattern  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{14}$`)
+	gitCommitPattern             = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+	updateHTTPClient             = &http.Client{Timeout: updateHTTPClientTimeout}
+	updateInstallLockWaitTimeout = 30 * time.Second
+	updateInstallLockRetryDelay  = 100 * time.Millisecond
+	updateInstallLockStaleAfter  = 30 * time.Minute
 )
 
 type installMetadata struct {
@@ -236,6 +241,116 @@ func runUpdate(args []string) error {
 	}
 }
 
+func resolveUpdateInstallRoot(installRootArg string) string {
+	installRoot := strings.TrimSpace(installRootArg)
+	if installRoot == "" {
+		installRoot = strings.TrimSpace(os.Getenv(updateInstallRootEnv))
+	}
+	if installRoot == "" {
+		installRoot = defaultInstallRoot()
+	}
+	return filepath.Clean(installRoot)
+}
+
+func resolveUpdateMetadataPath(installRoot, metadataPathArg string) string {
+	metadataPath := strings.TrimSpace(metadataPathArg)
+	if metadataPath == "" {
+		metadataPath = strings.TrimSpace(os.Getenv(updateInstallMetadataEnv))
+	}
+	if metadataPath == "" {
+		metadataPath = installMetadataPath(installRoot)
+	}
+	return metadataPath
+}
+
+func acquireUpdateInstallLock(installRoot string) (func(), error) {
+	lockPath, err := updateInstallLockPath(installRoot)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(updateInstallLockWaitTimeout)
+	for {
+		if err := rejectSecureWriteTarget(lockPath); err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			if err := applyPlatformFileMode(lockPath, 0o600); err != nil {
+				_ = f.Close()
+				_ = os.Remove(lockPath)
+				return nil, err
+			}
+			_, _ = fmt.Fprintf(f, "schema=%s pid=%d installRoot=%s acquired=%s\n", updateInstallLockSchema, os.Getpid(), filepath.ToSlash(filepath.Clean(installRoot)), time.Now().UTC().Format(time.RFC3339))
+			return func() {
+				_ = f.Close()
+				_ = os.Remove(lockPath)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if staleUpdateInstallLock(lockPath) {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		now := time.Now()
+		if updateInstallLockWaitTimeout <= 0 || !deadline.After(now) {
+			return nil, fmt.Errorf("update install lock %s is still held after %s", filepath.ToSlash(lockPath), updateInstallLockWaitTimeout)
+		}
+		sleepFor := updateInstallLockRetryDelay
+		if sleepFor <= 0 {
+			sleepFor = 100 * time.Millisecond
+		}
+		if remaining := deadline.Sub(now); remaining < sleepFor {
+			sleepFor = remaining
+		}
+		time.Sleep(sleepFor)
+	}
+}
+
+func updateInstallLockPath(installRoot string) (string, error) {
+	ownerSum := sha256.Sum256([]byte(fmt.Sprint(currentOwnerID())))
+	lockDir := filepath.Join(os.TempDir(), "slidex-update-locks-"+hex.EncodeToString(ownerSum[:8]))
+	if err := ensureSecureDir(lockDir); err != nil {
+		return "", err
+	}
+	rootSum := sha256.Sum256([]byte(filepath.Clean(installRoot)))
+	return filepath.Join(lockDir, hex.EncodeToString(rootSum[:])+".lock"), nil
+}
+
+func staleUpdateInstallLock(lockPath string) bool {
+	info, err := os.Lstat(lockPath)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	staleAfter := updateInstallLockStaleAfter
+	if staleAfter <= 0 {
+		staleAfter = 30 * time.Minute
+	}
+	raw, err := readRegularFileWithMaxBytes(lockPath, maxUpdateMetadataBytes)
+	if err != nil {
+		return time.Since(info.ModTime()) > staleAfter
+	}
+	fields := map[string]string{}
+	for _, field := range strings.Fields(string(raw)) {
+		name, value, ok := strings.Cut(field, "=")
+		if ok {
+			fields[name] = value
+		}
+	}
+	if fields["schema"] == updateInstallLockSchema {
+		pid, err := strconv.Atoi(fields["pid"])
+		if err != nil || pid <= 0 {
+			return time.Since(info.ModTime()) > staleAfter
+		}
+		return !processAlive(pid)
+	}
+	return time.Since(info.ModTime()) > staleAfter
+}
+
 func runUpdateStatus(args []string) error {
 	fs := flag.NewFlagSet("update status", flag.ContinueOnError)
 	jsonOut := fs.Bool("json", false, "write JSON status")
@@ -247,6 +362,12 @@ func runUpdateStatus(args []string) error {
 	if fs.NArg() != 0 {
 		return exitCodeError(2, "usage: slidex update status [--json] [--metadata FILE] [--install-root DIR]")
 	}
+	*installRoot = resolveUpdateInstallRoot(*installRoot)
+	unlock, err := acquireUpdateInstallLock(*installRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
 		return err
@@ -270,6 +391,12 @@ func runUpdateCheck(args []string) error {
 	if fs.NArg() != 0 {
 		return exitCodeError(2, "usage: slidex update check [--json] [--metadata FILE] [--install-root DIR] [--api-url URL]")
 	}
+	*installRoot = resolveUpdateInstallRoot(*installRoot)
+	unlock, err := acquireUpdateInstallLock(*installRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
 		return err
@@ -332,6 +459,12 @@ func runUpdateApply(args []string) error {
 	if *candidate != "" && *archive != "" {
 		return exitCodeError(2, "provide only one of --candidate or --archive")
 	}
+	*installRoot = resolveUpdateInstallRoot(*installRoot)
+	unlock, err := acquireUpdateInstallLock(*installRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
 		return err
@@ -430,6 +563,12 @@ func runUpdateVerify(args []string) error {
 	if fs.NArg() != 0 {
 		return exitCodeError(2, "usage: slidex update verify [--json] [--metadata FILE] [--install-root DIR] [--candidate DIR --target-version VERSION [--execute-candidate-checks]]")
 	}
+	*installRoot = resolveUpdateInstallRoot(*installRoot)
+	unlock, err := acquireUpdateInstallLock(*installRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
 		return err
@@ -486,6 +625,12 @@ func runUpdateActivatePending(args []string) error {
 	if !*yes {
 		return exitCodeError(2, "slidex update activate-pending requires --yes before replacing the install root")
 	}
+	*installRoot = resolveUpdateInstallRoot(*installRoot)
+	unlock, err := acquireUpdateInstallLock(*installRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	status, err := currentUpdateStatus(*installRoot, *metadataPath)
 	if err != nil {
 		return err
@@ -556,20 +701,8 @@ func updateVerificationFindings(status updateStatus) []qaFinding {
 }
 
 func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, error) {
-	installRoot := installRootArg
-	if installRoot == "" {
-		installRoot = os.Getenv(updateInstallRootEnv)
-	}
-	if installRoot == "" {
-		installRoot = defaultInstallRoot()
-	}
-	metadataPath := metadataPathArg
-	if metadataPath == "" {
-		metadataPath = os.Getenv(updateInstallMetadataEnv)
-	}
-	if metadataPath == "" {
-		metadataPath = installMetadataPath(installRoot)
-	}
+	installRoot := resolveUpdateInstallRoot(installRootArg)
+	metadataPath := resolveUpdateMetadataPath(installRoot, metadataPathArg)
 
 	metadata, metadataErr := readInstallMetadata(metadataPath)
 	channel, mode, reason := inferUpdateChannel(installRoot, metadata, metadataErr)
@@ -1082,8 +1215,15 @@ func updateInternalStageDir(installRoot, kind, targetVersion string) (string, er
 		return "", err
 	}
 	root := filepath.Join(installRoot, ".slidex", kind)
-	stage := filepath.Join(root, versionSegment+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := ensureSecureDir(root); err != nil {
+		return "", err
+	}
+	stage, err := os.MkdirTemp(root, versionSegment+"-")
+	if err != nil {
+		return "", err
+	}
 	if !pathWithin(root, stage) {
+		_ = os.RemoveAll(stage)
 		return "", fmt.Errorf("update staging path escapes %s: %s", filepath.ToSlash(root), filepath.ToSlash(stage))
 	}
 	return stage, nil
@@ -2344,8 +2484,10 @@ func activateStagedInstallRoot(installRoot, stagedRoot, targetVersion string) (b
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
-	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
-	backupRoot = filepath.Join(parent, "."+base+".backup-"+stamp)
+	backupRoot, err = reserveUniqueSiblingPath(parent, "."+base+".backup-"+versionSegment+"-")
+	if err != nil {
+		return backupRoot, err
+	}
 	if err := os.Rename(installRoot, backupRoot); err != nil {
 		return backupRoot, err
 	}
@@ -2357,6 +2499,22 @@ func activateStagedInstallRoot(installRoot, stagedRoot, targetVersion string) (b
 		return backupRoot, err
 	}
 	return backupRoot, nil
+}
+
+func reserveUniqueSiblingPath(parent, pattern string) (string, error) {
+	path, err := os.MkdirTemp(parent, pattern)
+	if err != nil {
+		return "", err
+	}
+	if !sameFilesystemPath(filepath.Dir(path), parent) {
+		_ = os.RemoveAll(path)
+		return "", fmt.Errorf("reserved sibling path escapes install parent: %s", filepath.ToSlash(path))
+	}
+	if err := os.Remove(path); err != nil {
+		_ = os.RemoveAll(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func updateInstallMetadataAfterActivation(installRoot, targetVersion, targetTag, channel string) error {

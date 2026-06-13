@@ -644,7 +644,16 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 		result.Instruction = "Automatic slidex release updates are disabled by " + updateAutoEnv + ". Continue to the local Workbench with the currently installed version."
 		return result
 	}
-	status, err := currentUpdateStatus("", "")
+	installRoot := resolveUpdateInstallRoot("")
+	unlock, err := acquireUpdateInstallLock(installRoot)
+	if err != nil {
+		result.Status = "lock_error"
+		result.Error = err.Error()
+		result.Instruction = "slidex could not acquire the update lock. Continue to the local Workbench with the currently installed version."
+		return result
+	}
+	defer unlock()
+	status, err := currentUpdateStatus(installRoot, "")
 	if err != nil {
 		result.Status = "status_error"
 		result.Error = err.Error()
@@ -721,7 +730,7 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 		return result
 	}
 
-	updatedStatus, statusErr := currentUpdateStatus("", "")
+	updatedStatus, statusErr := currentUpdateStatus(installRoot, "")
 	if statusErr == nil {
 		result = workbenchAutoUpdateFromStatus(updatedStatus, result.Status)
 		result.ApplyResult = &applyResult
