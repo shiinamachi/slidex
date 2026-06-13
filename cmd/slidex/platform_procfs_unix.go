@@ -42,16 +42,11 @@ func managedAppServerProcessMatchesMetadata(pid int, metadata map[string]any) bo
 	if pid <= 0 {
 		return false
 	}
-	expectedExe := resolvedExecutablePath(metadataString(metadata["processExe"]))
-	expectedArgs := metadataStringSlice(metadata["processArgs"])
-	if expectedExe == "" || len(expectedArgs) == 0 {
-		return false
-	}
 	processExe, processArgs, ok := procProcessIdentity(pid)
 	if !ok {
 		return false
 	}
-	return sameFilesystemPath(expectedExe, processExe) && stringSlicesEqual(processArgs, expectedArgs)
+	return managedAppServerProcessIdentityMatchesMetadata(processExe, processArgs, metadata)
 }
 
 func observedManagedAppServerProcessIdentity(pid int, _ *exec.Cmd) (string, []string, bool) {

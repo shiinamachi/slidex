@@ -3145,6 +3145,15 @@ func metadataStringSlice(value any) []string {
 	}
 }
 
+func managedAppServerProcessIdentityMatchesMetadata(processExe string, processArgs []string, metadata map[string]any) bool {
+	expectedExe := resolvedExecutablePath(metadataString(metadata["processExe"]))
+	expectedArgs := metadataStringSlice(metadata["processArgs"])
+	if expectedExe == "" || len(expectedArgs) == 0 || processExe == "" || len(processArgs) == 0 {
+		return false
+	}
+	return sameFilesystemPath(expectedExe, processExe) && stringSlicesEqual(processArgs, expectedArgs)
+}
+
 func stringSlicesEqual(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
