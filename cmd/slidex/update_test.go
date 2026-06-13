@@ -2083,6 +2083,16 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if status.PendingUpdate == nil || status.PendingUpdate.ActivatorPath == "" {
 		t.Fatalf("pending activator not recorded: %#v", status.PendingUpdate)
 	}
+	if status.PendingUpdate.StagedRootManifestSHA256 == "" {
+		t.Fatalf("pending staged root manifest digest not recorded: %#v", status.PendingUpdate)
+	}
+	expectedDigest, err := candidateTreeManifestDigest(stagedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingUpdate.StagedRootManifestSHA256 != expectedDigest {
+		t.Fatalf("pending staged root digest = %s, want %s", status.PendingUpdate.StagedRootManifestSHA256, expectedDigest)
+	}
 	if _, err := os.Stat(filepath.FromSlash(status.PendingUpdate.ActivatorPath)); err != nil {
 		t.Fatalf("pending activator missing: %v", err)
 	}
@@ -2236,6 +2246,105 @@ func TestActivatePendingUpdateAppliesStagedBundle(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, metadata.InstalledAt); err != nil {
 		t.Fatalf("pending activation metadata installedAt must be RFC3339, got %q: %v", metadata.InstalledAt, err)
+	}
+}
+
+func TestActivatePendingUpdateRejectsTamperedStagedBundle(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	stagedRoot, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedRoot, "VERSION"), []byte("0.2.1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending-invalid" {
+		t.Fatalf("tampered pending status should be invalid: %#v", status)
+	}
+
+	result, err := activatePendingUpdate(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "pending-invalid" || !findingCheckPresent(result.CandidateValidation, "update.pending_handoff") {
+		t.Fatalf("tampered staged bundle should be rejected before activation: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("tampered pending activation should not replace active VERSION, got %q", got)
+	}
+}
+
+func TestActivatePendingUpdateRejectsForgedStagedRootOutsideInstallParent(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	forgedRoot := filepath.Join(t.TempDir(), ".slidex.pending-0.2.0-forged")
+	writeCandidateBundleForTest(t, forgedRoot, "0.2.0")
+	forgedDigest, err := candidateTreeManifestDigest(forgedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := pendingUpdatePath(installRoot)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["stagedRoot"] = filepath.ToSlash(forgedRoot)
+	payload["stagedRootManifestSha256"] = forgedDigest
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending-invalid" || !strings.Contains(status.Reason, "install parent") {
+		t.Fatalf("forged staged root should be pending-invalid: %#v", status)
+	}
+	result, err := activatePendingUpdate(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "pending-invalid" || !findingCheckPresent(result.CandidateValidation, "update.pending_handoff") {
+		t.Fatalf("forged staged root should be rejected before activation: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("forged pending activation should not replace active VERSION, got %q", got)
 	}
 }
 

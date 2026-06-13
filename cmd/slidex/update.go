@@ -166,16 +166,17 @@ type updateApplyResult struct {
 }
 
 type pendingUpdate struct {
-	SchemaVersion     string `json:"schemaVersion"`
-	ToolName          string `json:"toolName"`
-	TargetVersion     string `json:"targetVersion"`
-	TargetTag         string `json:"targetTag,omitempty"`
-	InstallRoot       string `json:"installRoot"`
-	StagedRoot        string `json:"stagedRoot"`
-	ActivatorPath     string `json:"activatorPath,omitempty"`
-	ActivationCommand string `json:"activationCommand,omitempty"`
-	Reason            string `json:"reason"`
-	CreatedAt         string `json:"createdAt"`
+	SchemaVersion            string `json:"schemaVersion"`
+	ToolName                 string `json:"toolName"`
+	TargetVersion            string `json:"targetVersion"`
+	TargetTag                string `json:"targetTag,omitempty"`
+	InstallRoot              string `json:"installRoot"`
+	StagedRoot               string `json:"stagedRoot"`
+	StagedRootManifestSHA256 string `json:"stagedRootManifestSha256"`
+	ActivatorPath            string `json:"activatorPath,omitempty"`
+	ActivationCommand        string `json:"activationCommand,omitempty"`
+	Reason                   string `json:"reason"`
+	CreatedAt                string `json:"createdAt"`
 }
 
 type statusBanner struct {
@@ -637,15 +638,24 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		status.Reason = appendReason(status.Reason, "pending update state is invalid and must be repaired before activation: "+pendingErr.Error())
 	}
 	if pending != nil {
-		status.PendingActivation = true
-		status.PendingUpdate = pending
-		status.PendingUpdatePath = filepath.ToSlash(pendingPath)
-		status.Status = "pending-activation"
-		status.TargetVersion = pending.TargetVersion
-		status.TargetTag = pending.TargetTag
-		status.RestartRequired = true
-		status.PluginVerificationStatus = "restart_required"
-		status.PendingActivationCommand = firstNonEmpty(pending.ActivationCommand, pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot))
+		if err := validatePendingUpdate(installRoot, pending); err != nil {
+			status.Status = "pending-invalid"
+			status.PendingUpdatePath = filepath.ToSlash(pendingPath)
+			status.RestartRequired = true
+			status.PluginVerificationStatus = "restart_required"
+			status.NextVerificationCommand = "slidex update activate-pending --yes --json"
+			status.Reason = appendReason(status.Reason, "pending update state is invalid and must be repaired before activation: "+err.Error())
+		} else {
+			status.PendingActivation = true
+			status.PendingUpdate = pending
+			status.PendingUpdatePath = filepath.ToSlash(pendingPath)
+			status.Status = "pending-activation"
+			status.TargetVersion = pending.TargetVersion
+			status.TargetTag = pending.TargetTag
+			status.RestartRequired = true
+			status.PluginVerificationStatus = "restart_required"
+			status.PendingActivationCommand = firstNonEmpty(pending.ActivationCommand, pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot))
+		}
 	}
 	return status, nil
 }
@@ -820,16 +830,17 @@ func doctorUpdateSchemaFindings() []qaFinding {
 		Arch:             runtime.GOARCH,
 	}
 	pending := pendingUpdate{
-		SchemaVersion:     pendingUpdateSchemaVersion,
-		ToolName:          toolName,
-		TargetVersion:     toolVersion,
-		TargetTag:         "v" + toolVersion,
-		InstallRoot:       installRoot,
-		StagedRoot:        filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.staged-"+toolVersion)),
-		ActivatorPath:     filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.activator-"+toolVersion, activatorBinary)),
-		ActivationCommand: "slidex update activate-pending --yes --json",
-		Reason:            "doctor schema contract sample",
-		CreatedAt:         now,
+		SchemaVersion:            pendingUpdateSchemaVersion,
+		ToolName:                 toolName,
+		TargetVersion:            toolVersion,
+		TargetTag:                "v" + toolVersion,
+		InstallRoot:              installRoot,
+		StagedRoot:               filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.staged-"+toolVersion)),
+		StagedRootManifestSHA256: strings.Repeat("a", 64),
+		ActivatorPath:            filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.activator-"+toolVersion, activatorBinary)),
+		ActivationCommand:        "slidex update activate-pending --yes --json",
+		Reason:                   "doctor schema contract sample",
+		CreatedAt:                now,
 	}
 	state := updateState{
 		SchemaVersion:          updateStateSchemaVersion,
@@ -1317,6 +1328,28 @@ func copyLocalCandidateTreeWithBudget(src, dst string, budget *updateArchiveExtr
 		}
 		return copyFileWithMaxBytes(path, target, info.Size())
 	})
+}
+
+func candidateTreeManifestDigest(root string) (string, error) {
+	h := sha256.New()
+	err := walkLocalCandidateTreeWithBudget(root, defaultUpdateArchiveExtractionBudget(), func(path, rel string, info os.FileInfo) error {
+		name := filepath.ToSlash(rel)
+		mode := info.Mode().Perm()
+		if info.IsDir() {
+			_, _ = fmt.Fprintf(h, "dir\t%s\t%04o\n", name, mode)
+			return nil
+		}
+		fileHash, err := sha256FileWithMaxBytes(path, maxUpdateArchiveFileBytes)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(h, "file\t%s\t%04o\t%d\t%s\n", name, mode, info.Size(), fileHash)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func walkLocalCandidateTreeWithBudget(root string, budget *updateArchiveExtractionBudget, visit func(path, rel string, info os.FileInfo) error) error {
@@ -2040,18 +2073,23 @@ func writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, t
 	if err != nil {
 		return "", err
 	}
+	stagedDigest, err := candidateTreeManifestDigest(stagedRoot)
+	if err != nil {
+		return "", err
+	}
 	path := pendingUpdatePath(installRoot)
 	pending := pendingUpdate{
-		SchemaVersion:     pendingUpdateSchemaVersion,
-		ToolName:          toolName,
-		TargetVersion:     canonicalVersion,
-		TargetTag:         canonicalTag,
-		InstallRoot:       filepath.ToSlash(installRoot),
-		StagedRoot:        filepath.ToSlash(stagedRoot),
-		ActivatorPath:     filepath.ToSlash(activatorPath),
-		ActivationCommand: pendingActivationCommand(activatorPath, installRoot),
-		Reason:            "Windows may lock the running slidex executable; activate this staged bundle on next run.",
-		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+		SchemaVersion:            pendingUpdateSchemaVersion,
+		ToolName:                 toolName,
+		TargetVersion:            canonicalVersion,
+		TargetTag:                canonicalTag,
+		InstallRoot:              filepath.ToSlash(installRoot),
+		StagedRoot:               filepath.ToSlash(stagedRoot),
+		StagedRootManifestSHA256: stagedDigest,
+		ActivatorPath:            filepath.ToSlash(activatorPath),
+		ActivationCommand:        pendingActivationCommand(activatorPath, installRoot),
+		Reason:                   "Windows may lock the running slidex executable; activate this staged bundle on next run.",
+		CreatedAt:                time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
@@ -2136,18 +2174,75 @@ func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
 	if strings.TrimSpace(pending.StagedRoot) == "" {
 		return errors.New("pending update stagedRoot is required")
 	}
+	if strings.TrimSpace(pending.StagedRootManifestSHA256) == "" {
+		return errors.New("pending update stagedRootManifestSha256 is required")
+	}
+	if !isSHA256Hex(pending.StagedRootManifestSHA256) {
+		return errors.New("pending update stagedRootManifestSha256 must be a SHA-256 hex digest")
+	}
 	if strings.TrimSpace(pending.ActivatorPath) != "" {
 		if _, err := os.Stat(filepath.FromSlash(pending.ActivatorPath)); err != nil {
 			return fmt.Errorf("pending activator is unavailable: %w", err)
 		}
 	}
-	if pending.InstallRoot != "" && filepath.Clean(filepath.FromSlash(pending.InstallRoot)) != filepath.Clean(installRoot) {
+	if pending.InstallRoot != "" && !sameFilesystemPath(filepath.FromSlash(pending.InstallRoot), installRoot) {
 		return fmt.Errorf("pending update installRoot must be %s, got %s", filepath.ToSlash(installRoot), pending.InstallRoot)
 	}
-	if _, err := os.Stat(filepath.FromSlash(pending.StagedRoot)); err != nil {
+	stagedRoot := filepath.Clean(filepath.FromSlash(pending.StagedRoot))
+	if err := validatePendingStagedRootPath(installRoot, stagedRoot, pending.TargetVersion); err != nil {
+		return err
+	}
+	info, err := os.Lstat(stagedRoot)
+	if err != nil {
 		return fmt.Errorf("pending staged root is unavailable: %w", err)
 	}
+	if isSymlinkOrReparsePoint(stagedRoot, info) {
+		return fmt.Errorf("pending staged root must not be a symlink or reparse point: %s", filepath.ToSlash(stagedRoot))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("pending staged root must be a directory: %s", filepath.ToSlash(stagedRoot))
+	}
+	actualDigest, err := candidateTreeManifestDigest(stagedRoot)
+	if err != nil {
+		return fmt.Errorf("pending staged root validation failed: %w", err)
+	}
+	if !strings.EqualFold(actualDigest, pending.StagedRootManifestSHA256) {
+		return fmt.Errorf("pending staged root manifest digest mismatch: got %s, want %s", actualDigest, pending.StagedRootManifestSHA256)
+	}
 	return nil
+}
+
+func validatePendingStagedRootPath(installRoot, stagedRoot, targetVersion string) error {
+	versionSegment, err := safeUpdateTargetVersionSegment(targetVersion)
+	if err != nil {
+		return err
+	}
+	installRoot = filepath.Clean(installRoot)
+	stagedRoot = filepath.Clean(stagedRoot)
+	parent := filepath.Dir(installRoot)
+	if !sameFilesystemPath(filepath.Dir(stagedRoot), parent) {
+		return fmt.Errorf("pending staged root must be under install parent %s, got %s", filepath.ToSlash(parent), filepath.ToSlash(stagedRoot))
+	}
+	base := filepath.Base(installRoot)
+	prefix := "." + base + ".pending-" + versionSegment + "-"
+	if !strings.HasPrefix(filepath.Base(stagedRoot), prefix) {
+		return fmt.Errorf("pending staged root must use prefix %q, got %s", prefix, filepath.ToSlash(stagedRoot))
+	}
+	return nil
+}
+
+func isSHA256Hex(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion string) (stagedRoot, backupRoot string, err error) {
@@ -2166,12 +2261,17 @@ func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
-	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
-	stagedRoot := filepath.Join(parent, "."+base+"."+kind+"-"+stamp)
 	if err := validateLocalCandidateTree(candidateRoot); err != nil {
-		return stagedRoot, err
+		return "", err
 	}
-	_ = os.RemoveAll(stagedRoot)
+	stagedRoot, err := os.MkdirTemp(parent, "."+base+"."+kind+"-"+versionSegment+"-")
+	if err != nil {
+		return "", err
+	}
+	if !sameFilesystemPath(filepath.Dir(stagedRoot), parent) {
+		_ = os.RemoveAll(stagedRoot)
+		return "", fmt.Errorf("candidate staging path escapes install parent: %s", filepath.ToSlash(stagedRoot))
+	}
 	if err := copyLocalCandidateTreeWithBudget(candidateRoot, stagedRoot, defaultUpdateArchiveExtractionBudget()); err != nil {
 		_ = os.RemoveAll(stagedRoot)
 		return stagedRoot, err

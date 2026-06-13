@@ -265,6 +265,7 @@
         "targetVersion",
         "installRoot",
         "stagedRoot",
+        "stagedRootManifestSha256",
         "reason",
         "createdAt"
       ],
@@ -292,6 +293,10 @@
         "stagedRoot": {
           "type": "string",
           "minLength": 1
+        },
+        "stagedRootManifestSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
         },
         "activatorPath": {
           "type": "string"
