@@ -2100,6 +2100,7 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	configureManagedAppServerCommand(cmd)
+	configureManagedGenerationCancel(cmd)
 	if err := cmd.Start(); err != nil {
 		cancel()
 		_ = logFile.Close()
@@ -2126,6 +2127,32 @@ func (s *workbenchHTTPServer) startGeneration(manifest workbenchManifest) (workb
 	s.setManifest(manifest)
 	go s.waitForGeneration(ctx, cancel, cmd, logFile, manifest)
 	return manifest, false, nil
+}
+
+func configureManagedGenerationCancel(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	priorCancel := cmd.Cancel
+	cmd.Cancel = func() error {
+		killed := false
+		if cmd.Process != nil {
+			killManagedProcess(cmd.Process.Pid)
+			killed = true
+		}
+		if priorCancel != nil {
+			if err := priorCancel(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				return err
+			}
+		}
+		if !killed {
+			return os.ErrProcessDone
+		}
+		return nil
+	}
+	if cmd.WaitDelay == 0 {
+		cmd.WaitDelay = 2 * time.Second
+	}
 }
 
 func (s *workbenchHTTPServer) waitForGeneration(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, logFile io.Closer, started workbenchManifest) {

@@ -594,12 +594,20 @@ func TestWorkbenchCompleteStartsGeneration(t *testing.T) {
 func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	oldCommand := newWorkbenchGenerationCommand
 	oldTimeout := workbenchGenerationTimeout
+	childPIDPath := filepath.Join(t.TempDir(), "generation-child.pid")
+	childExitPath := filepath.Join(t.TempDir(), "generation-child-exited.txt")
 	newWorkbenchGenerationCommand = func(ctx context.Context, deckAbs string) (*exec.Cmd, []string, error) {
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
-		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION=1", "SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=2s")
+		cmd.Env = append(os.Environ(),
+			"SLIDEX_TEST_WORKBENCH_GENERATION=1",
+			"SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP=2s",
+			"SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_PID="+childPIDPath,
+			"SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_EXIT="+childExitPath,
+			"SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_SLEEP=1500ms",
+		)
 		return cmd, []string{"slidex-test-generation", deckAbs}, nil
 	}
-	workbenchGenerationTimeout = 100 * time.Millisecond
+	workbenchGenerationTimeout = 250 * time.Millisecond
 	t.Cleanup(func() {
 		newWorkbenchGenerationCommand = oldCommand
 		workbenchGenerationTimeout = oldTimeout
@@ -620,6 +628,9 @@ func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	if alreadyRunning || started.GenerationStatus != "running" || started.GenerationPID <= 0 {
 		t.Fatalf("generation should start before timing out: %#v already=%v", started, alreadyRunning)
 	}
+	if got := waitForFileContent(t, childPIDPath, 2*time.Second); strings.TrimSpace(got) == "" {
+		t.Fatal("generation child process did not report its pid")
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	recorded := started
 	for time.Now().Before(deadline) {
@@ -635,11 +646,46 @@ func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	if recorded.GenerationExitCode == 0 {
 		t.Fatalf("timeout should not record a successful exit code: %#v", recorded)
 	}
+	time.Sleep(2 * time.Second)
+	if _, err := os.Stat(childExitPath); err == nil {
+		t.Fatal("generation timeout should terminate descendant processes before they exit normally")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 }
 
 func TestWorkbenchGenerationHelperProcess(t *testing.T) {
 	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION") != "1" {
 		return
+	}
+	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_CHILD") == "1" {
+		if path := os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_PID"); path != "" {
+			if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+				panic(err)
+			}
+		}
+		if sleepRaw := os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_SLEEP"); sleepRaw != "" {
+			sleepFor, err := time.ParseDuration(sleepRaw)
+			if err != nil {
+				panic(err)
+			}
+			time.Sleep(sleepFor)
+		}
+		if path := os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_EXIT"); path != "" {
+			if err := os.WriteFile(path, []byte("exited"), 0o600); err != nil {
+				panic(err)
+			}
+		}
+		os.Exit(0)
+	}
+	if os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_CHILD_PID") != "" {
+		cmd := exec.Command(os.Args[0], "-test.run=TestWorkbenchGenerationHelperProcess")
+		cmd.Env = append(os.Environ(), "SLIDEX_TEST_WORKBENCH_GENERATION_CHILD=1")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			panic(err)
+		}
 	}
 	if sleepRaw := os.Getenv("SLIDEX_TEST_WORKBENCH_GENERATION_SLEEP"); sleepRaw != "" {
 		sleepFor, err := time.ParseDuration(sleepRaw)
@@ -650,6 +696,23 @@ func TestWorkbenchGenerationHelperProcess(t *testing.T) {
 	}
 	fmt.Println("generation helper complete")
 	os.Exit(0)
+}
+
+func waitForFileContent(t *testing.T, path string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			return string(raw)
+		}
+		if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	raw, _ := os.ReadFile(path)
+	return string(raw)
 }
 
 func TestWorkbenchHandlersRejectMismatchedSessionPath(t *testing.T) {
