@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -444,7 +445,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 }
 
 func validateVersionSourceFile(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
@@ -494,7 +495,7 @@ func doctorRuntimePinFindings(miseNodeVersion, misePnpmVersion string) []qaFindi
 }
 
 func validatePackageJSONPins(path, miseNodeVersion, misePnpmVersion string, root bool) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return []qaFinding{fail("doctor.package_json", err.Error(), path)}
 	}
@@ -571,7 +572,7 @@ func isExactPackageVersion(version string) bool {
 func pluginDoctorSnapshot(pluginList string) map[string]any {
 	mcpConfigured := len(validatePluginMCPConfig(filepath.Join("plugins", "slidex", ".mcp.json"))) == 0
 	defaultPromptPresent := false
-	if raw, err := os.ReadFile(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json")); err == nil {
+	if raw, err := readRegularFileWithMaxBytes(filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"), maxProjectConfigBytes); err == nil {
 		var manifest map[string]any
 		if json.Unmarshal(raw, &manifest) == nil {
 			iface, _ := manifest["interface"].(map[string]any)
@@ -685,7 +686,7 @@ func repoRelativePath(rel string) string {
 }
 
 func clientRequestMethodsFromSchema(path string) ([]string, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectSchemaBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -906,7 +907,7 @@ func workbenchSourceSHA256() (string, error) {
 	}
 	hash := sha256.New()
 	for _, file := range files {
-		raw, err := os.ReadFile(filepath.Join("workbench", file))
+		raw, err := readRegularFileWithMaxBytes(filepath.Join("workbench", file), maxProjectConfigBytes)
 		if err != nil {
 			return "", err
 		}
@@ -992,7 +993,7 @@ func doctorAppServerSkillSmokeEvidence(deckAbs string, manifest workbenchManifes
 }
 
 func validatePluginMCPConfig(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
@@ -1031,7 +1032,7 @@ func localProtocolBundleStatus() map[string]any {
 		"status":  "ok",
 	}
 	var manifest map[string]any
-	if raw, err := os.ReadFile(manifestPath); err != nil {
+	if raw, err := readRegularFileWithMaxBytes(manifestPath, maxProjectConfigBytes); err != nil {
 		status["status"] = "missing"
 		status["error"] = err.Error()
 	} else if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -1066,7 +1067,7 @@ func doctorProtocolBundleFindings(protocol map[string]any) []qaFinding {
 }
 
 func validatePluginJSONManifest(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
@@ -1120,7 +1121,7 @@ func pluginVersionBase(version string) string {
 }
 
 func validatePluginVersionLock(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
@@ -1157,7 +1158,7 @@ func validatePluginVersionLock(path string) []qaFinding {
 }
 
 func validateMarketplaceManifest(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
@@ -1203,7 +1204,7 @@ func validateMarketplaceManifest(path string) []qaFinding {
 }
 
 func validateHookManifest(path string) []qaFinding {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
@@ -1245,13 +1246,13 @@ func requiredMCPServersFromProjectConfig() []string {
 }
 
 func requiredMCPServersFromConfig(path string) []string {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil
 	}
 	required := []string{}
 	section := ""
-	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		line := strings.TrimSpace(stripTomlComment(scanner.Text()))
 		if line == "" {
@@ -2872,7 +2873,7 @@ func syncVersionMetadataFiles(manifestPath, lockPath string) ([]string, error) {
 }
 
 func readJSONObjectFile(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -2923,7 +2924,7 @@ func unixSocketPathLimit(goos string) int {
 }
 
 func readAppServerMetadata(path string) map[string]any {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxAppServerMetadataBytes)
 	if err != nil {
 		return nil
 	}
@@ -3092,11 +3093,11 @@ func webSocketAuthorizationHeader(ws webSocketAuthConfig) (string, error) {
 		if ws.TokenFile == "" {
 			return "", fmt.Errorf("capability-token auth requires a token file")
 		}
-		raw, err := os.ReadFile(ws.TokenFile)
+		raw, err := readRegularFileWithMaxBytes(ws.TokenFile, maxWebSocketCredentialBytes)
 		if err != nil {
 			return "", fmt.Errorf("read capability token: %w", err)
 		}
-		token := strings.TrimSpace(string(raw))
+		token := string(bytes.TrimSpace(raw))
 		if token == "" {
 			return "", fmt.Errorf("capability token file is empty")
 		}
@@ -3122,11 +3123,11 @@ func signedWebSocketBearerToken(ws webSocketAuthConfig) (string, error) {
 	if ws.SharedSecretFile == "" || ws.Issuer == "" || ws.Audience == "" || ws.MaxClockSkewSeconds <= 0 {
 		return "", fmt.Errorf("signed-bearer-token auth requires shared secret, issuer, audience, and max clock skew")
 	}
-	rawSecret, err := os.ReadFile(ws.SharedSecretFile)
+	rawSecret, err := readRegularFileWithMaxBytes(ws.SharedSecretFile, maxWebSocketCredentialBytes)
 	if err != nil {
 		return "", fmt.Errorf("read signed bearer shared secret: %w", err)
 	}
-	secret := []byte(strings.TrimSpace(string(rawSecret)))
+	secret := bytes.TrimSpace(rawSecret)
 	if len(secret) == 0 {
 		return "", fmt.Errorf("signed bearer shared secret file is empty")
 	}
@@ -3297,11 +3298,11 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		if err := requirePrivateFile(ws.TokenFile, "--ws-token-file"); err != nil {
 			return err
 		}
-		raw, err := os.ReadFile(ws.TokenFile)
+		raw, err := readRegularFileWithMaxBytes(ws.TokenFile, maxWebSocketCredentialBytes)
 		if err != nil {
 			return exitCodeError(4, "--ws-token-file is not readable: %v", err)
 		}
-		actual := sha256Bytes([]byte(strings.TrimSpace(string(raw))))
+		actual := sha256Bytes(bytes.TrimSpace(raw))
 		if !strings.EqualFold(actual, ws.TokenSHA256) {
 			return exitCodeError(4, "--ws-token-sha256 does not match --ws-token-file")
 		}
@@ -3317,6 +3318,9 @@ func validateWebSocketAuth(listen string, ws webSocketAuthConfig) error {
 		}
 		if err := requirePrivateFile(ws.SharedSecretFile, "--ws-shared-secret-file"); err != nil {
 			return err
+		}
+		if _, err := readRegularFileWithMaxBytes(ws.SharedSecretFile, maxWebSocketCredentialBytes); err != nil {
+			return exitCodeError(4, "--ws-shared-secret-file is not readable: %v", err)
 		}
 		if !loopback && !webSocketTunnelAcknowledged() {
 			return exitCodeError(4, "non-loopback WebSocket requires TLS or SSH tunnel acknowledgement via SLIDEX_WS_TUNNEL_ACK=1")
@@ -3434,7 +3438,7 @@ func slidexConfigPath() string {
 
 func loadDangerousAppServerAllowlist(path string) (map[string]map[string]bool, error) {
 	allowlist := map[string]map[string]bool{}
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return allowlist, nil
@@ -3442,7 +3446,7 @@ func loadDangerousAppServerAllowlist(path string) (map[string]map[string]bool, e
 		return allowlist, err
 	}
 	section := ""
-	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		line := strings.TrimSpace(stripTomlComment(scanner.Text()))
 		if line == "" {
@@ -7765,7 +7769,7 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 }
 
 func validateRawJSONAgainstSchema(instanceRaw []byte, schemaPath string) error {
-	schemaRaw, err := os.ReadFile(schemaPath)
+	schemaRaw, err := readRegularFileWithMaxBytes(schemaPath, maxProjectSchemaBytes)
 	if err != nil {
 		return err
 	}
@@ -8111,7 +8115,7 @@ func goalMismatch(local goalMirror, appGoal map[string]any) bool {
 }
 
 func appServerGoalStatusAllowed(status string) bool {
-	raw, err := os.ReadFile(filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion, "schema", "v2", "ThreadGoalSetParams.json"))
+	raw, err := readRegularFileWithMaxBytes(filepath.Join("internal", "codex", "protocol", "codex-cli-"+requiredCodexVersion, "schema", "v2", "ThreadGoalSetParams.json"), maxProjectSchemaBytes)
 	if err != nil {
 		return false
 	}

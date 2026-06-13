@@ -699,7 +699,7 @@ func writeAppServerTurnResult(outDir string, result appServerTurnResult) (string
 }
 
 func readJSONSchemaObject(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFileWithMaxBytes(path, maxProjectSchemaBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -1871,6 +1871,17 @@ build = ["mcpServer/tool/call"]
 	}
 }
 
+func TestLoadDangerousAppServerAllowlistRejectsOversizedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "slidex.toml")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", int(maxProjectConfigBytes)+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadDangerousAppServerAllowlist(path)
+	if err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected oversized config rejection, got %v", err)
+	}
+}
+
 func TestAppServerPluginSmokeHelpers(t *testing.T) {
 	params := appServerWorkbenchToolCallParams("thread-1", "workbench.start", "/tmp/workspace", "demo")
 	if params["server"] != "slidex" || params["tool"] != "workbench.start" || params["threadId"] != "thread-1" {
@@ -4092,6 +4103,29 @@ func TestWebSocketAuthRequiresPrivateFilesAndTunnelAck(t *testing.T) {
 	t.Setenv("SLIDEX_WS_TUNNEL_ACK", "1")
 	if err := validateWebSocketAuth("ws://10.0.0.2:1234", webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30}); err != nil {
 		t.Fatalf("signed bearer with tunnel acknowledgement should pass: %v", err)
+	}
+}
+
+func TestWebSocketAuthRejectsOversizedCredentialFiles(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(token, []byte(strings.Repeat("x", int(maxWebSocketCredentialBytes)+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	makeTestPrivateFile(t, token)
+	err := validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{Mode: "capability-token", TokenFile: token, TokenSHA256: strings.Repeat("0", 64)})
+	if err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected oversized token rejection, got %v", err)
+	}
+
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte(strings.Repeat("s", int(maxWebSocketCredentialBytes)+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	makeTestPrivateFile(t, secret)
+	err = validateWebSocketAuth("ws://127.0.0.1:1234", webSocketAuthConfig{Mode: "signed-bearer-token", SharedSecretFile: secret, Issuer: "slidex", Audience: "codex", MaxClockSkewSeconds: 30})
+	if err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected oversized shared secret rejection, got %v", err)
 	}
 }
 

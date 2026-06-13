@@ -79,3 +79,13 @@ func TestPrepareManagedAppServerOutputDiscardsChildStreams(t *testing.T) {
 		}
 	}
 }
+
+func TestReadJSONSchemaObjectRejectsOversizedSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "schema.json")
+	if err := os.WriteFile(path, []byte(`{"padding":"`+strings.Repeat("x", int(maxProjectSchemaBytes)+1)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readJSONSchemaObject(path); err == nil || !strings.Contains(err.Error(), "maximum allowed size") {
+		t.Fatalf("expected oversized schema rejection, got %v", err)
+	}
+}

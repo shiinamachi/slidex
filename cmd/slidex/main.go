@@ -73,6 +73,10 @@ const (
 	maxHashFileBytes                  = maxRenderedPDFBytes
 	maxDependencyHashBytes            = maxRenderedPNGBytes
 	maxDependencyHashTotal            = maxRenderedPDFBytes
+	maxProjectConfigBytes             = int64(1 << 20)
+	maxProjectSchemaBytes             = int64(4 << 20)
+	maxAppServerMetadataBytes         = int64(1 << 20)
+	maxWebSocketCredentialBytes       = int64(64 << 10)
 )
 
 func isReleaseBaseVersion(version string) bool {
@@ -1753,13 +1757,16 @@ func loadSpecSchema() (map[string]any, error) {
 	cwd, _ := os.Getwd()
 	for dir := cwd; ; dir = filepath.Dir(dir) {
 		candidate := filepath.Join(dir, "schemas", "deck_spec.schema.json")
-		raw, err := os.ReadFile(candidate)
+		raw, err := readRegularFileWithMaxBytes(candidate, maxProjectSchemaBytes)
 		if err == nil {
 			var schema map[string]any
 			if err := json.Unmarshal(raw, &schema); err != nil {
 				return nil, err
 			}
 			return schema, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
 		if filepath.Dir(dir) == dir {
 			break
