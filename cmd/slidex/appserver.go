@@ -389,6 +389,68 @@ func (c *appServerClient) notify(method string, params map[string]any) error {
 	return err
 }
 
+func appServerJSONRPCIDKey(id any) (string, bool) {
+	raw, err := json.Marshal(id)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
+func appServerMessageIDKey(msg map[string]any) (string, bool) {
+	id, ok := msg["id"]
+	if !ok {
+		return "", false
+	}
+	return appServerJSONRPCIDKey(id)
+}
+
+func appServerMessageIDMatches(msg map[string]any, idKey string) bool {
+	got, ok := appServerMessageIDKey(msg)
+	return ok && got == idKey
+}
+
+func appServerMessageIsServerRequest(msg map[string]any) bool {
+	method, _ := msg["method"].(string)
+	if method == "" {
+		return false
+	}
+	_, hasID := msg["id"]
+	return hasID
+}
+
+func appServerMessageIsResponse(msg map[string]any) bool {
+	if _, hasMethod := msg["method"]; hasMethod {
+		return false
+	}
+	if _, hasResult := msg["result"]; hasResult {
+		return true
+	}
+	_, hasError := msg["error"]
+	return hasError
+}
+
+func (c *appServerClient) respondUnsupportedServerRequest(msg map[string]any) error {
+	id, hasID := msg["id"]
+	if !hasID {
+		return nil
+	}
+	method, _ := msg["method"].(string)
+	if c.stdin == nil {
+		return fmt.Errorf("app-server sent unsupported server request %q but no response channel is available", method)
+	}
+	resp := map[string]any{
+		"id": id,
+		"error": map[string]any{
+			"code":    -32601,
+			"message": fmt.Sprintf("slidex does not support App Server server request %q", method),
+		},
+	}
+	raw, _ := json.Marshal(resp)
+	_, err := fmt.Fprintln(c.stdin, string(raw))
+	return err
+}
+
 func (c *appServerClient) request(method string, params map[string]any, timeout time.Duration) (map[string]any, []map[string]any, error) {
 	if isDangerousAppServerMethod(method) {
 		allowed, err := dangerousAppServerMethodAllowed(method, c.stage)
@@ -406,6 +468,7 @@ func (c *appServerClient) request(method string, params map[string]any, timeout 
 	if _, err := fmt.Fprintln(c.stdin, string(raw)); err != nil {
 		return nil, nil, err
 	}
+	idKey, _ := appServerJSONRPCIDKey(id)
 	deadline := time.After(timeout)
 	notifications := newAppServerNotificationCollector(maxAppServerNotifications, maxAppServerNotificationBytes)
 	for {
@@ -414,7 +477,20 @@ func (c *appServerClient) request(method string, params map[string]any, timeout 
 			if !ok {
 				return nil, notifications.list(), c.closedStdoutError("app-server closed stdout")
 			}
-			if got, ok := numberAsInt(msg["id"]); ok && got == id {
+			if appServerMessageIsServerRequest(msg) {
+				if err := c.respondUnsupportedServerRequest(msg); err != nil {
+					return nil, notifications.list(), err
+				}
+				if err := notifications.append(msg); err != nil {
+					c.close()
+					return nil, notifications.list(), err
+				}
+				continue
+			}
+			if appServerMessageIDMatches(msg, idKey) {
+				if !appServerMessageIsResponse(msg) {
+					return nil, notifications.list(), fmt.Errorf("app-server %s returned malformed response for id %d", method, id)
+				}
 				if errObj, exists := msg["error"]; exists {
 					return msg, notifications.list(), fmt.Errorf("app-server %s error: %v", method, errObj)
 				}
@@ -439,6 +515,11 @@ func (c *appServerClient) waitForTurnCompletion(threadID, turnID string, timeout
 		case msg, ok := <-c.lines:
 			if !ok {
 				return notifications.list(), nil, c.closedStdoutError("app-server closed stdout while waiting for turn completion")
+			}
+			if appServerMessageIsServerRequest(msg) {
+				if err := c.respondUnsupportedServerRequest(msg); err != nil {
+					return notifications.list(), nil, err
+				}
 			}
 			if err := notifications.append(msg); err != nil {
 				c.close()
@@ -477,6 +558,11 @@ func (c *appServerClient) waitForThreadCompacted(threadID string, timeout time.D
 		case msg, ok := <-c.lines:
 			if !ok {
 				return notifications.list(), nil, c.closedStdoutError("app-server closed stdout while waiting for thread compact")
+			}
+			if appServerMessageIsServerRequest(msg) {
+				if err := c.respondUnsupportedServerRequest(msg); err != nil {
+					return notifications.list(), nil, err
+				}
 			}
 			if err := notifications.append(msg); err != nil {
 				c.close()

@@ -2570,7 +2570,7 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 		"stopPolicy":      map[string]any{"gracefulSignal": "interrupt", "forceSignal": "kill", "gracePeriodSeconds": 5},
 	}
 	addManagedAppServerProcessIdentity(metadata, cmd)
-	if err := secureWriteJSON(metaPath, metadata); err != nil {
+	if err := writeAppServerMetadata(metaPath, metadata); err != nil {
 		return err
 	}
 	if risk := transportRiskForListen(actualListen); risk != "" && deck != "" {
@@ -2580,6 +2580,10 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	}
 	startCommitted = true
 	return printJSON(map[string]any{"toolName": toolName, "status": "pass", "metadata": metadata})
+}
+
+func writeAppServerMetadata(path string, metadata map[string]any) error {
+	return writeJSONFile(path, metadata)
 }
 
 func prepareManagedAppServerOutput(stdoutPath, stderrPath string) (*os.File, *os.File, error) {
@@ -2707,7 +2711,7 @@ func stopManagedAppServer(force bool) error {
 	if pid > 0 && processAlive(pid) {
 		if !managedAppServerMetadataTrustedForSignal(pid, metadata) {
 			metadata["stopRefusedAt"] = time.Now().UTC().Format(time.RFC3339)
-			_ = secureWriteJSON(metaPath, metadata)
+			_ = writeAppServerMetadata(metaPath, metadata)
 			return managedAppServerSignalRefusedError(pid)
 		}
 		if force {
@@ -2724,7 +2728,7 @@ func stopManagedAppServer(force bool) error {
 			if processAlive(pid) {
 				metadata["stopPending"] = true
 				metadata["lastStopAttemptAt"] = time.Now().UTC().Format(time.RFC3339)
-				_ = secureWriteJSON(metaPath, metadata)
+				_ = writeAppServerMetadata(metaPath, metadata)
 				return exitCodeError(1, "app-server did not stop gracefully; use --force")
 			}
 		}

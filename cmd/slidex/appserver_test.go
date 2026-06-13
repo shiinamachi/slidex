@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAppServerStderrBufferIsBounded(t *testing.T) {
@@ -46,6 +47,86 @@ func TestAppServerNotificationCollectorRejectsAggregateBytes(t *testing.T) {
 	err := collector.append(map[string]any{"method": "event", "params": strings.Repeat("x", 64)})
 	if err == nil || !strings.Contains(err.Error(), "notification bytes exceeded") {
 		t.Fatalf("expected notification byte cap error, got %v", err)
+	}
+}
+
+func TestAppServerRequestDoesNotAcceptCollidingServerRequestID(t *testing.T) {
+	stdin := &testWriteCloser{}
+	client := &appServerClient{stdin: stdin, lines: make(chan map[string]any, 2)}
+	go func() {
+		client.lines <- map[string]any{"id": 1, "method": "approval/request", "params": map[string]any{"prompt": "confirm"}}
+		client.lines <- map[string]any{"id": 1, "result": map[string]any{"ok": true}}
+	}()
+
+	resp, events, err := client.request("model/list", map[string]any{}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, _ := resp["result"].(map[string]any); result["ok"] != true {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	got := stdin.String()
+	if !strings.Contains(got, `"id":1`) || !strings.Contains(got, `"code":-32601`) {
+		t.Fatalf("unsupported server request response missing: %q", got)
+	}
+}
+
+func TestAppServerWaitForTurnCompletionRespondsToServerRequest(t *testing.T) {
+	stdin := &testWriteCloser{}
+	client := &appServerClient{stdin: stdin, lines: make(chan map[string]any, 2)}
+	go func() {
+		client.lines <- map[string]any{"id": 99, "method": "userInput/request", "params": map[string]any{"prompt": "answer"}}
+		client.lines <- map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "completed"}}}
+	}()
+
+	events, completion, err := client.waitForTurnCompletion("thread-1", "turn-1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	if got := turnIDFromCompletion(completion); got != "turn-1" {
+		t.Fatalf("completion turn id = %q", got)
+	}
+	got := stdin.String()
+	if !strings.Contains(got, `"id":99`) || !strings.Contains(got, `"code":-32601`) {
+		t.Fatalf("unsupported server request response missing: %q", got)
+	}
+}
+
+func TestWriteAppServerMetadataPreservesWebSocketAuthPaths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "metadata.json")
+	tokenFile := filepath.Join(dir, "token.txt")
+	sharedSecretFile := filepath.Join(dir, "secret.txt")
+	metadata := map[string]any{
+		"schemaVersion": "slidex.appServerProcess.v1",
+		"pid":           os.Getpid(),
+		"websocketAuth": webSocketAuthConfig{
+			Mode:             "capability-token",
+			TokenFile:        tokenFile,
+			TokenSHA256:      strings.Repeat("a", 64),
+			SharedSecretFile: sharedSecretFile,
+		},
+	}
+
+	if err := writeAppServerMetadata(path, metadata); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "[REDACTED]") {
+		t.Fatalf("managed metadata should preserve operational paths, got %s", raw)
+	}
+	got := webSocketAuthConfigFromMetadata(readAppServerMetadata(path))
+	if got.TokenFile != tokenFile || got.SharedSecretFile != sharedSecretFile || got.TokenSHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("websocket auth did not round-trip: %#v", got)
 	}
 }
 
