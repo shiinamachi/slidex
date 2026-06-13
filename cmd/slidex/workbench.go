@@ -1929,6 +1929,7 @@ func (s *workbenchHTTPServer) saveWorkbenchInput(input workbenchSaveInput, statu
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	manifest, err := updateWorkbenchManifest(s.deckAbs, s.currentManifest(), func(manifest *workbenchManifest) {
+		clearStaleWorkbenchGenerationForInputEdit(manifest)
 		manifest.Status = status
 		manifest.InputSavedAt = now
 		if wizardCompletedAt != "" {
@@ -1981,6 +1982,7 @@ func (s *workbenchHTTPServer) saveWorkbenchDraftIfIdle(input workbenchSaveInput,
 		return workbenchDraft{}, workbenchManifest{}, err
 	}
 	manifest, err = updateWorkbenchManifest(s.deckAbs, manifest, func(manifest *workbenchManifest) {
+		clearStaleWorkbenchGenerationForInputEdit(manifest)
 		manifest.Status = "draft"
 		manifest.DraftSavedAt = draft.UpdatedAt
 		manifest.DraftPath = filepath.ToSlash(filepath.Join(s.deckAbs, "out", workbenchDraftName))
@@ -2081,6 +2083,20 @@ func (s *workbenchHTTPServer) completeWorkbenchInputAndStartGeneration(input wor
 
 func workbenchGenerationRunning(manifest workbenchManifest) bool {
 	return manifest.GenerationStatus == "running" && manifest.GenerationPID > 0 && processAlive(manifest.GenerationPID)
+}
+
+func clearStaleWorkbenchGenerationForInputEdit(manifest *workbenchManifest) {
+	if manifest.GenerationStatus != "running" || workbenchGenerationRunning(*manifest) {
+		return
+	}
+	manifest.GenerationID = ""
+	manifest.GenerationStatus = ""
+	manifest.GenerationStartedAt = ""
+	manifest.GenerationEndedAt = ""
+	manifest.GenerationPID = 0
+	manifest.GenerationExitCode = 0
+	manifest.GenerationCommand = nil
+	manifest.GenerationLogPath = ""
 }
 
 type boundedWorkbenchLogWriter struct {

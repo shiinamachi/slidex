@@ -784,6 +784,101 @@ func TestWorkbenchStaleGenerationFinalizerDoesNotOverwriteCurrentGeneration(t *t
 	}
 }
 
+func TestWorkbenchInputEditAfterDeadGenerationMakesFinalizerStale(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		edit       func(t *testing.T, server *workbenchHTTPServer, input workbenchSaveInput, started workbenchManifest) workbenchManifest
+		wantStatus string
+	}{
+		{
+			name: "save",
+			edit: func(t *testing.T, server *workbenchHTTPServer, input workbenchSaveInput, _ workbenchManifest) workbenchManifest {
+				t.Helper()
+				manifest, err := server.saveWorkbenchInputIfIdle(input, "saved", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return manifest
+			},
+			wantStatus: "saved",
+		},
+		{
+			name: "draft",
+			edit: func(t *testing.T, server *workbenchHTTPServer, input workbenchSaveInput, started workbenchManifest) workbenchManifest {
+				t.Helper()
+				_, manifest, err := server.saveWorkbenchDraftIfIdle(input, started)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return manifest
+			},
+			wantStatus: "draft",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deck := filepath.Join(t.TempDir(), "decks", "demo")
+			if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			started := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
+			started.Status = "generating"
+			started.GenerationID = "generation-a"
+			started.GenerationStatus = "running"
+			started.GenerationStartedAt = "2026-06-14T01:00:00Z"
+			started.GenerationPID = deadProcessPIDForTest(t)
+			if err := writeWorkbenchManifest(deck, started); err != nil {
+				t.Fatal(err)
+			}
+			server := &workbenchHTTPServer{deckAbs: deck, sessionID: "session-1", token: "token", manifest: started}
+			input := workbenchSaveInput{
+				InitialRequest:     "Create an investor update deck for the Q3 pilot decision.",
+				Title:              "New input after old generation process exit",
+				Audience:           "Executive investment committee",
+				DecisionGoal:       "Approve whether to fund the Q3 pilot.",
+				SourceNotes:        "Use only the confirmed customer interviews and budget notes supplied by the user.",
+				KeyMessages:        "Pilot scope, budget ask, implementation risk, and decision timeline.",
+				RequiredClaims:     "Do not claim ROI, certifications, or customer counts unless sourced.",
+				Constraints:        "Avoid unsupported security claims and keep confidential names out.",
+				OutputExpectations: "HTML and PDF deck suitable for executive review.",
+			}
+
+			edited := tc.edit(t, server, input, started)
+			if edited.Status != tc.wantStatus {
+				t.Fatalf("edit status = %q, want %q: %#v", edited.Status, tc.wantStatus, edited)
+			}
+			if edited.GenerationID != "" || edited.GenerationStatus != "" || edited.GenerationPID != 0 || edited.GenerationStartedAt != "" {
+				t.Fatalf("edit should clear stale generation identity: %#v", edited)
+			}
+
+			_, stale, err := server.recordWorkbenchGenerationExit(started, "2026-06-14T01:02:00Z", 0, false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !stale {
+				t.Fatal("expected old generation finalizer to be stale after input edit")
+			}
+			recorded, ok := readWorkbenchManifest(deck)
+			if !ok {
+				t.Fatal("manifest missing")
+			}
+			if recorded.Status != tc.wantStatus || recorded.GenerationStatus != "" || recorded.GenerationID != "" {
+				t.Fatalf("old finalizer marked edited input as generated: %#v", recorded)
+			}
+		})
+	}
+}
+
+func deadProcessPIDForTest(t *testing.T) int {
+	t.Helper()
+	for pid := 99999999; pid > 99999000; pid-- {
+		if !processAlive(pid) {
+			return pid
+		}
+	}
+	t.Fatal("could not find a dead test pid")
+	return 0
+}
+
 func TestWorkbenchGenerationTimesOut(t *testing.T) {
 	oldCommand := newWorkbenchGenerationCommand
 	oldTimeout := workbenchGenerationTimeout
