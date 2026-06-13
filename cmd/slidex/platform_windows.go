@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -43,6 +45,92 @@ func signalWorkbenchProcess(pid int) {
 
 func killWorkbenchProcess(pid int) {
 	killProcess(pid)
+}
+
+func workbenchProcessMatchesManifest(manifest workbenchManifest) bool {
+	if manifest.PID <= 0 {
+		return false
+	}
+	currentExe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(currentExe); err == nil {
+		currentExe = resolved
+	}
+	processExe, ok := windowsProcessImagePath(manifest.PID)
+	if !ok {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(processExe); err == nil {
+		processExe = resolved
+	}
+	if !sameFilesystemPath(currentExe, processExe) {
+		return false
+	}
+	commandLine, ok := windowsProcessCommandLine(manifest.PID)
+	if !ok {
+		return false
+	}
+	return workbenchServeArgsMatch(splitWindowsCommandLine(commandLine), manifest)
+}
+
+func windowsProcessImagePath(pid int) (string, bool) {
+	if pid <= 0 {
+		return "", false
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return "", false
+	}
+	defer windows.CloseHandle(handle)
+	buffer := make([]uint16, 32768)
+	size := uint32(len(buffer))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buffer[0], &size); err != nil {
+		return "", false
+	}
+	return windows.UTF16ToString(buffer[:size]), true
+}
+
+func windowsProcessCommandLine(pid int) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+	script := fmt.Sprintf(`$p = Get-CimInstance Win32_Process -Filter "ProcessId = %d"; if ($null -ne $p) { [Console]::Out.Write($p.CommandLine) }`, pid)
+	out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	if err != nil || ctx.Err() != nil {
+		return "", false
+	}
+	commandLine := strings.TrimSpace(string(out))
+	return commandLine, commandLine != ""
+}
+
+func splitWindowsCommandLine(commandLine string) []string {
+	var args []string
+	var current strings.Builder
+	inQuotes := false
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		args = append(args, current.String())
+		current.Reset()
+	}
+	for _, r := range commandLine {
+		switch r {
+		case '"':
+			inQuotes = !inQuotes
+		case ' ', '\t', '\r', '\n':
+			if inQuotes {
+				current.WriteRune(r)
+			} else {
+				flush()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return args
 }
 
 func signalManagedProcess(pid int) {

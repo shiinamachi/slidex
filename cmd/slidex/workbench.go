@@ -62,6 +62,8 @@ var (
 	workbenchLockRetryDelay   = 50 * time.Millisecond
 	workbenchLockStaleAfter   = 5 * time.Second
 	workbenchLockSchemaMarker = "workbench-lock-v1"
+	signalWorkbenchProcessFn  = signalWorkbenchProcess
+	killWorkbenchProcessFn    = killWorkbenchProcess
 )
 
 type workbenchAssetManifest struct {
@@ -2786,7 +2788,10 @@ func stopWorkbenchProcess(manifest workbenchManifest) {
 			time.Sleep(80 * time.Millisecond)
 		}
 	}
-	signalWorkbenchProcess(manifest.PID)
+	if !workbenchProcessMatchesManifest(manifest) {
+		return
+	}
+	signalWorkbenchProcessFn(manifest.PID)
 	deadline := time.Now().Add(1200 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if !isWorkbenchReady(manifest) {
@@ -2794,7 +2799,7 @@ func stopWorkbenchProcess(manifest workbenchManifest) {
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
-	killWorkbenchProcess(manifest.PID)
+	killWorkbenchProcessFn(manifest.PID)
 }
 
 func requestWorkbenchShutdown(manifest workbenchManifest) bool {
@@ -2819,6 +2824,67 @@ func requestWorkbenchShutdown(manifest workbenchManifest) bool {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16*1024))
 	return resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+}
+
+func workbenchServeArgsMatch(args []string, manifest workbenchManifest) bool {
+	if manifest.Workspace == "" || manifest.DeckDir == "" || manifest.SessionID == "" || manifest.Port <= 0 {
+		return false
+	}
+	flagArgs, ok := workbenchServeFlagArgs(args)
+	if !ok {
+		return false
+	}
+	workspace, ok := flagValueFromArgs(flagArgs, "--workspace")
+	if !ok || !sameFilesystemPath(workspace, manifest.Workspace) {
+		return false
+	}
+	deck, ok := flagValueFromArgs(flagArgs, "--deck")
+	if !ok || !sameFilesystemPath(deck, manifest.DeckDir) {
+		return false
+	}
+	sessionID, ok := flagValueFromArgs(flagArgs, "--session")
+	if !ok || sessionID != manifest.SessionID {
+		return false
+	}
+	port, ok := flagValueFromArgs(flagArgs, "--port")
+	if !ok || port != strconv.Itoa(manifest.Port) {
+		return false
+	}
+	if tokenEnv, ok := flagValueFromArgs(flagArgs, "--token-env"); !ok || tokenEnv != workbenchTokenEnv {
+		return false
+	}
+	if shutdownEnv, ok := flagValueFromArgs(flagArgs, "--shutdown-token-env"); !ok || shutdownEnv != workbenchShutdownTokenEnv {
+		return false
+	}
+	if readinessEnv, ok := flagValueFromArgs(flagArgs, "--readiness-token-env"); !ok || readinessEnv != workbenchReadinessTokenEnv {
+		return false
+	}
+	return true
+}
+
+func workbenchServeFlagArgs(args []string) ([]string, bool) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "workbench" && args[i+1] == "serve" {
+			return args[i+2:], true
+		}
+	}
+	return nil, false
+}
+
+func flagValueFromArgs(args []string, name string) (string, bool) {
+	prefix := name + "="
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == name:
+			if i+1 >= len(args) {
+				return "", false
+			}
+			return args[i+1], true
+		case strings.HasPrefix(args[i], prefix):
+			return strings.TrimPrefix(args[i], prefix), true
+		}
+	}
+	return "", false
 }
 
 func newWorkbenchManifest(deckAbs, workspace, sessionID, token string, port, pid int, status string) workbenchManifest {

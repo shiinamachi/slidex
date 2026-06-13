@@ -846,6 +846,59 @@ func TestStopWorkbenchProcessUsesHTTPShutdownBeforeSignalFallback(t *testing.T) 
 	}
 }
 
+func TestStopWorkbenchProcessDoesNotSignalForgedManifestControl(t *testing.T) {
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
+	if err := os.MkdirAll(filepath.Join(deck, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portRaw, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := newWorkbenchManifest(deck, workspace, "session-1", "write-token", port, os.Getpid(), "running")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", testWorkbenchReadyHandler(manifest, "ready-key"))
+	server := httptest.NewUnstartedServer(mux)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	if err := writeWorkbenchControl(deck, newWorkbenchControl(manifest, "shutdown-key", "ready-key")); err != nil {
+		t.Fatal(err)
+	}
+
+	oldSignal := signalWorkbenchProcessFn
+	oldKill := killWorkbenchProcessFn
+	var signalCalls atomic.Int32
+	var killCalls atomic.Int32
+	signalWorkbenchProcessFn = func(pid int) {
+		signalCalls.Add(1)
+	}
+	killWorkbenchProcessFn = func(pid int) {
+		killCalls.Add(1)
+	}
+	t.Cleanup(func() {
+		signalWorkbenchProcessFn = oldSignal
+		killWorkbenchProcessFn = oldKill
+	})
+
+	stopWorkbenchProcess(manifest)
+	if signalCalls.Load() != 0 {
+		t.Fatalf("forged manifest/control invoked signal fallback %d times", signalCalls.Load())
+	}
+	if killCalls.Load() != 0 {
+		t.Fatalf("forged manifest/control invoked kill fallback %d times", killCalls.Load())
+	}
+}
+
 func TestWorkbenchHTMLShowsDeckLocalFilePaths(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "decks", "demo")
 	manifest := newWorkbenchManifest(deck, filepath.Dir(filepath.Dir(deck)), "session-1", "token", 43210, 123, "running")
