@@ -2870,13 +2870,20 @@ func updateStatePath(installRoot string) string {
 
 func bundledSchemaPath(schemaName string) string {
 	rel := filepath.Join("schemas", filepath.FromSlash(schemaName))
+	installCandidate := ""
 	if installRoot := defaultInstallRoot(); installRoot != "" {
-		candidate := filepath.Join(installRoot, rel)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		installCandidate = filepath.Join(installRoot, rel)
+		if _, err := os.Stat(installCandidate); err == nil {
+			return installCandidate
 		}
 	}
-	return repoRelativePath(rel)
+	if candidate := sourceRelativePath(rel); candidate != "" {
+		return candidate
+	}
+	if installCandidate != "" {
+		return installCandidate
+	}
+	return filepath.Join(mustAbs("."), rel)
 }
 
 func validatePayloadAgainstBundledSchema(payload any, schemaName string) error {

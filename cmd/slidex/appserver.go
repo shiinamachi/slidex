@@ -704,6 +704,7 @@ func (r *appServerWorkflowRun) runStructuredTurn(stage, prompt, schemaPath strin
 }
 
 func (r *appServerWorkflowRun) runStructuredTurnWithInput(stage string, input []map[string]any, promptForHash, schemaPath string, timeout time.Duration) (appServerTurnResult, error) {
+	schemaPath = resolveBuiltInSchemaPath(schemaPath)
 	previousStage := r.client.stage
 	r.client.stage = stage
 	defer func() { r.client.stage = previousStage }()
@@ -818,6 +819,7 @@ func writeAppServerTurnResult(outDir string, result appServerTurnResult) (string
 }
 
 func readJSONSchemaObject(path string) (map[string]any, error) {
+	path = resolveBuiltInSchemaPath(path)
 	raw, err := readRegularFileWithMaxBytes(path, maxProjectSchemaBytes)
 	if err != nil {
 		return nil, err

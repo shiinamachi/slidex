@@ -1883,25 +1883,16 @@ func runeLen(text string) int {
 }
 
 func loadSpecSchema() (map[string]any, error) {
-	cwd, _ := os.Getwd()
-	for dir := cwd; ; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, "schemas", "deck_spec.schema.json")
-		raw, err := readRegularFileWithMaxBytes(candidate, maxProjectSchemaBytes)
-		if err == nil {
-			var schema map[string]any
-			if err := json.Unmarshal(raw, &schema); err != nil {
-				return nil, err
-			}
-			return schema, nil
-		}
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if filepath.Dir(dir) == dir {
-			break
-		}
+	schemaPath := builtinSchemaPath("deck_spec.schema.json")
+	raw, err := readRegularFileWithMaxBytes(schemaPath, maxProjectSchemaBytes)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("schemas/deck_spec.schema.json not found from current working directory")
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return nil, err
+	}
+	return schema, nil
 }
 
 func validateWithFullJSONSchema(instanceRaw []byte, schema map[string]any, sourcePath string) []qaFinding {

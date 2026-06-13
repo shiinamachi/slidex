@@ -1675,6 +1675,65 @@ func TestStrictAppServerSchemasAcceptLocalPayloads(t *testing.T) {
 	}
 }
 
+func TestBuiltInSchemaValidationIgnoresCallerCWD(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := t.TempDir()
+	fakeSchemaDir := filepath.Join(temp, "schemas")
+	if err := os.MkdirAll(fakeSchemaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeSchemaPath := filepath.Join(fakeSchemaDir, "app_stage_result.strict.schema.json")
+	fakeSchema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}`)
+	if err := os.WriteFile(fakeSchemaPath, fakeSchema, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(temp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	resolved := resolveBuiltInSchemaPath(filepath.Join("schemas", "app_stage_result.strict.schema.json"))
+	if !filepath.IsAbs(resolved) {
+		t.Fatalf("built-in schema path should resolve to an absolute trusted path, got %q", resolved)
+	}
+	if canonicalPathEqual(resolved, fakeSchemaPath) {
+		t.Fatalf("built-in schema resolved to caller cwd fake schema: %s", resolved)
+	}
+	if err := validatePayloadAgainstSchema(map[string]any{}, filepath.Join("schemas", "app_stage_result.strict.schema.json")); err == nil {
+		t.Fatal("trusted strict schema should reject an empty stage payload despite permissive caller cwd schema")
+	}
+}
+
+func TestLoadSpecSchemaUsesTrustedBuiltInSchemaFromArbitraryCWD(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := t.TempDir()
+	fakeSchemaDir := filepath.Join(temp, "schemas")
+	if err := os.MkdirAll(fakeSchemaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeSchemaDir, "deck_spec.schema.json"), []byte(`{"x_fake_schema":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(temp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	schema, err := loadSpecSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake, _ := schema["x_fake_schema"].(bool); fake {
+		t.Fatalf("loadSpecSchema used caller cwd fake schema: %#v", schema)
+	}
+}
+
 func TestAuthoringMaterialityRejectsEmptyPassPayload(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

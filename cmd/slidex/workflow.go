@@ -6348,6 +6348,7 @@ func runCodexExecStructured(deckAbs, stage, prompt, schemaPath string, resume bo
 		return "", nil, err
 	}
 	schemaForCodex := schemaPath
+	schemaForCodex = resolveBuiltInSchemaPath(schemaForCodex)
 	if !filepath.IsAbs(schemaForCodex) {
 		schemaForCodex = mustAbs(schemaForCodex)
 	}
@@ -8105,7 +8106,7 @@ func runCodexExecVisualReview(deckAbs string, manifest renderManifest) (map[stri
 	for _, image := range manifest.PNGFiles {
 		args = append(args, "--image", image.Path)
 	}
-	args = append(args, "--output-schema", mustAbs(filepath.Join("schemas", "app_review_findings.strict.schema.json")), "--output-last-message", lastMessage, "-")
+	args = append(args, "--output-schema", resolveBuiltInSchemaPath(filepath.Join("schemas", "app_review_findings.strict.schema.json")), "--output-last-message", lastMessage, "-")
 	out, err := runBufferedCommandWithInput(5*time.Minute, deckAbs, strings.NewReader(prompt), "codex", args...)
 	if err != nil {
 		return nil, fmt.Errorf("codex exec visual QA failed: %w\n%s", err, string(out))
@@ -8401,6 +8402,7 @@ func validatePayloadAgainstSchema(payload any, schemaPath string) error {
 }
 
 func validateRawJSONAgainstSchema(instanceRaw []byte, schemaPath string) error {
+	schemaPath = resolveBuiltInSchemaPath(schemaPath)
 	schemaRaw, err := readRegularFileWithMaxBytes(schemaPath, maxProjectSchemaBytes)
 	if err != nil {
 		return err
