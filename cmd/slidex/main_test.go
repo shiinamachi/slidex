@@ -5066,6 +5066,92 @@ func TestInspectDeckWarnsAndSkipsSymlinkEntries(t *testing.T) {
 	}
 }
 
+func TestInspectDeckRejectsExcessiveWalkEntries(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := os.MkdirAll(deck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(deck, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := inspectDeckWithBudget(deck, inspectBudget{
+		MaxWalkEntries:    2,
+		MaxHashBytes:      maxInspectHashTotalBytes,
+		MaxInventoryBytes: maxInspectInventoryBytes,
+	})
+	if err == nil || !strings.Contains(err.Error(), "entry limit exceeded") {
+		t.Fatalf("expected entry limit error, got %v", err)
+	}
+}
+
+func TestInspectDeckRejectsAggregateHashBudget(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := os.MkdirAll(deck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deck, "a.txt"), []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deck, "b.txt"), []byte("67890"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := inspectDeckWithBudget(deck, inspectBudget{
+		MaxWalkEntries:    10,
+		MaxHashBytes:      6,
+		MaxInventoryBytes: maxInspectInventoryBytes,
+	})
+	if err == nil || !strings.Contains(err.Error(), "inspect budget exceeded") {
+		t.Fatalf("expected hash budget error, got %v", err)
+	}
+}
+
+func TestInspectDeckRejectsOversizedInventoryOutput(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	if err := os.MkdirAll(deck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := inspectDeckWithBudget(deck, inspectBudget{
+		MaxWalkEntries:    10,
+		MaxHashBytes:      maxInspectHashTotalBytes,
+		MaxInventoryBytes: 64,
+	})
+	if err == nil || !strings.Contains(err.Error(), "inventory output exceeds") {
+		t.Fatalf("expected inventory output limit error, got %v", err)
+	}
+}
+
+func TestWriteSourceInventoryRejectsOversizedMarkdown(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "out")
+	inv := inventory{
+		ToolName: toolName,
+		Version:  toolVersion,
+		DeckDir:  filepath.Dir(outDir),
+		OutDir:   outDir,
+		Inputs: []fileEntry{{
+			Path:   strings.Repeat("a", 128) + ".txt",
+			Kind:   "file",
+			Size:   1,
+			SHA256: "abc123",
+		}},
+	}
+
+	err := writeSourceInventoryWithBudget(inv, 64)
+	if err == nil || !strings.Contains(err.Error(), "source inventory exceeds") {
+		t.Fatalf("expected source inventory limit error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outDir, "source_inventory.md")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("source_inventory.md should not be written, stat err=%v", statErr)
+	}
+}
+
 func TestFileURLFromPathForSupportedPlatforms(t *testing.T) {
 	cases := []struct {
 		goos string

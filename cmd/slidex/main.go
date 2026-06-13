@@ -48,6 +48,8 @@ var (
 	pluginVersionDoctorExample = toolVersion + "+doctor"
 )
 
+var errInspectBudgetExceeded = errors.New("inspect budget exceeded")
+
 const (
 	chromeVersionTimeout = 8 * time.Second
 	chromeCommandTimeout = 45 * time.Second
@@ -80,6 +82,9 @@ const (
 	maxDeckTemplateCopyEntries        = 4096
 	maxDeckTemplateFileBytes          = int64(64 << 20)
 	maxDeckTemplateTotalBytes         = int64(256 << 20)
+	maxInspectWalkEntries             = 8192
+	maxInspectHashTotalBytes          = maxDependencyHashTotal
+	maxInspectInventoryBytes          = maxDeckTextArtifactBytes
 )
 
 func isReleaseBaseVersion(version string) bool {
@@ -102,6 +107,17 @@ type inventory struct {
 	Inputs   []fileEntry `json:"inputs"`
 	Outputs  []fileEntry `json:"outputs"`
 	Warnings []string    `json:"warnings,omitempty"`
+}
+
+type inspectBudget struct {
+	MaxWalkEntries    int
+	MaxHashBytes      int64
+	MaxInventoryBytes int64
+}
+
+type inspectState struct {
+	walkEntries int
+	hashedBytes int64
 }
 
 type slideInfo struct {
@@ -336,6 +352,14 @@ func runInspect(args []string) error {
 }
 
 func inspectDeck(deck string) (inventory, error) {
+	return inspectDeckWithBudget(deck, inspectBudget{
+		MaxWalkEntries:    maxInspectWalkEntries,
+		MaxHashBytes:      maxInspectHashTotalBytes,
+		MaxInventoryBytes: maxInspectInventoryBytes,
+	})
+}
+
+func inspectDeckWithBudget(deck string, budget inspectBudget) (inventory, error) {
 	deckAbs, err := filepath.Abs(deck)
 	if err != nil {
 		return inventory{}, err
@@ -360,10 +384,17 @@ func inspectDeck(deck string) (inventory, error) {
 		DeckDir:  deckAbs,
 		OutDir:   outDir,
 	}
+	state := inspectState{}
 	err = filepath.WalkDir(deckAbs, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			inv.Warnings = append(inv.Warnings, walkErr.Error())
 			return nil
+		}
+		if path != deckAbs {
+			state.walkEntries++
+			if budget.MaxWalkEntries > 0 && state.walkEntries > budget.MaxWalkEntries {
+				return fmt.Errorf("inspect entry limit exceeded: visited %d entries > %d", state.walkEntries, budget.MaxWalkEntries)
+			}
 		}
 		if d.IsDir() {
 			name := d.Name()
@@ -372,8 +403,11 @@ func inspectDeck(deck string) (inventory, error) {
 			}
 			return nil
 		}
-		entry, err := makeFileEntry(deckAbs, path)
+		entry, err := makeFileEntryWithBudget(deckAbs, path, budget, &state)
 		if err != nil {
+			if errors.Is(err, errInspectBudgetExceeded) {
+				return err
+			}
 			inv.Warnings = append(inv.Warnings, err.Error())
 			return nil
 		}
@@ -386,16 +420,38 @@ func inspectDeck(deck string) (inventory, error) {
 	})
 	sort.Slice(inv.Inputs, func(i, j int) bool { return inv.Inputs[i].Path < inv.Inputs[j].Path })
 	sort.Slice(inv.Outputs, func(i, j int) bool { return inv.Outputs[i].Path < inv.Outputs[j].Path })
+	if err == nil {
+		err = validateInventorySize(inv, budget.MaxInventoryBytes)
+	}
 	return inv, err
 }
 
 func makeFileEntry(root, path string) (fileEntry, error) {
+	return makeFileEntryWithBudget(root, path, inspectBudget{}, nil)
+}
+
+func makeFileEntryWithBudget(root, path string, budget inspectBudget, state *inspectState) (fileEntry, error) {
 	info, err := regularFileInfoForRead(path)
 	if err != nil {
 		return fileEntry{}, err
 	}
 	rel, _ := filepath.Rel(root, path)
-	hash, _ := sha256File(path)
+	hash := ""
+	if size := info.Size(); size <= maxHashFileBytes {
+		if state != nil && budget.MaxHashBytes > 0 {
+			if size > budget.MaxHashBytes-state.hashedBytes {
+				return fileEntry{}, fmt.Errorf("%w: hashing %s would exceed %d bytes", errInspectBudgetExceeded, filepath.ToSlash(path), budget.MaxHashBytes)
+			}
+		}
+		var hashErr error
+		hash, hashErr = sha256FileWithMaxBytes(path, size)
+		if hashErr != nil {
+			return fileEntry{}, hashErr
+		}
+		if state != nil {
+			state.hashedBytes += size
+		}
+	}
 	return fileEntry{
 		Path:    filepath.ToSlash(rel),
 		Kind:    classifyPath(rel),
@@ -403,6 +459,21 @@ func makeFileEntry(root, path string) (fileEntry, error) {
 		SHA256:  hash,
 		ModTime: info.ModTime().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func validateInventorySize(inv inventory, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return nil
+	}
+	raw, err := json.MarshalIndent(inv, "", "  ")
+	if err != nil {
+		return err
+	}
+	size := int64(len(raw) + 1)
+	if size > maxBytes {
+		return fmt.Errorf("inspect inventory output exceeds maximum size: %d bytes > %d", size, maxBytes)
+	}
+	return nil
 }
 
 func classifyPath(path string) string {
@@ -447,29 +518,82 @@ func classifyPath(path string) string {
 }
 
 func writeSourceInventory(inv inventory) error {
+	return writeSourceInventoryWithBudget(inv, maxInspectInventoryBytes)
+}
+
+func writeSourceInventoryWithBudget(inv inventory, maxBytes int64) error {
 	if err := os.MkdirAll(inv.OutDir, 0o755); err != nil {
 		return err
 	}
-	var b strings.Builder
-	b.WriteString("# Source Inventory\n\n")
-	b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", inv.ToolName, inv.Version))
-	b.WriteString(fmt.Sprintf("- Deck directory: `%s`\n", inv.DeckDir))
-	b.WriteString(fmt.Sprintf("- Output directory: `%s`\n\n", inv.OutDir))
-	b.WriteString("## Inputs\n\n")
+	raw, err := sourceInventoryMarkdown(inv, maxBytes)
+	if err != nil {
+		return err
+	}
+	return secureWriteFile(filepath.Join(inv.OutDir, "source_inventory.md"), raw, 0o644)
+}
+
+func sourceInventoryMarkdown(inv inventory, maxBytes int64) ([]byte, error) {
+	var b boundedStringBuilder
+	b.maxBytes = maxBytes
+	if err := b.WriteString("# Source Inventory\n\n"); err != nil {
+		return nil, err
+	}
+	if err := b.WriteString(fmt.Sprintf("- Tool: `%s %s`\n", inv.ToolName, inv.Version)); err != nil {
+		return nil, err
+	}
+	if err := b.WriteString(fmt.Sprintf("- Deck directory: `%s`\n", inv.DeckDir)); err != nil {
+		return nil, err
+	}
+	if err := b.WriteString(fmt.Sprintf("- Output directory: `%s`\n\n", inv.OutDir)); err != nil {
+		return nil, err
+	}
+	if err := b.WriteString("## Inputs\n\n"); err != nil {
+		return nil, err
+	}
 	for _, e := range inv.Inputs {
-		b.WriteString(fmt.Sprintf("- `%s` (%s, %d bytes, sha256 `%s`)\n", e.Path, e.Kind, e.Size, e.SHA256))
-	}
-	b.WriteString("\n## Existing Outputs\n\n")
-	for _, e := range inv.Outputs {
-		b.WriteString(fmt.Sprintf("- `%s` (%s, %d bytes, sha256 `%s`)\n", e.Path, e.Kind, e.Size, e.SHA256))
-	}
-	if len(inv.Warnings) > 0 {
-		b.WriteString("\n## Warnings\n\n")
-		for _, w := range inv.Warnings {
-			b.WriteString(fmt.Sprintf("- %s\n", w))
+		if err := b.WriteString(fmt.Sprintf("- `%s` (%s, %d bytes, sha256 `%s`)\n", e.Path, e.Kind, e.Size, e.SHA256)); err != nil {
+			return nil, err
 		}
 	}
-	return secureWriteFile(filepath.Join(inv.OutDir, "source_inventory.md"), []byte(b.String()), 0o644)
+	if err := b.WriteString("\n## Existing Outputs\n\n"); err != nil {
+		return nil, err
+	}
+	for _, e := range inv.Outputs {
+		if err := b.WriteString(fmt.Sprintf("- `%s` (%s, %d bytes, sha256 `%s`)\n", e.Path, e.Kind, e.Size, e.SHA256)); err != nil {
+			return nil, err
+		}
+	}
+	if len(inv.Warnings) > 0 {
+		if err := b.WriteString("\n## Warnings\n\n"); err != nil {
+			return nil, err
+		}
+		for _, w := range inv.Warnings {
+			if err := b.WriteString(fmt.Sprintf("- %s\n", w)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return []byte(b.String()), nil
+}
+
+type boundedStringBuilder struct {
+	b        strings.Builder
+	maxBytes int64
+}
+
+func (b *boundedStringBuilder) WriteString(s string) error {
+	if b.maxBytes > 0 {
+		size := int64(b.b.Len() + len(s))
+		if size > b.maxBytes {
+			return fmt.Errorf("source inventory exceeds maximum size: %d bytes > %d", size, b.maxBytes)
+		}
+	}
+	_, err := b.b.WriteString(s)
+	return err
+}
+
+func (b *boundedStringBuilder) String() string {
+	return b.b.String()
 }
 
 func runValidateSpec(args []string) error {
