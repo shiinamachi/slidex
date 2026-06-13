@@ -1464,6 +1464,69 @@ func TestRunIntakeRejectsEmptyAndPartialAnswers(t *testing.T) {
 	}
 }
 
+func TestRunIntakeRejectsOversizedAnswersFile(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("TODO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answers := filepath.Join(t.TempDir(), "answers.md")
+	f, err := os.Create(answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(answers, maxDeckMarkdownBytes+1); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runIntake([]string{"--deck", deck, "--answers", answers})
+	if err == nil || !strings.Contains(err.Error(), "file exceeds maximum allowed size") {
+		t.Fatalf("oversized answers should fail before validation, got %v", err)
+	}
+}
+
+func TestRunIntakeRejectsSymlinkAnswersFile(t *testing.T) {
+	root := repoRootForTest(t)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	deck := t.TempDir()
+	if err := os.WriteFile(filepath.Join(deck, "brief.md"), []byte("TODO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.md")
+	if err := os.WriteFile(target, []byte("valid-looking answers\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answers := filepath.Join(t.TempDir(), "answers.md")
+	if err := os.Symlink(target, answers); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+
+	err = runIntake([]string{"--deck", deck, "--answers", answers})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("symlink answers should fail before validation, got %v", err)
+	}
+}
+
 func TestMigrateDryRunNeverWritesWithoutWrite(t *testing.T) {
 	deck := filepath.Join(t.TempDir(), "deck")
 	if err := copyDir(filepath.Join(repoRootForTest(t), "fixtures", "minimal_deck"), deck); err != nil {

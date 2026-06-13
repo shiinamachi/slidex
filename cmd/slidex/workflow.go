@@ -5497,7 +5497,7 @@ func makeSpecSlide(id, role, headline, key string, body []string) map[string]any
 }
 
 func applyIntakeAnswers(deckAbs, answersPath string, questions []string) error {
-	raw, err := os.ReadFile(answersPath)
+	raw, err := readRegularFileWithMaxBytes(answersPath, maxDeckMarkdownBytes)
 	if err != nil {
 		return err
 	}
