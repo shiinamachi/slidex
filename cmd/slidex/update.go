@@ -1268,6 +1268,112 @@ func (b *updateArchiveExtractionBudget) reserveFile(name string, size int64) err
 	return nil
 }
 
+func (b *updateArchiveExtractionBudget) addCandidateTreeEntry(name string) error {
+	b.entries++
+	if b.maxEntries > 0 && b.entries > b.maxEntries {
+		return fmt.Errorf("candidate tree contains too many entries: %d > %d at %s", b.entries, b.maxEntries, name)
+	}
+	return nil
+}
+
+func (b *updateArchiveExtractionBudget) reserveCandidateTreeFile(name string, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("candidate tree file has negative size: %s", name)
+	}
+	if b.maxFileSize > 0 && size > b.maxFileSize {
+		return fmt.Errorf("candidate tree file exceeds maximum size: %s is %d bytes > %d", name, size, b.maxFileSize)
+	}
+	if b.maxTotal > 0 && b.total > b.maxTotal-size {
+		return fmt.Errorf("candidate tree exceeds maximum expanded size at %s: %d bytes > %d", name, b.total+size, b.maxTotal)
+	}
+	b.total += size
+	return nil
+}
+
+func validateLocalCandidateTree(root string) error {
+	return validateLocalCandidateTreeWithBudget(root, defaultUpdateArchiveExtractionBudget())
+}
+
+func validateLocalCandidateTreeWithBudget(root string, budget *updateArchiveExtractionBudget) error {
+	return walkLocalCandidateTreeWithBudget(root, budget, nil)
+}
+
+func copyLocalCandidateTreeWithBudget(src, dst string, budget *updateArchiveExtractionBudget) error {
+	cleanDst := filepath.Clean(dst)
+	return walkLocalCandidateTreeWithBudget(src, budget, func(path, rel string, info os.FileInfo) error {
+		target := cleanDst
+		if rel != "." {
+			target = filepath.Join(cleanDst, rel)
+		}
+		if !pathWithin(cleanDst, target) {
+			return fmt.Errorf("candidate tree copy target escapes staging root: %s", filepath.ToSlash(target))
+		}
+		if info.IsDir() {
+			mode := info.Mode().Perm()
+			if mode == 0 {
+				mode = 0o755
+			}
+			return ensureSecureDirMode(target, mode)
+		}
+		return copyFileWithMaxBytes(path, target, info.Size())
+	})
+}
+
+func walkLocalCandidateTreeWithBudget(root string, budget *updateArchiveExtractionBudget, visit func(path, rel string, info os.FileInfo) error) error {
+	if budget == nil {
+		budget = defaultUpdateArchiveExtractionBudget()
+	}
+	cleanRoot := filepath.Clean(root)
+	return filepath.WalkDir(cleanRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if isSymlinkOrReparsePoint(path, info) {
+			return fmt.Errorf("candidate tree must not contain symlinks or reparse points: %s", filepath.ToSlash(path))
+		}
+		rel, err := filepath.Rel(cleanRoot, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			if !info.IsDir() {
+				return fmt.Errorf("candidate root must be a directory: %s", filepath.ToSlash(cleanRoot))
+			}
+			if visit != nil {
+				return visit(path, rel, info)
+			}
+			return nil
+		}
+		name := filepath.ToSlash(rel)
+		if err := validateArchiveRelativePath(name); err != nil {
+			return fmt.Errorf("unsafe candidate tree path: %w", err)
+		}
+		if err := budget.addCandidateTreeEntry(name); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if visit != nil {
+				return visit(path, rel, info)
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("candidate tree contains unsupported file type: %s", name)
+		}
+		if err := budget.reserveCandidateTreeFile(name, info.Size()); err != nil {
+			return err
+		}
+		if visit != nil {
+			return visit(path, rel, info)
+		}
+		return nil
+	})
+}
+
 func extractReleaseArchive(archivePath, dest string) (string, error) {
 	switch {
 	case strings.HasSuffix(archivePath, ".zip"):
@@ -1888,7 +1994,8 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 		return "", err
 	}
 	destination := filepath.Join(activatorRoot, binary)
-	if err := copyFile(source, destination); err != nil {
+	if err := copyFileWithMaxBytes(source, destination, maxUpdateArchiveFileBytes); err != nil {
+		_ = os.RemoveAll(activatorRoot)
 		return "", err
 	}
 	if runtime.GOOS != "windows" {
@@ -2061,8 +2168,12 @@ func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind
 	base := filepath.Base(filepath.Clean(installRoot))
 	stamp := versionSegment + "-" + time.Now().UTC().Format("20060102T150405Z")
 	stagedRoot := filepath.Join(parent, "."+base+"."+kind+"-"+stamp)
+	if err := validateLocalCandidateTree(candidateRoot); err != nil {
+		return stagedRoot, err
+	}
 	_ = os.RemoveAll(stagedRoot)
-	if err := copyDir(candidateRoot, stagedRoot); err != nil {
+	if err := copyLocalCandidateTreeWithBudget(candidateRoot, stagedRoot, defaultUpdateArchiveExtractionBudget()); err != nil {
+		_ = os.RemoveAll(stagedRoot)
 		return stagedRoot, err
 	}
 	return stagedRoot, nil

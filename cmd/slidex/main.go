@@ -6383,6 +6383,10 @@ func writeSourceJSONFile(path string, v any) error {
 }
 
 func copyFile(src, dst string) error {
+	return copyFileWithMaxBytes(src, dst, -1)
+}
+
+func copyFileWithMaxBytes(src, dst string, maxBytes int64) error {
 	srcInfo, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -6407,6 +6411,9 @@ func copyFile(src, dst string) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("copy source must be a regular file: %s", filepath.ToSlash(src))
+	}
+	if maxBytes >= 0 && info.Size() > maxBytes {
+		return fmt.Errorf("copy source exceeds maximum size: %s is %d bytes > %d", filepath.ToSlash(src), info.Size(), maxBytes)
 	}
 	if err := rejectSymlinkAncestors(filepath.Dir(dst)); err != nil {
 		return err
@@ -6441,9 +6448,21 @@ func copyFile(src, dst string) error {
 		_ = tmp.Close()
 		return err
 	}
-	if _, err := io.Copy(tmp, in); err != nil {
-		_ = tmp.Close()
-		return err
+	if maxBytes >= 0 {
+		copied, err := io.Copy(tmp, io.LimitReader(in, maxBytes+1))
+		if err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if copied > maxBytes {
+			_ = tmp.Close()
+			return fmt.Errorf("copy source exceeds maximum size: %s is greater than %d bytes", filepath.ToSlash(src), maxBytes)
+		}
+	} else {
+		if _, err := io.Copy(tmp, in); err != nil {
+			_ = tmp.Close()
+			return err
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		return err

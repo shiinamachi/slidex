@@ -1246,6 +1246,56 @@ func TestApplyCandidateBundleFailsForInvalidCandidate(t *testing.T) {
 	}
 }
 
+func TestValidateLocalCandidateTreeRejectsTotalBudget(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "first.txt"), []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "second.txt"), []byte("67890"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	budget := &updateArchiveExtractionBudget{
+		maxEntries:  10,
+		maxFileSize: 10,
+		maxTotal:    8,
+	}
+
+	err := validateLocalCandidateTreeWithBudget(root, budget)
+	if err == nil || !strings.Contains(err.Error(), "candidate tree exceeds maximum expanded size") {
+		t.Fatalf("expected candidate tree total budget error, got %v", err)
+	}
+}
+
+func TestCopyCandidateToSiblingStageRejectsOversizedLocalCandidate(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	candidate := filepath.Join(parent, "candidate")
+	if err := os.MkdirAll(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	large := filepath.Join(candidate, "large.bin")
+	f, err := os.Create(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(large, maxUpdateArchiveFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+
+	stagedRoot, err := copyCandidateToSiblingStage(installRoot, candidate, "1.2.3", "staged")
+	if err == nil || !strings.Contains(err.Error(), "candidate tree file exceeds maximum size") {
+		t.Fatalf("expected candidate tree file budget error, got %v", err)
+	}
+	if stagedRoot != "" {
+		if _, statErr := os.Stat(stagedRoot); !os.IsNotExist(statErr) {
+			t.Fatalf("oversized candidate should not leave staged root, stat err=%v", statErr)
+		}
+	}
+}
+
 func TestApplyCandidateBundleRejectsTargetVersionChannelSwitch(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
