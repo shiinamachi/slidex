@@ -3382,6 +3382,18 @@ func TestPackageReleaseRejectsUnsafeDistDirsBeforeDeleting(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	symlinkTarget := filepath.Join(t.TempDir(), "symlink-target")
+	if err := os.MkdirAll(symlinkTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkSentinel := filepath.Join(symlinkTarget, "sentinel.txt")
+	if err := os.WriteFile(symlinkSentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkDist := filepath.Join(t.TempDir(), "dist-link")
+	if err := os.Symlink(symlinkTarget, symlinkDist); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -3389,7 +3401,9 @@ func TestPackageReleaseRejectsUnsafeDistDirsBeforeDeleting(t *testing.T) {
 		want string
 	}{
 		{name: "repo-root", dist: root, want: "refusing dangerous release dist dir"},
+		{name: "repo-root-alias", dist: filepath.Join(root, "dist", ".."), want: "refusing dangerous release dist dir"},
 		{name: "unmarked-non-empty", dist: nonEmptyDist, want: "refusing to clean unmarked non-empty release dist dir"},
+		{name: "symlinked-dist", dist: symlinkDist, want: "refusing symlinked release dist dir"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(root, "scripts", "package-release.sh"))
@@ -3417,6 +3431,12 @@ func TestPackageReleaseRejectsUnsafeDistDirsBeforeDeleting(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "keep" {
 		t.Fatalf("unmarked dist sentinel should remain, raw=%q err=%v", raw, err)
+	}
+	if raw, err := os.ReadFile(symlinkSentinel); err != nil || string(raw) != "keep" {
+		t.Fatalf("symlink target sentinel should remain, raw=%q err=%v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(symlinkTarget, ".slidex-dist")); !os.IsNotExist(err) {
+		t.Fatalf("symlink target must not receive marker, err=%v", err)
 	}
 }
 

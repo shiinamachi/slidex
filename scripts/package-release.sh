@@ -70,7 +70,7 @@ prepare_dist_dir() {
   local parent leaf parent_abs dist_abs repo_abs repo_parent home_abs
   parent="$(dirname -- "$requested")"
   leaf="$(basename -- "$requested")"
-  if [[ -z "$leaf" || "$leaf" == "/" || "$leaf" == "." ]]; then
+  if [[ -z "$leaf" || "$leaf" == "/" || "$leaf" == "." || "$leaf" == ".." ]]; then
     printf 'refusing dangerous release dist dir: %s\n' "$requested" >&2
     return 2
   fi
@@ -89,23 +89,35 @@ prepare_dist_dir() {
     printf 'refusing dangerous release dist dir: %s\n' "$dist_abs" >&2
     return 2
   fi
+  if [[ -L "$dist_abs" ]]; then
+    printf 'refusing symlinked release dist dir: %s\n' "$dist_abs" >&2
+    return 2
+  fi
   if [[ -e "$dist_abs" && ! -d "$dist_abs" ]]; then
     printf 'release dist path is not a directory: %s\n' "$dist_abs" >&2
     return 2
   fi
-
-  if [[ -d "$dist_abs" ]]; then
-    if [[ ! -e "$dist_abs/.slidex-dist" && -n "$(find "$dist_abs" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-      printf 'refusing to clean unmarked non-empty release dist dir: %s\n' "$dist_abs" >&2
-      return 2
-    fi
-  else
+  if [[ ! -e "$dist_abs" ]]; then
     mkdir -p "$dist_abs"
   fi
 
-  : > "$dist_abs/.slidex-dist"
-  find "$dist_abs" -mindepth 1 -maxdepth 1 ! -name .slidex-dist -exec rm -rf -- {} +
-  printf '%s\n' "$dist_abs"
+  local dist_real
+  dist_real="$(cd "$dist_abs" && pwd -P)"
+  if [[ "$dist_real" == "/" || "$dist_real" == "$repo_abs" || "$dist_real" == "$repo_parent" || ( -n "$home_abs" && "$dist_real" == "$home_abs" ) ]]; then
+    printf 'refusing dangerous release dist dir: %s\n' "$dist_real" >&2
+    return 2
+  fi
+
+  if [[ -d "$dist_real" ]]; then
+    if [[ ! -e "$dist_real/.slidex-dist" && -n "$(find "$dist_real" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      printf 'refusing to clean unmarked non-empty release dist dir: %s\n' "$dist_real" >&2
+      return 2
+    fi
+  fi
+
+  : > "$dist_real/.slidex-dist"
+  find "$dist_real" -mindepth 1 -maxdepth 1 ! -name .slidex-dist -exec rm -rf -- {} +
+  printf '%s\n' "$dist_real"
 }
 
 runtime_paths=(

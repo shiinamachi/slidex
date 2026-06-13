@@ -306,14 +306,28 @@ func (c *appServerClient) scanStdoutWithMaxLineBytes(stdout io.Reader, maxLineBy
 			continue
 		}
 		var msg map[string]any
-		if json.Unmarshal([]byte(line), &msg) == nil {
-			c.lines <- msg
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			c.setProtocolErr(fmt.Errorf("app-server stdout protocol error: invalid JSON-RPC frame %q: %w", appServerStdoutFrameExcerpt(line), err))
+			break
 		}
+		if msg == nil {
+			c.setProtocolErr(fmt.Errorf("app-server stdout protocol error: invalid JSON-RPC frame %q: decoded frame is not a JSON object", appServerStdoutFrameExcerpt(line)))
+			break
+		}
+		c.lines <- msg
 	}
 	if err := scanner.Err(); err != nil {
 		c.setProtocolErr(fmt.Errorf("app-server stdout scan failed: %w", err))
 	}
 	close(c.lines)
+}
+
+func appServerStdoutFrameExcerpt(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) <= 512 {
+		return line
+	}
+	return line[:512] + "...[truncated]"
 }
 
 func (c *appServerClient) setProtocolErr(err error) {

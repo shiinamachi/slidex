@@ -2947,6 +2947,40 @@ func TestDistributionPipelineFilesExposeReleaseInstallPath(t *testing.T) {
 	}
 }
 
+func TestUnixShellEntrypointsUseLFAndParse(t *testing.T) {
+	root := repoRootForTest(t)
+	attrs := readFileOrEmpty(filepath.Join(root, ".gitattributes"))
+	if !strings.Contains(attrs, "*.sh text eol=lf") {
+		t.Fatal(".gitattributes must pin Unix shell scripts to LF")
+	}
+	out, err := exec.Command("git", "-C", root, "ls-files", "*.sh").Output()
+	if err != nil {
+		t.Fatalf("list tracked shell scripts: %v", err)
+	}
+	paths := strings.Fields(string(out))
+	if len(paths) == 0 {
+		t.Fatal("expected tracked shell scripts")
+	}
+	for _, rel := range paths {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte{'\r'}) {
+			t.Fatalf("%s must use LF line endings", rel)
+		}
+		if runtime.GOOS == "windows" {
+			continue
+		}
+		cmd := exec.Command("bash", "-n", path)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s must parse with bash -n: %v\n%s", rel, err, out)
+		}
+	}
+}
+
 func TestJavascriptWorkspacePinsAndWorkbenchAssetsSatisfyDoctor(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

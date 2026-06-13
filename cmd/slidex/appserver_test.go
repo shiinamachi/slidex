@@ -32,6 +32,47 @@ func TestAppServerScanStdoutRejectsOversizedLine(t *testing.T) {
 	}
 }
 
+func TestAppServerScanStdoutRejectsMalformedFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{name: "malformed-json", input: "{not-json}\n{\"id\":1,\"result\":{\"ok\":true}}\n"},
+		{name: "array-root", input: "[]\n"},
+		{name: "scalar-root", input: "42\n"},
+		{name: "null-root", input: "null\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newAppServerClientState()
+			client.scanStdoutWithMaxLineBytes(strings.NewReader(tc.input), 1024)
+			if err := client.protocolError(); err == nil || !strings.Contains(err.Error(), "invalid JSON-RPC frame") {
+				t.Fatalf("expected invalid frame protocol error, got %v", err)
+			}
+			if msg, ok := <-client.lines; ok {
+				t.Fatalf("malformed frame should close stdout before forwarding messages: %#v", msg)
+			}
+		})
+	}
+}
+
+func TestAppServerScanStdoutIgnoresWhitespaceOnlyLines(t *testing.T) {
+	client := newAppServerClientState()
+	client.scanStdoutWithMaxLineBytes(strings.NewReader(" \n\t\n{\"id\":1,\"result\":{\"ok\":true}}\n"), 1024)
+	if err := client.protocolError(); err != nil {
+		t.Fatalf("whitespace-only stdout should be ignored: %v", err)
+	}
+	msg, ok := <-client.lines
+	if !ok {
+		t.Fatal("expected valid JSON-RPC frame after whitespace")
+	}
+	if id, ok := numberAsInt(msg["id"]); !ok || id != 1 {
+		t.Fatalf("message id = %#v", msg["id"])
+	}
+	if msg, ok := <-client.lines; ok {
+		t.Fatalf("expected stdout channel to close after one frame, got %#v", msg)
+	}
+}
+
 func TestAppServerNotificationCollectorRejectsTooManyNotifications(t *testing.T) {
 	collector := newAppServerNotificationCollector(1, 1024)
 	if err := collector.append(map[string]any{"method": "first"}); err != nil {
