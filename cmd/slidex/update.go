@@ -2093,7 +2093,7 @@ func pendingActivationCommand(activatorPath, installRoot string) string {
 	}
 	args := []string{"update", "activate-pending", "--install-root", filepath.ToSlash(installRoot), "--yes", "--json"}
 	if runtime.GOOS == "windows" {
-		return windowsPowerShellCommandInDir(workDir, command, args...)
+		return windowsPowerShellInlineCommandInDir(workDir, command, args...)
 	}
 	return shellQuoteCommand(append([]string{command}, args...))
 }

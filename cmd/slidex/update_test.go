@@ -3530,6 +3530,41 @@ func main() {
 	}
 }
 
+func writeCandidateBinaryForTestWithCwdSentinel(t *testing.T, path, version, sentinel string) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	code := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(` + fmt.Sprintf("%q", sentinel) + `, []byte(wd), 0o600); err != nil {
+		panic(err)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("slidex ` + version + `")
+		return
+	}
+	fmt.Println("slidex ` + version + `")
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("candidate test binary build failed: %v\n%s", err, out)
+	}
+}
+
 func readInstallMetadataFromTarGzForTest(t *testing.T, path, wantName string) installMetadata {
 	t.Helper()
 	f, err := os.Open(path)

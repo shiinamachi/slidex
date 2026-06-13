@@ -1368,6 +1368,12 @@ func windowsPowerShellCommand(name string, args ...string) string {
 }
 
 func windowsPowerShellCommandInDir(workDir, name string, args ...string) string {
+	script := windowsPowerShellInlineCommandInDir(workDir, name, args...)
+	script += "; exit $LASTEXITCODE"
+	return "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + windowsPowerShellEncodedCommand(script)
+}
+
+func windowsPowerShellInlineCommandInDir(workDir, name string, args ...string) string {
 	var script strings.Builder
 	script.WriteString("$ErrorActionPreference='Stop'; ")
 	if strings.TrimSpace(workDir) != "" {
@@ -1381,8 +1387,7 @@ func windowsPowerShellCommandInDir(workDir, name string, args ...string) string 
 		script.WriteByte(' ')
 		script.WriteString(powershellSingleQuote(arg))
 	}
-	script.WriteString("; exit $LASTEXITCODE")
-	return "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + windowsPowerShellEncodedCommand(script.String())
+	return script.String()
 }
 
 func powershellSingleQuote(s string) string {

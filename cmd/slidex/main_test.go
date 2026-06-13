@@ -2436,6 +2436,14 @@ func TestAppServerSkillSmokeHelpers(t *testing.T) {
 	if !strings.Contains(windowsScriptWithDir, wantWindowsScriptWithDir) {
 		t.Fatalf("decoded windows command should set working directory before invocation:\n%s", windowsScriptWithDir)
 	}
+	windowsInlineCommandWithDir := windowsPowerShellInlineCommandInDir(`C:\Safe Root`, `C:\Tools\slidex.exe`, "version")
+	wantWindowsInlineCommandWithDir := "$ErrorActionPreference='Stop'; Set-Location -LiteralPath 'C:\\Safe Root'; & 'C:\\Tools\\slidex.exe' 'version'"
+	if windowsInlineCommandWithDir != wantWindowsInlineCommandWithDir {
+		t.Fatalf("inline windows command = %s, want %s", windowsInlineCommandWithDir, wantWindowsInlineCommandWithDir)
+	}
+	if strings.Contains(windowsInlineCommandWithDir, "powershell.exe") || strings.Contains(windowsInlineCommandWithDir, "-EncodedCommand") {
+		t.Fatalf("inline windows command should not spawn a child PowerShell: %s", windowsInlineCommandWithDir)
+	}
 	prompt := appServerSkillSmokePrompt("/tmp/slidex workspace", "demo", command)
 	if !strings.Contains(prompt, "Do not run render, QA, package") {
 		t.Fatalf("prompt must keep skill smoke scoped: %s", prompt)

@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +26,8 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 
 	candidate := filepath.Join(parent, "candidate")
 	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	activatorCwdSentinel := filepath.Join(parent, "activator-cwd.txt")
+	writeCandidateBinaryForTestWithCwdSentinel(t, filepath.Join(candidate, "slidex.exe"), "0.2.0", activatorCwdSentinel)
 	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
 	if err != nil {
 		t.Fatal(err)
@@ -77,18 +80,29 @@ func TestApplyCandidateBundleStagesPendingHandoffWindows(t *testing.T) {
 	if !status.PendingActivation || status.PendingActivationCommand == "" || !strings.Contains(status.PendingActivationCommand, "slidex.exe") {
 		t.Fatalf("pending activation status missing command: %#v", status)
 	}
-	if !strings.HasPrefix(status.PendingActivationCommand, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ") {
-		t.Fatalf("pending activation command should use encoded PowerShell: %s", status.PendingActivationCommand)
+	if strings.Contains(status.PendingActivationCommand, "-EncodedCommand") || strings.HasPrefix(strings.ToLower(status.PendingActivationCommand), "powershell.exe ") {
+		t.Fatalf("pending activation command should run in the caller PowerShell session: %s", status.PendingActivationCommand)
 	}
-	script := decodeWindowsPowerShellCommandForTest(t, status.PendingActivationCommand)
 	location := "Set-Location -LiteralPath " + powershellSingleQuote(filepath.ToSlash(activatorRoot)) + "; & "
-	if !strings.Contains(script, location) {
-		t.Fatalf("pending activation command should run from activator root before invocation:\n%s", script)
+	if !strings.Contains(status.PendingActivationCommand, location) {
+		t.Fatalf("pending activation command should move the caller session to activator root before invocation:\n%s", status.PendingActivationCommand)
 	}
-	if !strings.Contains(script, "& "+powershellSingleQuote(filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath)))) {
-		t.Fatalf("pending activation command should invoke activator with PowerShell call operator:\n%s", script)
+	if !strings.Contains(status.PendingActivationCommand, "& "+powershellSingleQuote(filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath)))) {
+		t.Fatalf("pending activation command should invoke activator with PowerShell call operator:\n%s", status.PendingActivationCommand)
 	}
-	if !strings.Contains(script, powershellSingleQuote(filepath.ToSlash(installRoot))) {
-		t.Fatalf("pending activation command should quote install root with spaces:\n%s", script)
+	if !strings.Contains(status.PendingActivationCommand, powershellSingleQuote(filepath.ToSlash(installRoot))) {
+		t.Fatalf("pending activation command should quote install root with spaces:\n%s", status.PendingActivationCommand)
+	}
+	if _, err := exec.LookPath("powershell.exe"); err != nil {
+		t.Skipf("powershell.exe unavailable: %v", err)
+	}
+	run := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", status.PendingActivationCommand)
+	run.Dir = filepath.Join(installRoot, ".slidex")
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("pending activation command should launch activator from install-root child cwd: %v\n%s", err, out)
+	}
+	gotCwd := strings.TrimSpace(readFileOrEmpty(activatorCwdSentinel))
+	if !sameFilesystemPath(gotCwd, activatorRoot) {
+		t.Fatalf("activator cwd = %s, want %s", gotCwd, activatorRoot)
 	}
 }
