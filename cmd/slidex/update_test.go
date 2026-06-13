@@ -71,9 +71,10 @@ func TestChannelFromPackageVersionOnlyAcceptsStableAndCanary(t *testing.T) {
 
 func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	temp := t.TempDir()
-	productionMeta := filepath.Join(temp, "production.json")
+	productionRoot := filepath.Join(temp, "prod-root")
+	productionMeta := installMetadataPath(productionRoot)
 	writeInstallMetadataForTest(t, productionMeta, releaseInstallMetadataForTest(t, toolVersion))
-	status, err := currentUpdateStatus(filepath.Join(temp, "prod-root"), productionMeta)
+	status, err := currentUpdateStatus(productionRoot, productionMeta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,9 +82,10 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 		t.Fatalf("production status = %#v", status)
 	}
 
-	canaryMeta := filepath.Join(temp, "canary.json")
+	canaryRoot := filepath.Join(temp, "canary-root")
+	canaryMeta := installMetadataPath(canaryRoot)
 	writeInstallMetadataForTest(t, canaryMeta, releaseInstallMetadataForTest(t, toolVersion+"-canary.20260610010000"))
-	status, err = currentUpdateStatus(filepath.Join(temp, "canary-root"), canaryMeta)
+	status, err = currentUpdateStatus(canaryRoot, canaryMeta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +116,7 @@ func TestUpdateStatusDetectsImmutableChannelsAndLocalDevelopment(t *testing.T) {
 	}
 }
 
-func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T) {
+func TestUpdateStatusDisablesWhenMetadataRootIsStale(t *testing.T) {
 	temp := t.TempDir()
 	installRoot := filepath.Join(temp, "active")
 	staleRoot := filepath.Join(temp, "old")
@@ -133,8 +135,29 @@ func TestUpdateStatusUsesResolvedInstallRootWhenMetadataRootIsStale(t *testing.T
 	if status.InstalledMetadata == nil || status.InstalledMetadata.InstallRoot != filepath.ToSlash(staleRoot) {
 		t.Fatalf("installed metadata should remain visible for drift evidence: %#v", status.InstalledMetadata)
 	}
-	if !strings.Contains(status.Reason, "different install root") {
+	if status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled || status.Status != "disabled" {
+		t.Fatalf("stale metadata root should disable updates: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "update is disabled fail-closed") || !strings.Contains(status.Reason, "different install root") {
 		t.Fatalf("stale metadata root reason missing: %#v", status)
+	}
+}
+
+func TestUpdateStatusDisablesReleaseMetadataOutsideInstallRoot(t *testing.T) {
+	temp := t.TempDir()
+	installRoot := filepath.Join(temp, "slidex")
+	metadataPath := filepath.Join(temp, "external-install.json")
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled || status.Status != "disabled" {
+		t.Fatalf("out-of-tree release metadata should disable updates: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "metadata path must be") || !strings.Contains(status.Reason, "update is disabled fail-closed") {
+		t.Fatalf("out-of-tree metadata reason missing: %#v", status)
 	}
 }
 
@@ -2439,6 +2462,29 @@ func TestUpdateApplyRejectsLocalDevelopmentStatus(t *testing.T) {
 	err := runUpdateApply([]string{"--install-root", sourceRoot, "--metadata", filepath.Join(sourceRoot, ".slidex", "missing.json"), "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
 	if err == nil || !strings.Contains(err.Error(), "updates are disabled") {
 		t.Fatalf("local-development apply err = %v", err)
+	}
+}
+
+func TestUpdateApplyRejectsReleaseMetadataOutsideInstallRoot(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(parent, "external-install.json")
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	err := runUpdateApply([]string{"--install-root", installRoot, "--metadata", metadataPath, "--candidate", candidate, "--target-version", "0.2.0", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), "updates are disabled") {
+		t.Fatalf("out-of-tree metadata apply err = %v", err)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("out-of-tree metadata should not activate candidate, VERSION = %q", got)
 	}
 }
 

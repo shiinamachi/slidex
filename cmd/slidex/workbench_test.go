@@ -1785,6 +1785,33 @@ func TestWorkbenchAutoUpdatePreflightLocalDevelopmentContinuesWithoutFetch(t *te
 	}
 }
 
+func TestWorkbenchAutoUpdatePreflightDisablesExternalReleaseMetadata(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(parent, "external-install.json")
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	t.Setenv(updateInstallRootEnv, installRoot)
+	t.Setenv(updateInstallMetadataEnv, metadataPath)
+	var called bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "should not fetch release metadata for unbound metadata", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	t.Setenv(updateAPIURLEnv, server.URL)
+
+	result := runWorkbenchAutoUpdatePreflight(context.Background())
+	if result.Status != "disabled" || !result.ContinueToWorkbench || result.BlocksWorkbench {
+		t.Fatalf("unbound release metadata should disable auto-update without blocking workbench: %#v", result)
+	}
+	if called {
+		t.Fatal("unbound release metadata should not fetch release metadata")
+	}
+}
+
 func TestMCPWorkbenchStartAutoAppliesReleaseUpdateBeforeWizard(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")

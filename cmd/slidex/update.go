@@ -294,6 +294,43 @@ func resolveUpdateMetadataPath(installRoot, metadataPathArg string) string {
 	return metadataPath
 }
 
+func canonicalUpdateMetadataPath(path string) (string, error) {
+	path = filepath.Clean(filepath.FromSlash(strings.TrimSpace(path)))
+	if path == "" || path == "." {
+		return "", errors.New("install metadata path is required")
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	} else if os.IsNotExist(err) {
+		parent := filepath.Dir(path)
+		suffix := filepath.Base(path)
+		for {
+			if resolvedParent, parentErr := filepath.EvalSymlinks(parent); parentErr == nil {
+				path = filepath.Join(resolvedParent, suffix)
+				break
+			} else if !os.IsNotExist(parentErr) {
+				return "", parentErr
+			}
+			nextParent := filepath.Dir(parent)
+			if nextParent == parent {
+				return "", err
+			}
+			suffix = filepath.Join(filepath.Base(parent), suffix)
+			parent = nextParent
+		}
+	} else {
+		return "", err
+	}
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path, nil
+}
+
 func acquireUpdateInstallLock(installRoot string) (func(), error) {
 	_, unlock, err := acquireCanonicalUpdateInstallLock(installRoot)
 	return unlock, err
@@ -767,6 +804,10 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 			channel = updateChannelLocalDevelopment
 			mode = firstNonEmpty(metadata.InstallMode, installModeUnknown)
 			reason = "install metadata is inconsistent; update is disabled fail-closed: " + issue
+		} else if issue := installedReleaseMetadataBindingIssue(installRoot, metadataPath, metadata); issue != "" {
+			channel = updateChannelLocalDevelopment
+			mode = firstNonEmpty(metadata.InstallMode, installModeUnknown)
+			reason = "install metadata is not bound to the resolved install root; update is disabled fail-closed: " + issue
 		}
 	}
 	state, statePath, stateErr := readUpdateState(installRoot)
@@ -791,7 +832,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 			status.CurrentVersion = metadata.Version
 		}
 		if metadata.InstallRoot != "" && !sameFilesystemPath(metadata.InstallRoot, installRoot) {
-			status.Reason = appendReason(status.Reason, "install metadata records a different install root "+filepath.ToSlash(metadata.InstallRoot)+"; using resolved install root "+filepath.ToSlash(installRoot))
+			status.Reason = appendReason(status.Reason, "install metadata records a different install root "+filepath.ToSlash(metadata.InstallRoot)+"; resolved install root is "+filepath.ToSlash(installRoot))
 		}
 	}
 	if !status.UpdatesEnabled {
@@ -2770,6 +2811,30 @@ func installedReleaseMetadataIssue(metadata *installMetadata) string {
 	}
 	if err := validateInstallMetadataSchema(metadata); err != nil {
 		return "install metadata schema validation failed: " + err.Error()
+	}
+	return ""
+}
+
+func installedReleaseMetadataBindingIssue(installRoot, metadataPath string, metadata *installMetadata) string {
+	expectedPath, err := canonicalUpdateMetadataPath(installMetadataPath(installRoot))
+	if err != nil {
+		return "canonical install metadata path could not be resolved: " + err.Error()
+	}
+	actualPath, err := canonicalUpdateMetadataPath(metadataPath)
+	if err != nil {
+		return "install metadata path could not be resolved: " + err.Error()
+	}
+	if !sameFilesystemPath(actualPath, expectedPath) {
+		return "install metadata path must be " + filepath.ToSlash(expectedPath) + ", got " + filepath.ToSlash(actualPath)
+	}
+	if metadata != nil && strings.TrimSpace(metadata.InstallRoot) != "" {
+		recordedRoot, err := canonicalUpdateInstallRoot(filepath.FromSlash(metadata.InstallRoot))
+		if err != nil {
+			return "install metadata installRoot could not be resolved: " + err.Error()
+		}
+		if !sameFilesystemPath(recordedRoot, installRoot) {
+			return "install metadata records a different install root " + filepath.ToSlash(recordedRoot) + "; resolved install root is " + filepath.ToSlash(installRoot)
+		}
 	}
 	return ""
 }
