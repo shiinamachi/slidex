@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -130,7 +131,7 @@ func TestWriteAppServerMetadataPreservesWebSocketAuthPaths(t *testing.T) {
 	}
 }
 
-func TestPrepareManagedAppServerOutputDiscardsChildStreams(t *testing.T) {
+func TestPrepareManagedAppServerOutputCapturesBoundedStartupStreams(t *testing.T) {
 	dir := t.TempDir()
 	stdoutPath := filepath.Join(dir, "codex-app-server.stdout.log")
 	stderrPath := filepath.Join(dir, "codex-app-server.stderr.log")
@@ -138,26 +139,84 @@ func TestPrepareManagedAppServerOutputDiscardsChildStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdout.Close()
-	defer stderr.Close()
 
-	if _, err := io.WriteString(stdout, strings.Repeat("o", 1024)); err != nil {
+	if _, err := io.WriteString(stdout, "stdout startup evidence\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(stderr, strings.Repeat("e", 1024)); err != nil {
+	if _, err := io.WriteString(stderr, "stderr startup evidence\n"); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{stdoutPath, stderrPath} {
-		raw, err := os.ReadFile(path)
+	if err := stdout.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stderr.flush(); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		path string
+		want string
+	}{
+		{stdoutPath, "stdout startup evidence"},
+		{stderrPath, "stderr startup evidence"},
+	} {
+		raw, err := os.ReadFile(item.path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(raw), "discarded to avoid unbounded log growth") {
-			t.Fatalf("managed log placeholder missing in %s: %q", path, raw)
+		if !strings.Contains(string(raw), item.want) {
+			t.Fatalf("managed startup log missing in %s: %q", item.path, raw)
 		}
 		if len(raw) > 256 {
-			t.Fatalf("managed log placeholder should remain small, got %d bytes", len(raw))
+			t.Fatalf("managed startup log should remain small, got %d bytes", len(raw))
 		}
+	}
+}
+
+func TestStartManagedAppServerCleansMetadataWhenChildExits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake executable script is POSIX-specific")
+	}
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  --version)
+    echo "codex-cli 0.138.0"
+    exit 0
+    ;;
+  app-server)
+    echo "fake app-server bind failed" >&2
+    exit 12
+    ;;
+esac
+echo "unexpected fake codex invocation: $*" >&2
+exit 13
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	runtimeDir := filepath.Join(root, "runtime")
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+
+	err := startManagedAppServer("ws://127.0.0.1:1/app", "", webSocketAuthConfig{}, false)
+	if err == nil || !strings.Contains(err.Error(), "exited before readiness") {
+		t.Fatalf("expected early-exit readiness failure, got %v", err)
+	}
+	if _, statErr := os.Stat(appServerMetadataPath()); !os.IsNotExist(statErr) {
+		t.Fatalf("metadata should not remain after failed start, stat err=%v", statErr)
+	}
+	raw, readErr := os.ReadFile(filepath.Join(runtimeDir, "slidex", "codex-app-server.stderr.log"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(raw), "fake app-server bind failed") {
+		t.Fatalf("startup stderr was not captured: %q", raw)
 	}
 }
 

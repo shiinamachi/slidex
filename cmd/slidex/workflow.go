@@ -2509,8 +2509,10 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 	if err != nil {
 		return err
 	}
-	defer stdout.Close()
-	defer stderr.Close()
+	defer func() {
+		_ = stdout.flush()
+		_ = stderr.flush()
+	}()
 	args := []string{"app-server", "--listen", actualListen}
 	if ws.Mode != "" {
 		args = append(args, "--ws-auth", ws.Mode)
@@ -2542,10 +2544,21 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 		return err
 	}
 	startedPID := cmd.Process.Pid
+	exitCh := make(chan error, 1)
+	go func() {
+		exitCh <- cmd.Wait()
+	}()
 	startCommitted := false
+	childExitedBeforeCommit := false
+	metadataInstalled := false
 	defer func() {
 		if !startCommitted {
-			terminateManagedProcess(startedPID, 2*time.Second)
+			if !childExitedBeforeCommit {
+				terminateManagedProcess(startedPID, 2*time.Second)
+			}
+			if metadataInstalled {
+				_ = os.Remove(metaPath)
+			}
 		}
 	}()
 	decks := []string{}
@@ -2570,9 +2583,20 @@ func startManagedAppServer(listen, deck string, ws webSocketAuthConfig, force bo
 		"stopPolicy":      map[string]any{"gracefulSignal": "interrupt", "forceSignal": "kill", "gracePeriodSeconds": 5},
 	}
 	addManagedAppServerProcessIdentity(metadata, cmd)
+	health, childExited, err := waitForManagedAppServerReady(actualListen, ws, exitCh, 10*time.Second)
+	if health != nil {
+		metadata["health"] = health
+	}
+	if err != nil {
+		if childExited {
+			childExitedBeforeCommit = true
+		}
+		return err
+	}
 	if err := writeAppServerMetadata(metaPath, metadata); err != nil {
 		return err
 	}
+	metadataInstalled = true
 	if risk := transportRiskForListen(actualListen); risk != "" && deck != "" {
 		if err := recordWebSocketTransportRisk(mustAbs(deck), risk, metaPath); err != nil {
 			return err
@@ -2586,31 +2610,116 @@ func writeAppServerMetadata(path string, metadata map[string]any) error {
 	return writeJSONFile(path, metadata)
 }
 
-func prepareManagedAppServerOutput(stdoutPath, stderrPath string) (*os.File, *os.File, error) {
+func waitForManagedAppServerReady(listen string, ws webSocketAuthConfig, exitCh <-chan error, timeout time.Duration) (map[string]any, bool, error) {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	var lastHealth map[string]any
+	var lastErr error
+	for {
+		select {
+		case err := <-exitCh:
+			return lastHealth, true, fmt.Errorf("managed app-server exited before readiness: %s", managedAppServerExitError(err))
+		default:
+		}
+		health, err := probeManagedAppServerListen(listen, ws)
+		lastHealth = health
+		lastErr = err
+		if err == nil {
+			if status, _ := health["status"].(string); status == "pass" {
+				return health, false, nil
+			}
+		}
+		select {
+		case err := <-exitCh:
+			return lastHealth, true, fmt.Errorf("managed app-server exited before readiness: %s", managedAppServerExitError(err))
+		case <-deadline.C:
+			return lastHealth, false, fmt.Errorf("managed app-server did not become ready on %s: %s", listen, managedAppServerReadinessFailure(lastHealth, lastErr))
+		case <-ticker.C:
+		}
+	}
+}
+
+func managedAppServerExitError(err error) string {
+	if err == nil {
+		return "process exited"
+	}
+	return err.Error()
+}
+
+func managedAppServerReadinessFailure(health map[string]any, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	if status, _ := health["status"].(string); status != "" {
+		return "health status " + status
+	}
+	return "health probe did not pass"
+}
+
+func probeManagedAppServerListen(listen string, ws webSocketAuthConfig) (map[string]any, error) {
+	if isWebSocketListen(listen) {
+		return probeWebSocketAppServerWithPolicy(listen, ws, webSocketProbePolicy{InitialDelay: 100 * time.Millisecond, MaxDelay: 250 * time.Millisecond, MaxAttempts: 1, PingTimeout: 750 * time.Millisecond}), nil
+	}
+	return probeManagedAppServer(map[string]any{"listen": listen, "websocketAuth": ws})
+}
+
+type managedAppServerOutputCapture struct {
+	path   string
+	stream string
+	buffer *synchronizedLimitedBuffer
+}
+
+func prepareManagedAppServerOutput(stdoutPath, stderrPath string) (*managedAppServerOutputCapture, *managedAppServerOutputCapture, error) {
 	if err := writeManagedAppServerLogPlaceholder(stdoutPath, "stdout"); err != nil {
 		return nil, nil, err
 	}
 	if err := writeManagedAppServerLogPlaceholder(stderrPath, "stderr"); err != nil {
 		return nil, nil, err
 	}
-	stdout, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return nil, nil, err
+	return newManagedAppServerOutputCapture(stdoutPath, "stdout"), newManagedAppServerOutputCapture(stderrPath, "stderr"), nil
+}
+
+func newManagedAppServerOutputCapture(path, stream string) *managedAppServerOutputCapture {
+	return &managedAppServerOutputCapture{
+		path:   path,
+		stream: stream,
+		buffer: newSynchronizedLimitedBuffer(maxAppServerStderrBytes),
 	}
-	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		_ = stdout.Close()
-		return nil, nil, err
+}
+
+func (c *managedAppServerOutputCapture) Write(p []byte) (int, error) {
+	if c == nil || c.buffer == nil {
+		return len(p), nil
 	}
-	return stdout, stderr, nil
+	return c.buffer.Write(p)
+}
+
+func (c *managedAppServerOutputCapture) flush() error {
+	if c == nil {
+		return nil
+	}
+	text := c.buffer.String("managed app-server " + c.stream)
+	if strings.TrimSpace(text) == "" {
+		text = fmt.Sprintf("managed app-server %s produced no startup output\n", c.stream)
+	}
+	return writeManagedAppServerLog(c.path, text)
 }
 
 func writeManagedAppServerLogPlaceholder(path, stream string) error {
+	return writeManagedAppServerLog(path, fmt.Sprintf("managed app-server %s startup output has not been flushed yet\n", stream))
+}
+
+func writeManagedAppServerLog(path, text string) error {
 	f, err := openSecureTruncateFile(path, 0o600)
 	if err != nil {
 		return err
 	}
-	_, writeErr := fmt.Fprintf(f, "managed app-server %s is discarded to avoid unbounded log growth\n", stream)
+	_, writeErr := io.WriteString(f, text)
 	closeErr := f.Close()
 	if writeErr != nil {
 		return writeErr
@@ -3113,6 +3222,10 @@ func webSocketAuthConfigFromMetadata(metadata map[string]any) webSocketAuthConfi
 
 func probeWebSocketAppServer(listen string, ws webSocketAuthConfig) map[string]any {
 	policy := defaultWebSocketProbePolicy()
+	return probeWebSocketAppServerWithPolicy(listen, ws, policy)
+}
+
+func probeWebSocketAppServerWithPolicy(listen string, ws webSocketAuthConfig, policy webSocketProbePolicy) map[string]any {
 	readyz := probeWebSocketHTTPHealth(listen, "/readyz", ws, policy.PingTimeout)
 	healthz := probeWebSocketHTTPHealth(listen, "/healthz", ws, policy.PingTimeout)
 	ping := webSocketPingWithRetry(listen, ws, policy)
