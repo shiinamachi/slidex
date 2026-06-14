@@ -1315,6 +1315,23 @@ func TestValidateCandidateBundleStaticRejectsSymlinkedBinary(t *testing.T) {
 	}
 }
 
+func TestValidateCandidateBundleStaticRejectsNonExecutableUnixBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows executability is not represented by Unix mode bits")
+	}
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	binaryPath := filepath.Join(root, "slidex")
+	if err := os.Chmod(binaryPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings := validateCandidateBundleStatic(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_binary") {
+		t.Fatalf("non-executable candidate binary should fail static validation: %#v", findings)
+	}
+}
+
 func TestValidateCandidateBundleChecksInstallMetadataFields(t *testing.T) {
 	root := t.TempDir()
 	writeCandidateBundleForTest(t, root, "0.2.0")
