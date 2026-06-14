@@ -856,9 +856,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		if state.VerificationStatus != "" {
 			status.PluginVerificationStatus = state.VerificationStatus
 		}
-		if state.VerificationCommand != "" {
-			status.NextVerificationCommand = state.VerificationCommand
-		}
+		status.NextVerificationCommand = derivedUpdateStateVerificationCommand(state)
 		status.VerifiedPluginVersion = state.VerifiedPluginVersion
 		status.VerifiedPluginPath = state.VerifiedPluginPath
 		status.VerifiedStartSkillPath = state.VerifiedStartSkillPath
@@ -3108,6 +3106,9 @@ func readUpdateState(installRoot string) (*updateState, string, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
 	}
+	if !supportedUpdateStateVerificationCommand(state.VerificationCommand) {
+		return nil, path, fmt.Errorf("%s: unsupported verificationCommand", filepath.ToSlash(path))
+	}
 	if err := validateRawJSONAgainstBundledSchema(raw, updateStateSchemaFile); err != nil {
 		return nil, path, fmt.Errorf("%s: %w", filepath.ToSlash(path), err)
 	}
@@ -3155,6 +3156,13 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 	if !pathWithin(pluginRoot, pluginPath) {
 		return fmt.Errorf("%s: verifiedPluginPath must be under %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(pluginPath))
 	}
+	pluginInfo, err := os.Lstat(pluginPath)
+	if err != nil {
+		return fmt.Errorf("%s: verifiedPluginPath must be an existing plugin directory: %s: %v", path, filepath.ToSlash(pluginPath), err)
+	}
+	if isSymlinkOrReparsePoint(pluginPath, pluginInfo) || !pluginInfo.IsDir() {
+		return fmt.Errorf("%s: verifiedPluginPath must be a regular plugin directory, got %s", path, filepath.ToSlash(pluginPath))
+	}
 	skillPath := filepath.Clean(filepath.FromSlash(state.VerifiedStartSkillPath))
 	if strings.TrimSpace(state.VerifiedStartSkillPath) == "" {
 		return fmt.Errorf("%s: verifiedStartSkillPath is required", path)
@@ -3165,10 +3173,36 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
 		return fmt.Errorf("%s: verifiedStartSkillPath must end with skills/slidex-start/SKILL.md, got %s", path, filepath.ToSlash(skillPath))
 	}
+	skillInfo, err := os.Lstat(skillPath)
+	if err != nil {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be an existing regular non-symlink file: %s: %v", path, filepath.ToSlash(skillPath), err)
+	}
+	if isSymlinkOrReparsePoint(skillPath, skillInfo) || !skillInfo.Mode().IsRegular() {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be an existing regular non-symlink file: %s", path, filepath.ToSlash(skillPath))
+	}
 	if status := postRestartSkillPathStatus(pluginRoot, skillPath, state.VerifiedPluginVersion); status != "verified" {
 		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s or a matching Codex plugin cache, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
 	}
+	if status := postRestartPluginMetadataStatus(pluginPath, state.VerifiedPluginVersion); status != "verified" {
+		return fmt.Errorf("%s: verifiedPluginPath metadata must match current slidex plugin contract: %s", path, filepath.ToSlash(pluginPath))
+	}
 	return nil
+}
+
+func derivedUpdateStateVerificationCommand(state *updateState) string {
+	if state != nil && (state.RestartRequired || state.VerificationStatus == "restart_required" || state.VerificationStatus == "drift") {
+		return "slidex codex app-server plugin-smoke --json"
+	}
+	return "slidex update verify --json"
+}
+
+func supportedUpdateStateVerificationCommand(command string) bool {
+	switch strings.TrimSpace(command) {
+	case "slidex update verify --json", "slidex codex app-server plugin-smoke --json":
+		return true
+	default:
+		return false
+	}
 }
 
 func writeUpdateState(installRoot string, state updateState) error {

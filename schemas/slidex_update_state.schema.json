@@ -57,7 +57,10 @@
     },
     "verificationCommand": {
       "type": "string",
-      "minLength": 1
+      "enum": [
+        "slidex update verify --json",
+        "slidex codex app-server plugin-smoke --json"
+      ]
     },
     "verifiedPluginVersion": {
       "type": "string",

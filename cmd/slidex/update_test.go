@@ -4130,6 +4130,7 @@ func TestUpdateVerifyFailsUntilPluginVerified(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
 		t.Fatalf("restart-required verify err = %v", err)
 	}
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
 	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
 	skillPath := filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")
 	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", pluginPath, skillPath); err != nil {
@@ -4297,6 +4298,108 @@ func TestUpdateStatusRejectsForgedVerifiedPluginEvidence(t *testing.T) {
 	}
 	if !strings.Contains(status.Reason, "verifiedPluginPath must be under") {
 		t.Fatalf("invalid verified plugin path reason missing: %#v", status)
+	}
+}
+
+func TestUpdateStatusRejectsForgedVerifiedStateWithoutPluginEvidence(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
+	skillPath := filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(updateStatePath(installRoot)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := updateState{
+		SchemaVersion:          updateStateSchemaVersion,
+		ToolName:               toolName,
+		CurrentVersion:         toolVersion,
+		TargetVersion:          "0.2.0",
+		TargetTag:              "v0.2.0",
+		Channel:                updateChannelProduction,
+		RestartRequired:        false,
+		VerificationStatus:     "verified",
+		VerificationCommand:    "slidex update verify --json",
+		VerifiedPluginVersion:  toolVersion + "+codex.test",
+		VerifiedPluginPath:     filepath.ToSlash(pluginPath),
+		VerifiedStartSkillPath: filepath.ToSlash(skillPath),
+		PluginUpdatedAt:        "2026-06-10T00:00:00Z",
+		UpdatedAt:              "2026-06-10T00:00:00Z",
+	}
+	if err := writeSourceJSONFile(updateStatePath(installRoot), state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(updateStatePath(installRoot)); err != nil {
+		t.Fatalf("forged update state should be written before status check: %v", err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PluginVerificationStatus == "verified" || !status.RestartRequired {
+		t.Fatalf("forged verified state without plugin evidence should fail closed: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "verifiedPluginPath must be an existing plugin directory") {
+		t.Fatalf("missing plugin evidence reason missing: %#v", status)
+	}
+	err = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath})
+	if err == nil || !strings.Contains(err.Error(), "update verification failed") {
+		t.Fatalf("forged verified state should not pass update verify: %v", err)
+	}
+}
+
+func TestUpdateStatusIgnoresSerializedVerificationCommand(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	if err := os.MkdirAll(filepath.Dir(updateStatePath(installRoot)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := updateState{
+		SchemaVersion:       updateStateSchemaVersion,
+		ToolName:            toolName,
+		CurrentVersion:      toolVersion,
+		TargetVersion:       "0.2.0",
+		TargetTag:           "v0.2.0",
+		Channel:             updateChannelProduction,
+		RestartRequired:     true,
+		VerificationStatus:  "restart_required",
+		VerificationCommand: "evil-command --should-not-be-used",
+		UpdatedAt:           "2026-06-10T00:00:00Z",
+	}
+	if err := writeSourceJSONFile(updateStatePath(installRoot), state); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(status.NextVerificationCommand, "evil-command") {
+		t.Fatalf("status trusted serialized verificationCommand: %s", status.NextVerificationCommand)
+	}
+	if status.NextVerificationCommand != "slidex codex app-server plugin-smoke --json" {
+		t.Fatalf("next command = %q", status.NextVerificationCommand)
+	}
+	if strings.Contains(status.Reason, "evil-command") {
+		t.Fatalf("status reason leaked serialized verificationCommand: %s", status.Reason)
+	}
+	for _, banner := range updateStatusBanners(status) {
+		if strings.Contains(banner.Command, "evil-command") {
+			t.Fatalf("banner trusted serialized verificationCommand: %#v", banner)
+		}
+	}
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateStatus([]string{"--install-root", installRoot, "--metadata", metadataPath, "--json"})
+	})
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if strings.Contains(output, "evil-command") {
+		t.Fatalf("status JSON leaked serialized verificationCommand:\n%s", output)
 	}
 }
 
@@ -4605,6 +4708,14 @@ func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
 	delete(stateMissingTargetVersion, "targetVersion")
 	if err := validatePayloadAgainstBundledSchema(stateMissingTargetVersion, updateStateSchemaFile); err == nil {
 		t.Fatal("update state schema should require targetVersion")
+	}
+	var stateInvalidVerificationCommand map[string]any
+	if err := json.Unmarshal(stateRaw, &stateInvalidVerificationCommand); err != nil {
+		t.Fatal(err)
+	}
+	stateInvalidVerificationCommand["verificationCommand"] = "evil-command --should-not-be-used"
+	if err := validatePayloadAgainstBundledSchema(stateInvalidVerificationCommand, updateStateSchemaFile); err == nil {
+		t.Fatal("update state schema should reject unsupported verificationCommand")
 	}
 }
 

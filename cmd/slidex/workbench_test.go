@@ -1714,6 +1714,7 @@ func TestWorkbenchHTMLRendersPluginVerifiedBanner(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
 	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
 	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
 	skillPath := filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")
 	if err := markPluginVerified(installRoot, toolVersion+"+codex.test", pluginPath, skillPath); err != nil {
