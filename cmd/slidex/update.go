@@ -2202,11 +2202,7 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.target_identity", targetErr.Error(), filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
 		return result, nil
 	}
-	result.CandidateValidation = validateCandidateBundleStatic(candidateRoot, targetVersion)
-	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, targetVersion, filepath.Join(candidateRoot, ".slidex", "install.json"))...)
-	if metadata, err := readInstallMetadata(filepath.Join(candidateRoot, ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
-		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
-	}
+	result.CandidateValidation = validateCandidateBundleForStatus(candidateRoot, targetVersion, status.Channel)
 	if hasFailures(result.CandidateValidation) {
 		return result, nil
 	}
@@ -2222,12 +2218,16 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		result.PluginVerificationStatus = "restart_required"
 		return result, nil
 	}
-	stagedRoot, backupRoot, err := replaceInstallRootWithCandidate(status.InstallRoot, candidateRoot, targetVersion)
+	stagedRoot, backupRoot, stagedValidation, err := replaceInstallRootWithCandidate(status.InstallRoot, candidateRoot, targetVersion, status.Channel)
 	result.StagedRoot = filepath.ToSlash(stagedRoot)
 	result.BackupRoot = filepath.ToSlash(backupRoot)
 	if err != nil {
 		result.Status = "rollback"
 		return result, err
+	}
+	result.CandidateValidation = append(result.CandidateValidation, stagedValidation...)
+	if hasFailures(result.CandidateValidation) {
+		return result, nil
 	}
 	if err := updateInstallMetadataAfterActivation(status.InstallRoot, targetVersion, targetTag, status.Channel); err != nil {
 		return result, err
@@ -2447,11 +2447,7 @@ func activatePendingUpdate(status updateStatus) (updateApplyResult, error) {
 	result.TargetVersion = canonicalVersion
 	result.TargetTag = canonicalTag
 	stagedRoot := filepath.FromSlash(pending.StagedRoot)
-	result.CandidateValidation = validateCandidateBundleStatic(stagedRoot, pending.TargetVersion)
-	result.CandidateValidation = append(result.CandidateValidation, validateCandidateChannelForStatus(status.Channel, pending.TargetVersion, filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))...)
-	if metadata, err := readInstallMetadata(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json")); err == nil && metadata.Channel != status.Channel {
-		result.CandidateValidation = append(result.CandidateValidation, fail("update.candidate_channel", "candidate channel must remain "+status.Channel+", got "+metadata.Channel, filepath.ToSlash(filepath.Join(filepath.FromSlash(pending.StagedRoot), ".slidex", "install.json"))))
-	}
+	result.CandidateValidation = validateCandidateBundleForStatus(stagedRoot, pending.TargetVersion, status.Channel)
 	if hasFailures(result.CandidateValidation) {
 		result.Status = "candidate-invalid"
 		return result, nil
@@ -2599,13 +2595,26 @@ func isSHA256Hex(value string) bool {
 	return true
 }
 
-func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion string) (stagedRoot, backupRoot string, err error) {
+var beforeUpdateStagedCandidateValidation func(stagedRoot string) error
+
+func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion, statusChannel string) (stagedRoot, backupRoot string, findings []qaFinding, err error) {
 	stagedRoot, err = copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, "staged")
 	if err != nil {
-		return stagedRoot, backupRoot, err
+		return stagedRoot, backupRoot, findings, err
+	}
+	if beforeUpdateStagedCandidateValidation != nil {
+		if err := beforeUpdateStagedCandidateValidation(stagedRoot); err != nil {
+			_ = os.RemoveAll(stagedRoot)
+			return stagedRoot, backupRoot, findings, err
+		}
+	}
+	findings = validateCandidateBundleForStatus(stagedRoot, targetVersion, statusChannel)
+	if hasFailures(findings) {
+		_ = os.RemoveAll(stagedRoot)
+		return stagedRoot, backupRoot, findings, nil
 	}
 	backupRoot, err = activateStagedInstallRoot(installRoot, stagedRoot, targetVersion)
-	return stagedRoot, backupRoot, err
+	return stagedRoot, backupRoot, findings, err
 }
 
 func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind string) (string, error) {
@@ -3571,6 +3580,16 @@ func validateCandidateBundle(root, expectedVersion string) []qaFinding {
 		return findings
 	}
 	return append(findings, validateCandidateBundleDynamicChecks(root, expectedVersion)...)
+}
+
+func validateCandidateBundleForStatus(root, expectedVersion, statusChannel string) []qaFinding {
+	metadataPath := filepath.Join(root, ".slidex", "install.json")
+	findings := validateCandidateBundleStatic(root, expectedVersion)
+	findings = append(findings, validateCandidateChannelForStatus(statusChannel, expectedVersion, metadataPath)...)
+	if metadata, err := readInstallMetadata(metadataPath); err == nil && metadata.Channel != statusChannel {
+		findings = append(findings, fail("update.candidate_channel", "candidate channel must remain "+statusChannel+", got "+metadata.Channel, filepath.ToSlash(metadataPath)))
+	}
+	return findings
 }
 
 func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
