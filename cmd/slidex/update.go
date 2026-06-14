@@ -402,12 +402,43 @@ func updateInstallLockPath(installRoot string) (string, error) {
 }
 
 func updateInstallLockPathForCanonicalRoot(canonicalRoot string) (string, error) {
+	if err := validateUpdateInstallParentTrusted(canonicalRoot); err != nil {
+		return "", err
+	}
 	lockDir := filepath.Join(filepath.Dir(canonicalRoot), ".slidex-update-locks")
 	if err := ensureSecureDir(lockDir); err != nil {
 		return "", err
 	}
 	rootSum := sha256.Sum256([]byte(filepath.ToSlash(canonicalRoot)))
 	return filepath.Join(lockDir, hex.EncodeToString(rootSum[:])+".lock"), nil
+}
+
+func validateUpdateInstallParentTrusted(installRoot string) error {
+	installRoot = filepath.Clean(strings.TrimSpace(installRoot))
+	if installRoot == "" || installRoot == "." {
+		return errors.New("update install root is required")
+	}
+	parent := filepath.Dir(installRoot)
+	if err := rejectSymlinkAncestors(parent); err != nil {
+		return err
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return fmt.Errorf("update install parent is unavailable: %w", err)
+	}
+	if isSymlinkOrReparsePoint(parent, info) {
+		return fmt.Errorf("update install parent must not be a symlink or reparse point: %s", filepath.ToSlash(parent))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("update install parent must be a directory: %s", filepath.ToSlash(parent))
+	}
+	if err := requireCurrentUserOwnedPath(parent, info); err != nil {
+		return err
+	}
+	if modeBitsAreSecurityRelevant() && info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("update install parent must not be group/world writable: %s mode %04o", filepath.ToSlash(parent), info.Mode().Perm())
+	}
+	return nil
 }
 
 func staleUpdateInstallLock(lockPath string) bool {
@@ -2397,6 +2428,9 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
+	if err := validateUpdateInstallParentTrusted(installRoot); err != nil {
+		return "", err
+	}
 	activatorRoot, err := os.MkdirTemp(parent, "."+base+".activator-"+versionSegment+"-")
 	if err != nil {
 		return "", err
@@ -2757,6 +2791,9 @@ func copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, kind
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
+	if err := validateUpdateInstallParentTrusted(installRoot); err != nil {
+		return "", err
+	}
 	if err := validateLocalCandidateTree(candidateRoot); err != nil {
 		return "", err
 	}
@@ -2782,11 +2819,24 @@ func activateStagedInstallRoot(installRoot, stagedRoot, targetVersion string) (b
 	}
 	parent := filepath.Dir(filepath.Clean(installRoot))
 	base := filepath.Base(filepath.Clean(installRoot))
+	if err := validateUpdateInstallParentTrusted(installRoot); err != nil {
+		return "", err
+	}
 	backupRoot, err = reserveUniqueSiblingPath(parent, "."+base+".backup-"+versionSegment+"-")
 	if err != nil {
 		return backupRoot, err
 	}
+	if err := validateUpdateInstallParentTrusted(installRoot); err != nil {
+		return backupRoot, err
+	}
 	if err := os.Rename(installRoot, backupRoot); err != nil {
+		return backupRoot, err
+	}
+	if err := validateUpdateInstallParentTrusted(backupRoot); err != nil {
+		rollbackErr := os.Rename(backupRoot, installRoot)
+		if rollbackErr != nil {
+			return backupRoot, fmt.Errorf("activation parent revalidation failed: %v; rollback failed: %w", err, rollbackErr)
+		}
 		return backupRoot, err
 	}
 	if err := os.Rename(stagedRoot, installRoot); err != nil {

@@ -2480,6 +2480,123 @@ func TestActivateStagedInstallRootRollsBackWhenActivationFails(t *testing.T) {
 	}
 }
 
+func TestUpdateInstallLockRejectsWritableInstallParent(t *testing.T) {
+	if !modeBitsAreSecurityRelevant() {
+		t.Skip("POSIX mode bits are not security relevant on this platform")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(parent, 0o700)
+	})
+
+	_, err := updateInstallLockPathForCanonicalRoot(installRoot)
+	if err == nil || !strings.Contains(err.Error(), "group/world writable") {
+		t.Fatalf("expected writable install parent rejection, got %v", err)
+	}
+}
+
+func TestActivateStagedInstallRootRejectsWritableInstallParent(t *testing.T) {
+	if !modeBitsAreSecurityRelevant() {
+		t.Skip("POSIX mode bits are not security relevant on this platform")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stagedRoot := filepath.Join(parent, "staged")
+	if err := os.MkdirAll(stagedRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedRoot, "VERSION"), []byte("0.2.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(parent, 0o700)
+	})
+
+	backupRoot, err := activateStagedInstallRoot(installRoot, stagedRoot, "0.2.0")
+	if err == nil || !strings.Contains(err.Error(), "group/world writable") {
+		t.Fatalf("expected writable install parent activation rejection, backup=%s err=%v", backupRoot, err)
+	}
+	if backupRoot != "" {
+		t.Fatalf("activation should reject before reserving backup root, got %s", backupRoot)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("writable install parent should not replace active VERSION, got %q", got)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(stagedRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("writable install parent should not consume staged VERSION, got %q", got)
+	}
+}
+
+func TestCopyCandidateToSiblingStageRejectsWritableInstallParent(t *testing.T) {
+	if !modeBitsAreSecurityRelevant() {
+		t.Skip("POSIX mode bits are not security relevant on this platform")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(parent, 0o700)
+	})
+
+	stagedRoot, err := copyCandidateToSiblingStage(installRoot, candidate, "0.2.0", "staged")
+	if err == nil || !strings.Contains(err.Error(), "group/world writable") {
+		t.Fatalf("expected writable install parent staging rejection, staged=%s err=%v", stagedRoot, err)
+	}
+	if stagedRoot != "" {
+		t.Fatalf("staging should reject before creating sibling stage, got %s", stagedRoot)
+	}
+}
+
+func TestStagePendingActivatorRejectsWritableInstallParent(t *testing.T) {
+	if !modeBitsAreSecurityRelevant() {
+		t.Skip("POSIX mode bits are not security relevant on this platform")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if err := os.Chmod(parent, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(parent, 0o700)
+	})
+
+	activatorPath, err := stagePendingActivator(installRoot, candidate, "0.2.0")
+	if err == nil || !strings.Contains(err.Error(), "group/world writable") {
+		t.Fatalf("expected writable install parent activator rejection, activator=%s err=%v", activatorPath, err)
+	}
+	if activatorPath != "" {
+		t.Fatalf("activator staging should reject before creating sibling path, got %s", activatorPath)
+	}
+}
+
 func TestUpdateInstallLockSerializesAccess(t *testing.T) {
 	oldWait := updateInstallLockWaitTimeout
 	oldRetry := updateInstallLockRetryDelay
