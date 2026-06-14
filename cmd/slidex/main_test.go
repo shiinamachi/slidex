@@ -1173,7 +1173,8 @@ func TestPackageDeckSkipsSpecParsingWhenRequiredSpecInvalid(t *testing.T) {
 }
 
 func TestMCPStateReadRejectsSymlinkStateFile(t *testing.T) {
-	deck := t.TempDir()
+	workspace := t.TempDir()
+	deck := filepath.Join(workspace, "decks", "demo")
 	outDir := filepath.Join(deck, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1186,13 +1187,14 @@ func TestMCPStateReadRejectsSymlinkStateFile(t *testing.T) {
 		t.Skipf("symlink unavailable on this platform: %v", err)
 	}
 
-	_, err := callMCPTool("state/read", map[string]any{"deck": deck})
+	_, err := callMCPTool("state/read", map[string]any{"workspace": workspace, "deckId": "demo"})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("expected MCP state/read symlink rejection, got %v", err)
 	}
 }
 
 func TestMCPStateReadRejectsSymlinkDeck(t *testing.T) {
+	workspace := t.TempDir()
 	realDeck := t.TempDir()
 	outDir := filepath.Join(realDeck, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -1201,14 +1203,37 @@ func TestMCPStateReadRejectsSymlinkDeck(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outDir, "slidex_state.json"), []byte(`{"schemaVersion":"slidex.state.v1"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	linkDeck := filepath.Join(t.TempDir(), "deck-link")
+	linkDeck := filepath.Join(workspace, "decks", "deck-link")
+	if err := os.MkdirAll(filepath.Dir(linkDeck), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(realDeck, linkDeck); err != nil {
 		t.Skipf("symlink unavailable on this platform: %v", err)
 	}
 
-	_, err := callMCPTool("state/read", map[string]any{"deck": linkDeck})
+	_, err := callMCPTool("state/read", map[string]any{"workspace": workspace, "deckId": "deck-link"})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("expected MCP state/read deck symlink rejection, got %v", err)
+	}
+}
+
+func TestLegacyMCPDeckToolsRejectDeckOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDeck := t.TempDir()
+
+	for _, name := range []string{"inspect", "render", "qa", "package", "state/read"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := callMCPTool(name, map[string]any{
+				"workspace": workspace,
+				"deck":      outsideDeck,
+			})
+			if err == nil {
+				t.Fatal("expected deck path confinement error")
+			}
+			if !strings.Contains(err.Error(), "deck path must stay under") {
+				t.Fatalf("error = %v, want deck confinement rejection", err)
+			}
+		})
 	}
 }
 

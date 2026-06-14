@@ -4724,10 +4724,6 @@ func mcpTool(name, description string) map[string]any {
 }
 
 func callMCPTool(name string, args map[string]any) (any, error) {
-	deck, _ := args["deck"].(string)
-	if deck == "" && !in(name, []string{"state/read", "deck.bootstrap", "deck.inspect", "workbench.start", "workbench.status", "workbench.stop"}) {
-		return nil, errors.New("deck argument is required")
-	}
 	switch name {
 	case "deck.bootstrap":
 		return callMCPDeckBootstrap(args)
@@ -4740,27 +4736,57 @@ func callMCPTool(name string, args map[string]any) (any, error) {
 	case "workbench.stop":
 		return callMCPWorkbenchStop(args)
 	case "inspect":
-		return inspectDeck(deck)
+		deckAbs, err := resolveMCPDeckToolDir(args)
+		if err != nil {
+			return nil, err
+		}
+		return inspectDeck(deckAbs)
 	case "render":
 		if err := rejectMCPRenderBrowserOverrideArgs(args); err != nil {
 			return nil, err
 		}
-		out := filepath.Join(mustAbs(deck), "out")
+		deckAbs, err := resolveMCPDeckToolDir(args)
+		if err != nil {
+			return nil, err
+		}
+		out := filepath.Join(deckAbs, "out")
 		cfg, err := renderConfigFromFlags(filepath.Join(out, "final_deck.html"), filepath.Join(out, "rendered_slides"), filepath.Join(out, "final_deck.pdf"), filepath.Join(out, "render_manifest.json"), "paginated", ".slide", 1920, 1080, "pretendard", "", false)
 		if err != nil {
 			return nil, err
 		}
 		return renderHTML(cfg)
 	case "qa":
-		return qaDeckWithVisualReview(deck, true, "none")
+		deckAbs, err := resolveMCPDeckToolDir(args)
+		if err != nil {
+			return nil, err
+		}
+		return qaDeckWithVisualReview(deckAbs, true, "none")
 	case "package":
 		includeLogs, _ := args["includeLogs"].(bool)
-		return packageDeck(deck, includeLogs)
+		deckAbs, err := resolveMCPDeckToolDir(args)
+		if err != nil {
+			return nil, err
+		}
+		return packageDeck(deckAbs, includeLogs)
 	case "state/read":
-		return readMCPState(deck)
+		deckAbs, err := resolveMCPDeckToolDir(args)
+		if err != nil {
+			return nil, err
+		}
+		return readMCPState(deckAbs)
 	default:
 		return nil, fmt.Errorf("unsupported tool: %s", name)
 	}
+}
+
+func resolveMCPDeckToolDir(args map[string]any) (string, error) {
+	workspace, _ := args["workspace"].(string)
+	deckID, _ := args["deckId"].(string)
+	if deckID == "" {
+		deckID, _ = args["deck_id"].(string)
+	}
+	deck, _ := args["deck"].(string)
+	return resolveDeckDir(workspace, deckID, deck, false, defaultDeckTemplatePath)
 }
 
 func rejectMCPRenderBrowserOverrideArgs(args map[string]any) error {
@@ -4773,11 +4799,7 @@ func rejectMCPRenderBrowserOverrideArgs(args map[string]any) error {
 	return nil
 }
 
-func readMCPState(deck string) (map[string]any, error) {
-	deckAbs, err := resolveMCPDeckDir(deck)
-	if err != nil {
-		return nil, err
-	}
+func readMCPState(deckAbs string) (map[string]any, error) {
 	statePath := filepath.Join(deckAbs, "out", "slidex_state.json")
 	raw, err := readRegularFileLimited(statePath, maxDeckTextReadBytes)
 	if err != nil {
@@ -4788,32 +4810,6 @@ func readMCPState(deck string) (map[string]any, error) {
 		return nil, err
 	}
 	return state, nil
-}
-
-func resolveMCPDeckDir(deck string) (string, error) {
-	deck = strings.TrimSpace(deck)
-	if deck == "" {
-		return "", errors.New("deck argument is required")
-	}
-	deckAbs, err := filepath.Abs(deck)
-	if err != nil {
-		return "", err
-	}
-	deckAbs = filepath.Clean(deckAbs)
-	if err := rejectSymlinkAncestors(filepath.Dir(deckAbs)); err != nil {
-		return "", err
-	}
-	info, err := os.Lstat(deckAbs)
-	if err != nil {
-		return "", err
-	}
-	if isSymlinkOrReparsePoint(deckAbs, info) {
-		return "", fmt.Errorf("deck path must not be a symlink or reparse point: %s", filepath.ToSlash(deckAbs))
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("deck path must be a directory: %s", filepath.ToSlash(deckAbs))
-	}
-	return deckAbs, nil
 }
 
 func authoringArtifactCandidates(deckAbs, stage string) []string {
