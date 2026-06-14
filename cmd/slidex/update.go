@@ -183,6 +183,7 @@ type pendingUpdate struct {
 	StagedRoot               string `json:"stagedRoot"`
 	StagedRootManifestSHA256 string `json:"stagedRootManifestSha256"`
 	ActivatorPath            string `json:"activatorPath,omitempty"`
+	ActivatorSHA256          string `json:"activatorSha256"`
 	ActivationCommand        string `json:"activationCommand,omitempty"`
 	Reason                   string `json:"reason"`
 	CreatedAt                string `json:"createdAt"`
@@ -1087,6 +1088,7 @@ func doctorUpdateSchemaFindings() []qaFinding {
 		StagedRoot:               filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.staged-"+toolVersion)),
 		StagedRootManifestSHA256: strings.Repeat("a", 64),
 		ActivatorPath:            filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(installRoot)), ".slidex.activator-"+toolVersion, activatorBinary)),
+		ActivatorSHA256:          strings.Repeat("b", 64),
 		ActivationCommand:        "slidex update activate-pending --yes --json",
 		Reason:                   "doctor schema contract sample",
 		CreatedAt:                now,
@@ -2201,6 +2203,13 @@ func singleExtractedRoot(dest string) string {
 	return filepath.Join(dest, entries[0].Name())
 }
 
+func candidateCLIBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "slidex.exe"
+	}
+	return "slidex"
+}
+
 type updateApplyOptions struct {
 	// Explicit --candidate trees remain static-only so update apply does not execute arbitrary local bundles.
 	ExecuteCandidateChecks bool
@@ -2309,10 +2318,7 @@ func stagePendingActivator(installRoot, candidateRoot, targetVersion string) (st
 	if err != nil {
 		return "", err
 	}
-	binary := "slidex"
-	if runtime.GOOS == "windows" {
-		binary = "slidex.exe"
-	}
+	binary := candidateCLIBinaryName()
 	source := filepath.Join(candidateRoot, binary)
 	if _, err := os.Stat(source); err != nil {
 		return "", err
@@ -2416,6 +2422,10 @@ func writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, t
 	if err != nil {
 		return "", err
 	}
+	activatorDigest, err := sha256FileWithMaxBytes(activatorPath, maxUpdateArchiveFileBytes)
+	if err != nil {
+		return "", err
+	}
 	path := pendingUpdatePath(installRoot)
 	pending := pendingUpdate{
 		SchemaVersion:            pendingUpdateSchemaVersion,
@@ -2426,6 +2436,7 @@ func writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, t
 		StagedRoot:               filepath.ToSlash(stagedRoot),
 		StagedRootManifestSHA256: stagedDigest,
 		ActivatorPath:            filepath.ToSlash(activatorPath),
+		ActivatorSHA256:          activatorDigest,
 		ActivationCommand:        pendingActivationCommand(activatorPath, installRoot),
 		Reason:                   "Windows may lock the running slidex executable; activate this staged bundle on next run.",
 		CreatedAt:                time.Now().UTC().Format(time.RFC3339),
@@ -2518,8 +2529,22 @@ func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
 	if strings.TrimSpace(pending.ActivatorPath) == "" {
 		return errors.New("pending update activatorPath is required")
 	}
-	if err := validatePendingActivatorPath(installRoot, filepath.FromSlash(pending.ActivatorPath), pending.TargetVersion); err != nil {
+	if strings.TrimSpace(pending.ActivatorSHA256) == "" {
+		return errors.New("pending update activatorSha256 is required")
+	}
+	if !isSHA256Hex(pending.ActivatorSHA256) {
+		return errors.New("pending update activatorSha256 must be a SHA-256 hex digest")
+	}
+	activatorPath := filepath.FromSlash(pending.ActivatorPath)
+	if err := validatePendingActivatorPath(installRoot, activatorPath, pending.TargetVersion); err != nil {
 		return err
+	}
+	actualActivatorDigest, err := sha256FileWithMaxBytes(activatorPath, maxUpdateArchiveFileBytes)
+	if err != nil {
+		return fmt.Errorf("pending activator digest validation failed: %w", err)
+	}
+	if !strings.EqualFold(actualActivatorDigest, pending.ActivatorSHA256) {
+		return fmt.Errorf("pending activator digest mismatch: got %s, want %s", actualActivatorDigest, pending.ActivatorSHA256)
 	}
 	if pending.InstallRoot != "" && !sameFilesystemPath(filepath.FromSlash(pending.InstallRoot), installRoot) {
 		return fmt.Errorf("pending update installRoot must be %s, got %s", filepath.ToSlash(installRoot), pending.InstallRoot)
@@ -2544,6 +2569,13 @@ func validatePendingUpdate(installRoot string, pending *pendingUpdate) error {
 	}
 	if !strings.EqualFold(actualDigest, pending.StagedRootManifestSHA256) {
 		return fmt.Errorf("pending staged root manifest digest mismatch: got %s, want %s", actualDigest, pending.StagedRootManifestSHA256)
+	}
+	stagedBinaryDigest, err := sha256FileWithMaxBytes(filepath.Join(stagedRoot, candidateCLIBinaryName()), maxUpdateArchiveFileBytes)
+	if err != nil {
+		return fmt.Errorf("pending staged candidate binary digest validation failed: %w", err)
+	}
+	if !strings.EqualFold(stagedBinaryDigest, pending.ActivatorSHA256) {
+		return fmt.Errorf("pending activator digest must match staged candidate binary digest: got %s, want %s", pending.ActivatorSHA256, stagedBinaryDigest)
 	}
 	return nil
 }
@@ -3915,10 +3947,7 @@ func validateCandidateBundleDynamicChecks(root, expectedVersion string) []qaFind
 	root = filepath.Clean(root)
 	expectedVersion = strings.TrimPrefix(strings.TrimSpace(expectedVersion), "v")
 	expectedBaseVersion := releaseBaseVersion(expectedVersion)
-	binary := "slidex"
-	if runtime.GOOS == "windows" {
-		binary = "slidex.exe"
-	}
+	binary := candidateCLIBinaryName()
 	binaryPath := filepath.Join(root, binary)
 	info, err := os.Lstat(binaryPath)
 	if err != nil {
@@ -3948,7 +3977,7 @@ func candidateBinaryVersion(path string) (string, error) {
 }
 
 func candidateBinaryVersionWithMaxOutput(path string, maxOutputBytes int64) (string, error) {
-	out, err := runBufferedCommandWithInputAndMaxOutput(8*time.Second, maxOutputBytes, "", nil, path, "version")
+	out, err := runBufferedCommandWithInputEnvAndMaxOutput(8*time.Second, maxOutputBytes, "", nil, candidateDynamicCheckEnv(), path, "version")
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -3964,7 +3993,7 @@ func candidateDoctorStatus(root, binaryPath string) (string, error) {
 }
 
 func candidateDoctorStatusWithMaxOutput(root, binaryPath string, maxOutputBytes int64) (string, error) {
-	out, err := runBufferedCommandWithInputAndMaxOutput(30*time.Second, maxOutputBytes, root, nil, binaryPath, "doctor", "--json")
+	out, err := runBufferedCommandWithInputEnvAndMaxOutput(30*time.Second, maxOutputBytes, root, nil, candidateDynamicCheckEnv(), binaryPath, "doctor", "--json")
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -3973,6 +4002,10 @@ func candidateDoctorStatusWithMaxOutput(root, binaryPath string, maxOutputBytes 
 		return "", err
 	}
 	return metadataString(report["status"]), nil
+}
+
+func candidateDynamicCheckEnv() []string {
+	return sanitizedSensitiveSubprocessEnv(os.Environ())
 }
 
 func readCandidateJSON(path string) (map[string]any, error) {

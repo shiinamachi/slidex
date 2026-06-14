@@ -6213,10 +6213,16 @@ func runBufferedCommandWithInput(timeout time.Duration, dir string, stdin io.Rea
 }
 
 func runBufferedCommandWithInputAndMaxOutput(timeout time.Duration, maxOutputBytes int64, dir string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	return runBufferedCommandWithInputEnvAndMaxOutput(timeout, maxOutputBytes, dir, stdin, nil, name, args...)
+}
+
+func runBufferedCommandWithInputEnvAndMaxOutput(timeout time.Duration, maxOutputBytes int64, dir string, stdin io.Reader, env []string, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.Command(name, args...)
-	if isCodexCommandName(name) {
+	if env != nil {
+		cmd.Env = env
+	} else if isCodexCommandName(name) {
 		cmd.Env = sanitizedCodexChildEnv(cmd.Env)
 	}
 	configureProcessGroupCommand(cmd)

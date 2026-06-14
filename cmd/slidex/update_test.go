@@ -2157,6 +2157,67 @@ func TestRunUpdateApplyArchiveRejectsCandidateDoctorFailureBeforeActivation(t *t
 	}
 }
 
+func TestRunUpdateApplyArchiveDynamicChecksSanitizeCandidateEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows update apply stages pending activation instead of directly replacing install root")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	envLog := filepath.Join(parent, "candidate-env.txt")
+	writeCandidateBinaryForTestWithEnvCapture(t, filepath.Join(candidate, "slidex"), "0.2.0", envLog, []string{
+		"OPENAI_API_KEY",
+		"CODEX_API_KEY",
+		"GITHUB_TOKEN",
+		"SSH_AUTH_SOCK",
+		"AWS_ACCESS_KEY_ID",
+		"SLIDEX_TEST_SECRET",
+		"SLIDEX_OTHER",
+	})
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("CODEX_API_KEY", "secret-token")
+	t.Setenv("GITHUB_TOKEN", "ghp-test")
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
+	t.Setenv("SLIDEX_TEST_SECRET", "hidden")
+	t.Setenv("SLIDEX_OTHER", "visible")
+	archivePath, checksumPath := writeCandidateReleaseArchiveForTest(t, parent, candidate, "0.2.0")
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", metadataPath,
+			"--archive", archivePath,
+			"--checksums", checksumPath,
+			"--target-version", "0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("archive apply with sanitized dynamic checks failed: %v\n%s", runErr, output)
+	}
+	envText := readFileOrEmpty(envLog)
+	for _, forbidden := range []string{"OPENAI_API_KEY=", "CODEX_API_KEY=", "GITHUB_TOKEN=", "SSH_AUTH_SOCK=", "AWS_ACCESS_KEY_ID=", "SLIDEX_TEST_SECRET="} {
+		if strings.Contains(envText, forbidden) {
+			t.Fatalf("candidate dynamic check retained sensitive env %s in:\n%s", forbidden, envText)
+		}
+	}
+	if !strings.Contains(envText, "SLIDEX_OTHER=visible") {
+		t.Fatalf("candidate dynamic check dropped non-sensitive env, got:\n%s", envText)
+	}
+}
+
 func TestRunUpdateApplyRevalidatesStagedCandidateBeforeActivation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows update apply stages pending activation instead of directly replacing install root")
@@ -3207,6 +3268,9 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if status.PendingUpdate.StagedRootManifestSHA256 == "" {
 		t.Fatalf("pending staged root manifest digest not recorded: %#v", status.PendingUpdate)
 	}
+	if status.PendingUpdate.ActivatorSHA256 == "" {
+		t.Fatalf("pending activator digest not recorded: %#v", status.PendingUpdate)
+	}
 	expectedDigest, err := candidateTreeManifestDigest(stagedRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -3214,8 +3278,23 @@ func TestStagePendingUpdateHandoffMarksRestartRequired(t *testing.T) {
 	if status.PendingUpdate.StagedRootManifestSHA256 != expectedDigest {
 		t.Fatalf("pending staged root digest = %s, want %s", status.PendingUpdate.StagedRootManifestSHA256, expectedDigest)
 	}
-	if _, err := os.Stat(filepath.FromSlash(status.PendingUpdate.ActivatorPath)); err != nil {
+	activatorPath := filepath.FromSlash(status.PendingUpdate.ActivatorPath)
+	if _, err := os.Stat(activatorPath); err != nil {
 		t.Fatalf("pending activator missing: %v", err)
+	}
+	activatorDigest, err := sha256FileWithMaxBytes(activatorPath, maxUpdateArchiveFileBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingUpdate.ActivatorSHA256 != activatorDigest {
+		t.Fatalf("pending activator digest = %s, want %s", status.PendingUpdate.ActivatorSHA256, activatorDigest)
+	}
+	stagedBinaryDigest, err := sha256FileWithMaxBytes(filepath.Join(stagedRoot, candidateCLIBinaryName()), maxUpdateArchiveFileBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingUpdate.ActivatorSHA256 != stagedBinaryDigest {
+		t.Fatalf("pending activator digest = %s, want staged binary digest %s", status.PendingUpdate.ActivatorSHA256, stagedBinaryDigest)
 	}
 	if !strings.Contains(status.PendingActivationCommand, filepath.ToSlash(status.PendingUpdate.ActivatorPath)) {
 		t.Fatalf("pending activation command should use activator path: %s", status.PendingActivationCommand)
@@ -3336,6 +3415,41 @@ func TestValidatePendingUpdateRejectsExternalActivatorPath(t *testing.T) {
 	pending.ActivatorPath = filepath.ToSlash(outside)
 	if err := validatePendingUpdate(installRoot, pending); err == nil || !strings.Contains(err.Error(), "pending activator") {
 		t.Fatalf("expected external activator rejection, got %v", err)
+	}
+}
+
+func TestCurrentUpdateStatusRejectsPendingActivatorDigestDrift(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	pending, _, err := readPendingUpdate(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.FromSlash(pending.ActivatorPath), []byte("different activator bytes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending-invalid" || status.PendingActivationCommand != "" {
+		t.Fatalf("activator digest drift should invalidate pending status: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "activator digest") {
+		t.Fatalf("pending-invalid reason should mention activator digest, got %q", status.Reason)
+	}
+	if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
+		t.Fatalf("pending-invalid status should match schema: %v", err)
 	}
 }
 
@@ -3609,6 +3723,70 @@ func TestActivatePendingUpdateRejectsForgedStagedRootOutsideInstallParent(t *tes
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
 		t.Fatalf("forged pending activation should not replace active VERSION, got %q", got)
+	}
+}
+
+func TestActivatePendingUpdateRejectsForgedPendingActivator(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	if _, _, err := stagePendingUpdateHandoff(installRoot, candidate, "0.2.0", "v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	forgedActivatorRoot := filepath.Join(parent, "."+filepath.Base(installRoot)+".activator-0.2.0-forged")
+	if err := os.MkdirAll(forgedActivatorRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	forgedActivator := filepath.Join(forgedActivatorRoot, pendingActivatorBinaryName())
+	writeCandidateBinaryForTestWithDoctorStatus(t, forgedActivator, "9.9.9", "pass")
+	forgedDigest, err := sha256FileWithMaxBytes(forgedActivator, maxUpdateArchiveFileBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := pendingUpdatePath(installRoot)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["activatorPath"] = filepath.ToSlash(forgedActivator)
+	payload["activatorSha256"] = forgedDigest
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, installMetadataPath(installRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending-invalid" || !strings.Contains(status.Reason, "staged candidate binary digest") {
+		t.Fatalf("forged activator should be pending-invalid: %#v", status)
+	}
+	result, err := activatePendingUpdate(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "pending-invalid" || !findingCheckPresent(result.CandidateValidation, "update.pending_handoff") {
+		t.Fatalf("forged activator should be rejected before activation: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("forged pending activator should not replace active VERSION, got %q", got)
 	}
 }
 
@@ -4523,6 +4701,53 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "doctor" {
 		fmt.Println(` + "`" + `{"status":"` + doctorStatus + `"}` + "`" + `)
+		return
+	}
+	fmt.Println("slidex ` + version + `")
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", path, source)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("candidate test binary build failed: %v\n%s", err, out)
+	}
+}
+
+func writeCandidateBinaryForTestWithEnvCapture(t *testing.T, path, version, sentinel string, names []string) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	quotedNames := make([]string, 0, len(names))
+	for _, name := range names {
+		quotedNames = append(quotedNames, fmt.Sprintf("%q", name))
+	}
+	code := `package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+func main() {
+	names := []string{` + strings.Join(quotedNames, ", ") + `}
+	var env strings.Builder
+	for _, name := range names {
+		if value, ok := os.LookupEnv(name); ok {
+			fmt.Fprintf(&env, "%s=%s\n", name, value)
+		}
+	}
+	if err := os.WriteFile(` + fmt.Sprintf("%q", sentinel) + `, []byte(env.String()), 0o600); err != nil {
+		panic(err)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("slidex ` + version + `")
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		fmt.Println(` + "`" + `{"status":"pass"}` + "`" + `)
 		return
 	}
 	fmt.Println("slidex ` + version + `")

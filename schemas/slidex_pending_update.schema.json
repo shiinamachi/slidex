@@ -10,6 +10,7 @@
     "installRoot",
     "stagedRoot",
     "stagedRootManifestSha256",
+    "activatorSha256",
     "reason",
     "createdAt"
   ],
@@ -48,6 +49,10 @@
     },
     "activatorPath": {
       "type": "string"
+    },
+    "activatorSha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
     },
     "activationCommand": {
       "type": "string"
