@@ -69,6 +69,13 @@ func sourceRelativePath(rel string) string {
 	if !ok || file == "" {
 		return ""
 	}
+	return sourceRelativePathFromFile(file, rel)
+}
+
+func sourceRelativePathFromFile(file, rel string) string {
+	if file == "" || !filepath.IsAbs(file) {
+		return ""
+	}
 	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
 	candidate := filepath.Join(root, rel)
 	if _, err := os.Stat(candidate); err == nil {

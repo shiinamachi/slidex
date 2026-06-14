@@ -1758,6 +1758,116 @@ func TestBuiltInSchemaResolutionFailsClosedWithoutTrustedRoots(t *testing.T) {
 	}
 }
 
+func TestBuiltInSchemaResolutionRejectsTrimpathSourceRoot(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := t.TempDir()
+	fakeSchemaDir := filepath.Join(temp, "slidex", "schemas")
+	if err := os.MkdirAll(fakeSchemaDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeSchemaPath := filepath.Join(fakeSchemaDir, "app_stage_result.strict.schema.json")
+	fakeSchema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}`)
+	if err := os.WriteFile(fakeSchemaPath, fakeSchema, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(temp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	oldExecutableRoot := resolveExecutableInstallRoot
+	oldSourceRelativePath := resolveSourceRelativePath
+	resolveExecutableInstallRoot = func() (string, error) {
+		return "", errors.New("executable lookup failed")
+	}
+	resolveSourceRelativePath = func(rel string) string {
+		return sourceRelativePathFromFile(filepath.Join("slidex", "cmd", "slidex", "schema_paths.go"), rel)
+	}
+	t.Cleanup(func() {
+		resolveExecutableInstallRoot = oldExecutableRoot
+		resolveSourceRelativePath = oldSourceRelativePath
+	})
+
+	resolved := resolveBuiltInSchemaPath(filepath.Join("schemas", "app_stage_result.strict.schema.json"))
+	if canonicalPathEqual(resolved, fakeSchemaPath) {
+		t.Fatalf("trimpath source fallback resolved to caller cwd fake schema: %s", resolved)
+	}
+	if _, err := bundledSchemaPathStrict("app_stage_result.strict.schema.json"); err == nil || !strings.Contains(err.Error(), "could not be resolved from a trusted install or source root") {
+		t.Fatalf("expected trimpath source fallback to fail closed, got %v", err)
+	}
+}
+
+func TestValidateSpecFileFailsWhenTrustedSchemaUnavailable(t *testing.T) {
+	specPath := filepath.Join(t.TempDir(), "deck_spec.json")
+	if err := os.WriteFile(specPath, []byte(`{"metadata":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldExecutableRoot := resolveExecutableInstallRoot
+	oldSourceRelativePath := resolveSourceRelativePath
+	resolveExecutableInstallRoot = func() (string, error) {
+		return "", errors.New("executable lookup failed")
+	}
+	resolveSourceRelativePath = func(string) string {
+		return ""
+	}
+	t.Cleanup(func() {
+		resolveExecutableInstallRoot = oldExecutableRoot
+		resolveSourceRelativePath = oldSourceRelativePath
+	})
+
+	findings, err := validateSpecFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFindingCheck(findings, "schema.load") || !hasFailures(findings) {
+		t.Fatalf("schema load failure should be a failing finding, got %#v", findings)
+	}
+	if got := statusFromFindings(findings); got != "fail" {
+		t.Fatalf("schema load failure should fail validate-spec status, got %q", got)
+	}
+	if err := runValidateSpec([]string{"--spec", specPath}); err == nil || !strings.Contains(err.Error(), "spec validation failed") {
+		t.Fatalf("runValidateSpec should return a failing status error, got %v", err)
+	}
+}
+
+func TestQAFailsWhenTrustedSpecSchemaUnavailable(t *testing.T) {
+	deck := filepath.Join(t.TempDir(), "deck")
+	outDir := filepath.Join(deck, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "deck_spec.json"), []byte(`{"metadata":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldExecutableRoot := resolveExecutableInstallRoot
+	oldSourceRelativePath := resolveSourceRelativePath
+	resolveExecutableInstallRoot = func() (string, error) {
+		return "", errors.New("executable lookup failed")
+	}
+	resolveSourceRelativePath = func(string) string {
+		return ""
+	}
+	t.Cleanup(func() {
+		resolveExecutableInstallRoot = oldExecutableRoot
+		resolveSourceRelativePath = oldSourceRelativePath
+	})
+
+	qa, err := qaDeckWithVisualReviewRunner(deck, false, "manual", func(string, renderManifest, string) (string, []qaFinding) {
+		return "pass", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qa.Status != "fail" || !hasFindingCheck(qa.Findings, "schema.load") {
+		t.Fatalf("QA should fail when the trusted spec schema is unavailable, status=%q findings=%#v", qa.Status, qa.Findings)
+	}
+}
+
 func TestLoadSpecSchemaUsesTrustedBuiltInSchemaFromArbitraryCWD(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {

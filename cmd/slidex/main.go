@@ -643,7 +643,7 @@ func validateSpecFile(path string) ([]qaFinding, error) {
 
 	var findings []qaFinding
 	if schema, err := loadSpecSchema(); err != nil {
-		findings = append(findings, qaFinding{Severity: "warn", Check: "schema.load", Message: "could not load schemas/deck_spec.schema.json for full schema validation: " + err.Error(), Path: path})
+		findings = append(findings, fail("schema.load", "could not load schemas/deck_spec.schema.json for full schema validation: "+err.Error(), path))
 	} else {
 		findings = append(findings, validateWithFullJSONSchema(raw, schema, path)...)
 	}
