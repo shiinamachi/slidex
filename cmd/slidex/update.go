@@ -3701,8 +3701,8 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must not be a symlink or reparse point", filepath.ToSlash(binaryPath)))
 	} else if !info.Mode().IsRegular() {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must be a regular file", filepath.ToSlash(binaryPath)))
-	} else if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
-		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must be executable", filepath.ToSlash(binaryPath)))
+	} else if runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
+		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must set owner execute permission", filepath.ToSlash(binaryPath)))
 	}
 	return findings
 }

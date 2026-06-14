@@ -1315,20 +1315,35 @@ func TestValidateCandidateBundleStaticRejectsSymlinkedBinary(t *testing.T) {
 	}
 }
 
-func TestValidateCandidateBundleStaticRejectsNonExecutableUnixBinary(t *testing.T) {
+func TestValidateCandidateBundleStaticRequiresOwnerExecutableUnixBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows executability is not represented by Unix mode bits")
 	}
-	root := t.TempDir()
-	writeCandidateBundleForTest(t, root, "0.2.0")
-	binaryPath := filepath.Join(root, "slidex")
-	if err := os.Chmod(binaryPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	for _, tc := range []struct {
+		name        string
+		mode        os.FileMode
+		wantFinding bool
+	}{
+		{name: "no execute bits", mode: 0o644, wantFinding: true},
+		{name: "other execute only", mode: 0o001, wantFinding: true},
+		{name: "group execute only", mode: 0o010, wantFinding: true},
+		{name: "owner executable", mode: 0o700},
+		{name: "world executable", mode: 0o755},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCandidateBundleForTest(t, root, "0.2.0")
+			binaryPath := filepath.Join(root, "slidex")
+			if err := os.Chmod(binaryPath, tc.mode); err != nil {
+				t.Fatal(err)
+			}
 
-	findings := validateCandidateBundleStatic(root, "0.2.0")
-	if !findingCheckPresent(findings, "update.candidate_binary") {
-		t.Fatalf("non-executable candidate binary should fail static validation: %#v", findings)
+			findings := validateCandidateBundleStatic(root, "0.2.0")
+			gotFinding := findingCheckPresent(findings, "update.candidate_binary")
+			if gotFinding != tc.wantFinding {
+				t.Fatalf("candidate binary mode %04o finding = %v, want %v; findings=%#v", tc.mode, gotFinding, tc.wantFinding, findings)
+			}
+		})
 	}
 }
 
