@@ -1329,6 +1329,7 @@ func TestValidateCandidateBundleStaticRequiresOwnerExecutableUnixBinary(t *testi
 		{name: "group execute only", mode: 0o010, wantFinding: true},
 		{name: "owner executable", mode: 0o700},
 		{name: "world executable", mode: 0o755},
+		{name: "world writable owner executable", mode: 0o777, wantFinding: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -1342,6 +1343,33 @@ func TestValidateCandidateBundleStaticRequiresOwnerExecutableUnixBinary(t *testi
 			gotFinding := findingCheckPresent(findings, "update.candidate_binary")
 			if gotFinding != tc.wantFinding {
 				t.Fatalf("candidate binary mode %04o finding = %v, want %v; findings=%#v", tc.mode, gotFinding, tc.wantFinding, findings)
+			}
+		})
+	}
+}
+
+func TestValidateCandidateBundleStaticRejectsGroupWorldWritableUnixPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows executability is not represented by Unix mode bits")
+	}
+	for _, tc := range []struct {
+		name string
+		rel  string
+		mode os.FileMode
+	}{
+		{name: "runtime directory", rel: filepath.Join("plugins", "slidex"), mode: 0o777},
+		{name: "runtime file", rel: "README.md", mode: 0o666},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCandidateBundleForTest(t, root, "0.2.0")
+			if err := os.Chmod(filepath.Join(root, tc.rel), tc.mode); err != nil {
+				t.Fatal(err)
+			}
+
+			findings := validateCandidateBundleStatic(root, "0.2.0")
+			if !findingCheckPresent(findings, "update.candidate_tree") {
+				t.Fatalf("group/world-writable candidate path should fail static validation: %#v", findings)
 			}
 		})
 	}
@@ -1801,6 +1829,58 @@ func TestRunUpdateApplyRevalidatesStagedCandidateBeforeActivation(t *testing.T) 
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
 		t.Fatalf("invalid staged candidate should not replace active install root, VERSION = %q", got)
+	}
+}
+
+func TestRunUpdateApplyRejectsWritableStagedCandidateBeforeActivation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows update apply stages pending activation instead of directly replacing install root")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	oldHook := beforeUpdateStagedCandidateValidation
+	beforeUpdateStagedCandidateValidation = func(stagedRoot string) error {
+		return os.Chmod(filepath.Join(stagedRoot, "plugins", "slidex"), 0o777)
+	}
+	t.Cleanup(func() {
+		beforeUpdateStagedCandidateValidation = oldHook
+	})
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", metadataPath,
+			"--candidate", candidate,
+			"--target-version", "0.2.0",
+			"--target-tag", "v0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "candidate bundle validation failed") {
+		t.Fatalf("writable staged candidate validation should fail update apply, err=%v\n%s", runErr, output)
+	}
+	var result updateApplyResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid update apply JSON: %v\n%s", err, output)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_tree") {
+		t.Fatalf("writable staged candidate should be reported as candidate-invalid: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("writable staged candidate should not replace active install root, VERSION = %q", got)
 	}
 }
 

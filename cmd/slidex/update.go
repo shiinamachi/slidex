@@ -1557,6 +1557,17 @@ func validateLocalCandidateTreeWithBudget(root string, budget *updateArchiveExtr
 	return walkLocalCandidateTreeWithBudget(root, budget, nil)
 }
 
+func validateLocalCandidateTreeMode(name string, info os.FileInfo) error {
+	if !modeBitsAreSecurityRelevant() {
+		return nil
+	}
+	mode := info.Mode().Perm()
+	if mode&0o022 != 0 {
+		return fmt.Errorf("candidate tree path must not be group/world writable: %s mode %04o", name, mode)
+	}
+	return nil
+}
+
 func copyLocalCandidateTreeWithBudget(src, dst string, budget *updateArchiveExtractionBudget) error {
 	cleanDst := filepath.Clean(dst)
 	return walkLocalCandidateTreeWithBudget(src, budget, func(path, rel string, info os.FileInfo) error {
@@ -1624,6 +1635,9 @@ func walkLocalCandidateTreeWithBudget(root string, budget *updateArchiveExtracti
 			if !info.IsDir() {
 				return fmt.Errorf("candidate root must be a directory: %s", filepath.ToSlash(cleanRoot))
 			}
+			if err := validateLocalCandidateTreeMode(".", info); err != nil {
+				return err
+			}
 			if visit != nil {
 				return visit(path, rel, info)
 			}
@@ -1634,6 +1648,9 @@ func walkLocalCandidateTreeWithBudget(root string, budget *updateArchiveExtracti
 			return fmt.Errorf("unsafe candidate tree path: %w", err)
 		}
 		if err := budget.addCandidateTreeEntry(name); err != nil {
+			return err
+		}
+		if err := validateLocalCandidateTreeMode(name, info); err != nil {
 			return err
 		}
 		if info.IsDir() {
@@ -3598,6 +3615,9 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 	expectedBaseVersion := releaseBaseVersion(expectedVersion)
 	expectedChannel := channelFromPackageVersion(expectedVersion)
 	var findings []qaFinding
+	if err := validateLocalCandidateTree(root); err != nil {
+		findings = append(findings, fail("update.candidate_tree", "candidate tree validation failed: "+err.Error(), filepath.ToSlash(root)))
+	}
 	required := []string{
 		".agents/plugins/marketplace.json",
 		".agents/skills/slidex",
@@ -3722,6 +3742,8 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must be a regular file", filepath.ToSlash(binaryPath)))
 	} else if runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must set owner execute permission", filepath.ToSlash(binaryPath)))
+	} else if runtime.GOOS != "windows" && info.Mode().Perm()&0o022 != 0 {
+		findings = append(findings, fail("update.candidate_binary", fmt.Sprintf("candidate CLI binary must not be group/world writable: mode %04o", info.Mode().Perm()), filepath.ToSlash(binaryPath)))
 	}
 	return findings
 }
