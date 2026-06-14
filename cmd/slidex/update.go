@@ -1391,7 +1391,7 @@ func canonicalUpdateTargetInputs(targetVersion, targetTag string) (string, strin
 	if tagVersion != version {
 		return "", "", fmt.Errorf("target tag %q resolves to %s, want %s", targetTag, tagVersion, version)
 	}
-	return version, tag, nil
+	return version, "v" + tagVersion, nil
 }
 
 func downloadAndStageReleaseCandidate(ctx context.Context, status updateStatus, apiURL string) (candidateRoot, targetVersion, targetTag string, err error) {
@@ -2245,13 +2245,17 @@ func applyCandidateBundleWithOptions(status updateStatus, candidateRoot, targetV
 		return result, nil
 	}
 	if runtime.GOOS == "windows" {
-		stagedRoot, pendingPath, err := stagePendingUpdateHandoff(status.InstallRoot, candidateRoot, targetVersion, targetTag)
+		stagedRoot, pendingPath, stagedValidation, err := stagePendingUpdateHandoffWithOptions(status.InstallRoot, candidateRoot, targetVersion, targetTag, status.Channel, options)
+		result.StagedRoot = filepath.ToSlash(stagedRoot)
+		result.PendingUpdatePath = filepath.ToSlash(pendingPath)
 		if err != nil {
 			return result, err
 		}
+		result.CandidateValidation = append(result.CandidateValidation, stagedValidation...)
+		if hasFailures(result.CandidateValidation) {
+			return result, nil
+		}
 		result.Status = "pending-restart"
-		result.StagedRoot = filepath.ToSlash(stagedRoot)
-		result.PendingUpdatePath = filepath.ToSlash(pendingPath)
 		result.RestartRequired = true
 		result.PluginVerificationStatus = "restart_required"
 		return result, nil
@@ -2291,22 +2295,66 @@ func validateCandidateChannelForStatus(statusChannel, targetVersion, evidencePat
 }
 
 func stagePendingUpdateHandoff(installRoot, candidateRoot, targetVersion, targetTag string) (stagedRoot, pendingPath string, err error) {
+	stagedRoot, pendingPath, findings, err := stagePendingUpdateHandoffWithOptions(installRoot, candidateRoot, targetVersion, targetTag, channelFromPackageVersion(strings.TrimPrefix(strings.TrimSpace(targetVersion), "v")), updateApplyOptions{})
+	if err != nil {
+		return stagedRoot, pendingPath, err
+	}
+	if hasFailures(findings) {
+		return stagedRoot, pendingPath, errors.New("candidate bundle validation failed")
+	}
+	return stagedRoot, pendingPath, nil
+}
+
+func stagePendingUpdateHandoffWithOptions(installRoot, candidateRoot, targetVersion, targetTag, statusChannel string, options updateApplyOptions) (stagedRoot, pendingPath string, findings []qaFinding, err error) {
 	stagedRoot, err = stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	activatorPath, err := stagePendingActivator(installRoot, candidateRoot, targetVersion)
+	activatorPath := ""
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if stagedRoot != "" {
+			_ = os.RemoveAll(stagedRoot)
+		}
+		if activatorPath != "" {
+			_ = os.RemoveAll(filepath.Dir(activatorPath))
+		}
+		if pendingPath != "" {
+			_ = os.Remove(pendingPath)
+		}
+	}()
+	if beforeUpdateStagedCandidateValidation != nil {
+		if err := beforeUpdateStagedCandidateValidation(stagedRoot); err != nil {
+			return stagedRoot, "", nil, err
+		}
+	}
+	findings = validateCandidateBundleForApply(stagedRoot, targetVersion, statusChannel, options.ExecuteCandidateChecks)
+	if hasFailures(findings) {
+		return stagedRoot, "", findings, nil
+	}
+	activatorPath, err = stagePendingActivator(installRoot, stagedRoot, targetVersion)
 	if err != nil {
-		return stagedRoot, "", err
+		return stagedRoot, "", findings, err
 	}
 	pendingPath, err = writePendingUpdate(installRoot, stagedRoot, activatorPath, targetVersion, targetTag)
 	if err != nil {
-		return stagedRoot, "", err
+		return stagedRoot, "", findings, err
+	}
+	pending, _, err := readPendingUpdate(installRoot)
+	if err != nil {
+		return stagedRoot, pendingPath, findings, err
+	}
+	if err := validatePendingUpdate(installRoot, pending); err != nil {
+		return stagedRoot, pendingPath, findings, err
 	}
 	if err := markPluginRestartRequired(installRoot, targetVersion, targetTag); err != nil {
-		return stagedRoot, pendingPath, err
+		return stagedRoot, pendingPath, findings, err
 	}
-	return stagedRoot, pendingPath, nil
+	committed = true
+	return stagedRoot, pendingPath, findings, nil
 }
 
 func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion string) (string, error) {
@@ -3323,7 +3371,7 @@ func parseUpdateReleases(raw []byte) ([]updateRelease, error) {
 			continue
 		}
 		release := updateRelease{
-			TagName:     tag,
+			TagName:     "v" + version,
 			Version:     version,
 			Prerelease:  metadataBool(value["prerelease"]),
 			Draft:       metadataBool(value["draft"]),

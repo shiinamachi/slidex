@@ -266,6 +266,7 @@
         "installRoot",
         "stagedRoot",
         "stagedRootManifestSha256",
+        "activatorPath",
         "activatorSha256",
         "reason",
         "createdAt"

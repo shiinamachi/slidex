@@ -431,6 +431,21 @@ func TestUpdateDiscoveryHonorsProductionAndCanaryChannels(t *testing.T) {
 	}
 }
 
+func TestUpdateDiscoveryNormalizesBareReleaseTags(t *testing.T) {
+	releases, err := parseUpdateReleases([]byte(`[
+	  {"tag_name":"0.2.0","draft":false,"prerelease":false,"assets":[]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 1 {
+		t.Fatalf("expected one release, got %d", len(releases))
+	}
+	if releases[0].Version != "0.2.0" || releases[0].TagName != "v0.2.0" {
+		t.Fatalf("bare release tag should normalize to schema-compatible tag: %#v", releases[0])
+	}
+}
+
 func TestFetchUpdateReleasesHonorsContextTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
@@ -2009,6 +2024,57 @@ func TestRunUpdateApplyRejectsMismatchedTargetTagBeforeActivation(t *testing.T) 
 	}
 }
 
+func TestRunUpdateApplyNormalizesBareTargetTagBeforeActivation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses pending update handoff because the running executable can be locked")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", metadataPath,
+			"--candidate", candidate,
+			"--target-version", "0.2.0",
+			"--target-tag", "0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("bare target tag should be normalized before activation: %v\n%s", runErr, output)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != "0.2.0" {
+		t.Fatalf("bare target tag apply VERSION = %q", got)
+	}
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.InstalledMetadata == nil || status.InstalledMetadata.Tag != "v0.2.0" {
+		t.Fatalf("bare target tag should persist schema-compatible metadata: %#v", status.InstalledMetadata)
+	}
+	state, _, err := readUpdateState(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.TargetTag != "v0.2.0" {
+		t.Fatalf("bare target tag should persist schema-compatible update state: %#v", state)
+	}
+}
+
 func TestRunUpdateApplyRejectsFutureInvalidCandidateMetadataBeforeActivation(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -3340,6 +3406,100 @@ func TestStagePendingActivatorUsesUniqueSiblingRoots(t *testing.T) {
 	}
 }
 
+func TestStagePendingUpdateHandoffRejectsInvalidStagedCopy(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	oldHook := beforeUpdateStagedCandidateValidation
+	beforeUpdateStagedCandidateValidation = func(stagedRoot string) error {
+		writeCandidateBinaryForTest(t, filepath.Join(stagedRoot, candidateCLIBinaryName()), "0.1.0")
+		return nil
+	}
+	t.Cleanup(func() {
+		beforeUpdateStagedCandidateValidation = oldHook
+	})
+
+	stagedRoot, pendingPath, findings, err := stagePendingUpdateHandoffWithOptions(installRoot, candidate, "0.2.0", "v0.2.0", updateChannelProduction, updateApplyOptions{ExecuteCandidateChecks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !findingCheckPresent(findings, "update.candidate_binary_version") {
+		t.Fatalf("invalid staged copy should be reported before pending handoff: %#v", findings)
+	}
+	if pendingPath != "" {
+		t.Fatalf("invalid staged copy should not write pending update, got %s", pendingPath)
+	}
+	if _, err := os.Stat(stagedRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid staged copy should be cleaned up, stat err=%v", err)
+	}
+	if _, err := os.Stat(pendingUpdatePath(installRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid staged copy should not leave pending update, stat err=%v", err)
+	}
+	if _, err := os.Stat(updateStatePath(installRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid staged copy should not mark restart required, stat err=%v", err)
+	}
+}
+
+func TestStagePendingUpdateHandoffStagesActivatorFromValidatedCopy(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	sourceBinary := filepath.Join(candidate, candidateCLIBinaryName())
+
+	oldHook := beforeUpdateStagedCandidateValidation
+	beforeUpdateStagedCandidateValidation = func(stagedRoot string) error {
+		writeCandidateBinaryForTest(t, sourceBinary, "9.9.9")
+		return nil
+	}
+	t.Cleanup(func() {
+		beforeUpdateStagedCandidateValidation = oldHook
+	})
+
+	stagedRoot, _, findings, err := stagePendingUpdateHandoffWithOptions(installRoot, candidate, "0.2.0", "v0.2.0", updateChannelProduction, updateApplyOptions{ExecuteCandidateChecks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFailures(findings) {
+		t.Fatalf("source candidate drift after staging should not invalidate staged handoff: %#v", findings)
+	}
+	pending, _, err := readPendingUpdate(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activatorDigest, err := sha256FileWithMaxBytes(filepath.FromSlash(pending.ActivatorPath), maxUpdateArchiveFileBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedBinaryDigest, err := sha256FileWithMaxBytes(filepath.Join(stagedRoot, candidateCLIBinaryName()), maxUpdateArchiveFileBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDigest, err := sha256FileWithMaxBytes(sourceBinary, maxUpdateArchiveFileBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activatorDigest != stagedBinaryDigest {
+		t.Fatalf("activator should be copied from staged binary: activator=%s staged=%s", activatorDigest, stagedBinaryDigest)
+	}
+	if activatorDigest == sourceDigest {
+		t.Fatal("activator should not follow source candidate drift after staging")
+	}
+}
+
 func TestPendingUpdateIgnoresSerializedActivationCommand(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
@@ -4237,6 +4397,98 @@ func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
 	invalid["unexpectedField"] = true
 	if err := validatePayloadAgainstBundledSchema(invalid, installMetadataSchemaFile); err == nil {
 		t.Fatal("install metadata schema should reject additional fields")
+	}
+
+	pending := pendingUpdate{
+		SchemaVersion:            pendingUpdateSchemaVersion,
+		ToolName:                 toolName,
+		TargetVersion:            "0.2.0",
+		TargetTag:                "v0.2.0",
+		InstallRoot:              filepath.ToSlash(t.TempDir()),
+		StagedRoot:               filepath.ToSlash(filepath.Join(t.TempDir(), ".slidex.pending-0.2.0-test")),
+		StagedRootManifestSHA256: strings.Repeat("a", 64),
+		ActivatorPath:            filepath.ToSlash(filepath.Join(t.TempDir(), ".slidex.activator-0.2.0-test", candidateCLIBinaryName())),
+		ActivatorSHA256:          strings.Repeat("b", 64),
+		Reason:                   "schema test",
+		CreatedAt:                "2026-06-10T00:00:00Z",
+	}
+	if err := validatePayloadAgainstBundledSchema(pending, pendingUpdateSchemaFile); err != nil {
+		t.Fatalf("pending update schema should accept complete payload: %v", err)
+	}
+	pendingRaw, err := json.Marshal(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pendingMissingActivatorPath map[string]any
+	if err := json.Unmarshal(pendingRaw, &pendingMissingActivatorPath); err != nil {
+		t.Fatal(err)
+	}
+	delete(pendingMissingActivatorPath, "activatorPath")
+	if err := validatePayloadAgainstBundledSchema(pendingMissingActivatorPath, pendingUpdateSchemaFile); err == nil {
+		t.Fatal("pending update schema should require activatorPath")
+	}
+
+	status := updateStatus{
+		ToolName:                 toolName,
+		CurrentVersion:           toolVersion,
+		Channel:                  updateChannelProduction,
+		InstallMode:              installModeReleasePackage,
+		InstallRoot:              pending.InstallRoot,
+		MetadataPath:             filepath.ToSlash(filepath.Join(t.TempDir(), ".slidex", "install.json")),
+		UpdatesEnabled:           true,
+		Status:                   "pending-activation",
+		RestartRequired:          true,
+		PluginVerificationStatus: "restart_required",
+		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
+		PendingActivation:        true,
+		PendingUpdate:            &pending,
+	}
+	if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
+		t.Fatalf("update status schema should accept complete pending payload: %v", err)
+	}
+	statusRaw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statusMissingActivatorPath map[string]any
+	if err := json.Unmarshal(statusRaw, &statusMissingActivatorPath); err != nil {
+		t.Fatal(err)
+	}
+	nestedPending, ok := statusMissingActivatorPath["pendingUpdate"].(map[string]any)
+	if !ok {
+		t.Fatalf("pendingUpdate missing from marshaled status: %#v", statusMissingActivatorPath)
+	}
+	delete(nestedPending, "activatorPath")
+	if err := validatePayloadAgainstBundledSchema(statusMissingActivatorPath, updateStatusSchemaFile); err == nil {
+		t.Fatal("update status schema should require nested pending activatorPath")
+	}
+
+	state := updateState{
+		SchemaVersion:       updateStateSchemaVersion,
+		ToolName:            toolName,
+		CurrentVersion:      toolVersion,
+		TargetVersion:       "0.2.0",
+		TargetTag:           "v0.2.0",
+		Channel:             updateChannelProduction,
+		RestartRequired:     true,
+		VerificationStatus:  "restart_required",
+		VerificationCommand: "slidex codex app-server plugin-smoke --json",
+		UpdatedAt:           "2026-06-10T00:00:00Z",
+	}
+	if err := validatePayloadAgainstBundledSchema(state, updateStateSchemaFile); err != nil {
+		t.Fatalf("update state schema should accept complete payload: %v", err)
+	}
+	stateRaw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stateMissingTargetVersion map[string]any
+	if err := json.Unmarshal(stateRaw, &stateMissingTargetVersion); err != nil {
+		t.Fatal(err)
+	}
+	delete(stateMissingTargetVersion, "targetVersion")
+	if err := validatePayloadAgainstBundledSchema(stateMissingTargetVersion, updateStateSchemaFile); err == nil {
+		t.Fatal("update state schema should require targetVersion")
 	}
 }
 
