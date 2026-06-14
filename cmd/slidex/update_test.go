@@ -1740,6 +1740,64 @@ func TestRunUpdateApplyRejectsMismatchedTargetTagBeforeActivation(t *testing.T) 
 	}
 }
 
+func TestRunUpdateApplyRejectsFutureInvalidCandidateMetadataBeforeActivation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*installMetadata)
+	}{
+		{name: "unknown commit", mutate: func(metadata *installMetadata) { metadata.Commit = "unknown" }},
+		{name: "non RFC3339 build time", mutate: func(metadata *installMetadata) { metadata.BuildTime = "soon" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := t.TempDir()
+			installRoot := filepath.Join(parent, "slidex")
+			if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			metadataPath := installMetadataPath(installRoot)
+			writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+			candidate := filepath.Join(parent, "candidate")
+			writeCandidateBundleForTest(t, candidate, "0.2.0")
+			candidateMetadataPath := filepath.Join(candidate, ".slidex", "install.json")
+			candidateMetadata, err := readInstallMetadata(candidateMetadataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(candidateMetadata)
+			writeInstallMetadataForTest(t, candidateMetadataPath, *candidateMetadata)
+
+			var runErr error
+			output := captureStdoutForTest(t, func() {
+				runErr = runUpdateApply([]string{
+					"--install-root", installRoot,
+					"--metadata", metadataPath,
+					"--candidate", candidate,
+					"--target-version", "0.2.0",
+					"--target-tag", "v0.2.0",
+					"--yes",
+					"--json",
+				})
+			})
+			if runErr == nil || !strings.Contains(runErr.Error(), "candidate bundle validation failed") {
+				t.Fatalf("future-invalid candidate metadata should fail update apply, err=%v\n%s", runErr, output)
+			}
+			var result updateApplyResult
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("invalid update apply JSON: %v\n%s", err, output)
+			}
+			if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_install_metadata") {
+				t.Fatalf("future-invalid candidate metadata should be reported as candidate-invalid: %#v", result)
+			}
+			if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+				t.Fatalf("future-invalid candidate metadata should not replace active install root, VERSION = %q", got)
+			}
+		})
+	}
+}
+
 func TestRunUpdateApplyDoesNotExecuteCandidateBinary(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")

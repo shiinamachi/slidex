@@ -3664,6 +3664,9 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 		if err := validateInstallMetadataSchema(metadata); err != nil {
 			findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
 		}
+		if issue := installedReleaseMetadataIssue(metadata); issue != "" {
+			findings = append(findings, fail("update.candidate_install_metadata", issue, filepath.ToSlash(metadataPath)))
+		}
 		if metadata.Version != expectedVersion {
 			findings = append(findings, fail("update.candidate_install_metadata", "install metadata version must be "+expectedVersion+", got "+metadata.Version, filepath.ToSlash(metadataPath)))
 		}
