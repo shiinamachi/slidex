@@ -425,6 +425,7 @@ func doctorPluginPackageFindings(pluginList string) []qaFinding {
 		{filepath.Join(".agents", "plugins", "marketplace.json"), "repo marketplace"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "plugin.json"), "plugin manifest"},
 		{filepath.Join("plugins", "slidex", ".codex-plugin", "version-lock.json"), "plugin version lock"},
+		{filepath.Join("plugins", "slidex", ".mcp.json"), "plugin MCP config"},
 		{filepath.Join("plugins", "slidex", "hooks", "manifest.json"), "hook manifest"},
 		{filepath.Join("plugins", "slidex", "skills", "slidex", "SKILL.md"), "plugin skill"},
 		{filepath.Join(".agents", "skills", "slidex", "SKILL.md"), "companion skill"},
@@ -997,31 +998,45 @@ func doctorAppServerSkillSmokeEvidence(deckAbs string, manifest workbenchManifes
 func validatePluginMCPConfig(path string) []qaFinding {
 	raw, err := readRegularFileWithMaxBytes(path, maxProjectConfigBytes)
 	if err != nil {
-		return nil
+		return []qaFinding{fail("doctor.plugin_mcp", "plugin MCP config is required: "+err.Error(), path)}
 	}
 	var config map[string]any
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return []qaFinding{fail("doctor.plugin_mcp", err.Error(), path)}
 	}
+	return validateSlidexPluginMCPContract(config, "doctor.plugin_mcp", path)
+}
+
+const (
+	expectedPluginSkillsPath     = "./skills/"
+	expectedPluginMCPServersPath = "./.mcp.json"
+)
+
+func validateSlidexPluginMCPContract(config map[string]any, check, path string) []qaFinding {
+	var findings []qaFinding
 	servers, _ := config["mcpServers"].(map[string]any)
 	if len(servers) == 0 {
-		servers, _ = config["mcp_servers"].(map[string]any)
-	}
-	if len(servers) == 0 {
-		return []qaFinding{fail("doctor.plugin_mcp", "plugin MCP config must define a slidex server", path)}
+		return []qaFinding{fail(check, "plugin MCP config must define mcpServers.slidex", path)}
 	}
 	server, _ := servers["slidex"].(map[string]any)
 	if len(server) == 0 {
-		return []qaFinding{fail("doctor.plugin_mcp", "plugin MCP config must define mcpServers.slidex", path)}
+		return []qaFinding{fail(check, "plugin MCP config must define mcpServers.slidex", path)}
 	}
-	if strings.TrimSpace(fmt.Sprint(server["command"])) == "" {
-		return []qaFinding{fail("doctor.plugin_mcp", "slidex MCP server command is required", path)}
+	if got := metadataString(server["command"]); got != toolName {
+		findings = append(findings, fail(check, "slidex MCP server command must be "+toolName+", got "+got, path))
 	}
 	args, _ := server["args"].([]any)
-	if len(args) < 2 || fmt.Sprint(args[0]) != "mcp-server" || fmt.Sprint(args[1]) != "--stdio" {
-		return []qaFinding{fail("doctor.plugin_mcp", "slidex MCP server args must run mcp-server --stdio", path)}
+	if len(args) != 2 || metadataString(args[0]) != "mcp-server" || metadataString(args[1]) != "--stdio" {
+		findings = append(findings, fail(check, `slidex MCP server args must be exactly ["mcp-server","--stdio"]`, path))
 	}
-	return nil
+	env, _ := server["env"].(map[string]any)
+	if metadataString(env["SLIDEX_BROWSER_OPEN"]) != "agent" {
+		findings = append(findings, fail(check, "slidex MCP server env must set SLIDEX_BROWSER_OPEN=agent", path))
+	}
+	if len(env) != 1 {
+		findings = append(findings, fail(check, "slidex MCP server env must not define unexpected entries", path))
+	}
+	return findings
 }
 
 func localProtocolBundleStatus() map[string]any {
@@ -1078,15 +1093,7 @@ func validatePluginJSONManifest(path string) []qaFinding {
 		return []qaFinding{fail("doctor.plugin_manifest", err.Error(), path)}
 	}
 	var findings []qaFinding
-	if fmt.Sprint(manifest["name"]) != "slidex" {
-		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest name must be slidex", path))
-	}
-	version := metadataString(manifest["version"])
-	if version == "" {
-		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest version missing", path))
-	} else if base := pluginVersionBase(version); base != toolVersion {
-		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest version base must be "+toolVersion+", got "+base, path))
-	}
+	findings = append(findings, validateSlidexPluginManifestContract(manifest, toolVersion, "doctor.plugin_manifest", path)...)
 	author, _ := manifest["author"].(map[string]any)
 	if metadataString(author["name"]) != toolDeveloperName {
 		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest author.name must be "+toolDeveloperName, path))
@@ -1098,11 +1105,25 @@ func validatePluginJSONManifest(path string) []qaFinding {
 	if metadataString(iface["developerName"]) != toolDeveloperName {
 		findings = append(findings, fail("doctor.plugin_manifest", "plugin interface developerName must be "+toolDeveloperName, path))
 	}
-	if metadataString(manifest["skills"]) == "" {
-		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest must expose skills path", path))
+	return findings
+}
+
+func validateSlidexPluginManifestContract(manifest map[string]any, expectedBaseVersion, check, path string) []qaFinding {
+	var findings []qaFinding
+	if got := metadataString(manifest["name"]); got != toolName {
+		findings = append(findings, fail(check, "plugin manifest name must be "+toolName+", got "+got, path))
 	}
-	if metadataString(manifest["mcpServers"]) == "" {
-		findings = append(findings, fail("doctor.plugin_manifest", "plugin manifest must expose MCP server manifest", path))
+	version := metadataString(manifest["version"])
+	if version == "" {
+		findings = append(findings, fail(check, "plugin manifest version missing", path))
+	} else if base := pluginVersionBase(version); base != expectedBaseVersion {
+		findings = append(findings, fail(check, "plugin manifest version base must be "+expectedBaseVersion+", got "+base, path))
+	}
+	if got := metadataString(manifest["skills"]); got != expectedPluginSkillsPath {
+		findings = append(findings, fail(check, "plugin manifest skills must be "+expectedPluginSkillsPath+", got "+got, path))
+	}
+	if got := metadataString(manifest["mcpServers"]); got != expectedPluginMCPServersPath {
+		findings = append(findings, fail(check, "plugin manifest mcpServers must be "+expectedPluginMCPServersPath+", got "+got, path))
 	}
 	return findings
 }
@@ -1177,13 +1198,13 @@ func validateMarketplaceManifest(path string) []qaFinding {
 		findings = append(findings, fail("doctor.marketplace_manifest", "marketplace displayName must be "+pluginMarketplaceDisplay+", got "+got, path))
 	}
 	plugins, _ := manifest["plugins"].([]any)
-	found := false
+	found := 0
 	for _, entry := range plugins {
 		plugin, _ := entry.(map[string]any)
 		if metadataString(plugin["name"]) != toolName {
 			continue
 		}
-		found = true
+		found++
 		source, _ := plugin["source"].(map[string]any)
 		if metadataString(source["source"]) != "local" {
 			findings = append(findings, fail("doctor.marketplace_manifest", "slidex marketplace source must be local", path))
@@ -1199,8 +1220,10 @@ func validateMarketplaceManifest(path string) []qaFinding {
 			findings = append(findings, fail("doctor.marketplace_manifest", "slidex marketplace entry must include category", path))
 		}
 	}
-	if !found {
+	if found == 0 {
 		findings = append(findings, fail("doctor.marketplace_manifest", "marketplace must include slidex plugin entry", path))
+	} else if found > 1 {
+		findings = append(findings, fail("doctor.marketplace_manifest", "marketplace must not include duplicate slidex plugin entries", path))
 	}
 	return findings
 }

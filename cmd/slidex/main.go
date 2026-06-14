@@ -1903,19 +1903,27 @@ func validateWithFullJSONSchema(instanceRaw []byte, schema map[string]any, sourc
 	if err != nil {
 		return []qaFinding{fail("schema.full_json_schema", "could not decode instance for full JSON Schema validation: "+err.Error(), sourcePath)}
 	}
-	compiler := jsonschema.NewCompiler()
-	compiler.DefaultDraft(jsonschema.Draft2020)
-	if err := compiler.AddResource("deck_spec.schema.json", schema); err != nil {
-		return []qaFinding{fail("schema.full_json_schema", "could not load schema resource: "+err.Error(), sourcePath)}
-	}
-	compiled, err := compiler.Compile("deck_spec.schema.json")
-	if err != nil {
-		return []qaFinding{fail("schema.full_json_schema", "could not compile schema: "+err.Error(), sourcePath)}
+	compiled, findings := compileFullJSONSchema(schema, sourcePath)
+	if hasFailures(findings) {
+		return findings
 	}
 	if err := compiled.Validate(instance); err != nil {
 		return []qaFinding{fail("schema.full_json_schema", err.Error(), sourcePath)}
 	}
 	return nil
+}
+
+func compileFullJSONSchema(schema map[string]any, sourcePath string) (*jsonschema.Schema, []qaFinding) {
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("deck_spec.schema.json", schema); err != nil {
+		return nil, []qaFinding{fail("schema.full_json_schema", "could not load schema resource: "+err.Error(), sourcePath)}
+	}
+	compiled, err := compiler.Compile("deck_spec.schema.json")
+	if err != nil {
+		return nil, []qaFinding{fail("schema.full_json_schema", "could not compile schema: "+err.Error(), sourcePath)}
+	}
+	return compiled, nil
 }
 
 func validateJSONSchema(value any, schema map[string]any, root map[string]any, path string, sourcePath string) []qaFinding {

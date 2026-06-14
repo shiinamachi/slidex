@@ -1432,8 +1432,11 @@ func TestValidateCandidateBundleStaticRejectsMissingRuntimeLeafFiles(t *testing.
 	for _, rel := range []string{
 		".agents/skills/slidex/SKILL.md",
 		"internal/codex/protocol/codex-cli-0.138.0/schema/ClientRequest.json",
+		"plugins/slidex/.mcp.json",
 		"plugins/slidex/skills/slidex/SKILL.md",
 		"schemas/deck_spec.schema.json",
+		"schemas/slidex_pending_update.schema.json",
+		"schemas/slidex_update_state.schema.json",
 	} {
 		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
 			root := t.TempDir()
@@ -1445,6 +1448,161 @@ func TestValidateCandidateBundleStaticRejectsMissingRuntimeLeafFiles(t *testing.
 			findings := validateCandidateBundleStatic(root, "0.2.0")
 			if !findingCheckPresent(findings, "update.candidate_runtime") {
 				t.Fatalf("missing runtime leaf %s should fail static validation: %#v", rel, findings)
+			}
+		})
+	}
+}
+
+func TestValidateCandidateBundleStaticRejectsMissingSchemaFiles(t *testing.T) {
+	schemaFiles, err := requiredCandidateSchemaFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range schemaFiles {
+		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
+			root := t.TempDir()
+			writeCandidateBundleForTest(t, root, "0.2.0")
+			if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+
+			findings := validateCandidateBundleStatic(root, "0.2.0")
+			if !findingCheckPresent(findings, "update.candidate_schema") {
+				t.Fatalf("missing candidate schema %s should fail static validation: %#v", rel, findings)
+			}
+		})
+	}
+}
+
+func TestValidateCandidateBundleStaticRejectsCorruptSchemaFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{name: "empty", content: ""},
+		{name: "invalid json", content: "{"},
+		{name: "missing schema declaration", content: "{}"},
+		{name: "uncompilable schema", content: `{"$schema":"https://json-schema.org/draft/2020-12/schema","type":123}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCandidateBundleForTest(t, root, "0.2.0")
+			path := filepath.Join(root, "schemas", "stage_result.schema.json")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			findings := validateCandidateBundleStatic(root, "0.2.0")
+			if !findingCheckPresent(findings, "update.candidate_schema") {
+				t.Fatalf("corrupt candidate schema should fail static validation: %#v", findings)
+			}
+		})
+	}
+}
+
+func TestValidateCandidateBundleStaticUsesCandidateLocalMetadataSchema(t *testing.T) {
+	root := t.TempDir()
+	writeCandidateBundleForTest(t, root, "0.2.0")
+	path := filepath.Join(root, "schemas", installMetadataSchemaFile)
+	if err := os.WriteFile(path, []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","not":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings := validateCandidateBundleStatic(root, "0.2.0")
+	if !findingCheckPresent(findings, "update.candidate_install_metadata") {
+		t.Fatalf("candidate metadata must be validated against candidate-local schema: %#v", findings)
+	}
+}
+
+func TestValidateCandidateBundleStaticRejectsPluginContractDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		wantCheck string
+		mutate    func(t *testing.T, root string)
+	}{
+		{
+			name:      "missing mcp config",
+			wantCheck: "update.candidate_plugin_mcp",
+			mutate: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "plugins", "slidex", ".mcp.json")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:      "wrong manifest skills path",
+			wantCheck: "update.candidate_plugin_manifest",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, "plugins", "slidex", ".codex-plugin", "plugin.json"), func(value map[string]any) {
+					value["skills"] = "./wrong-skills/"
+				})
+			},
+		},
+		{
+			name:      "wrong manifest mcp path",
+			wantCheck: "update.candidate_plugin_manifest",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, "plugins", "slidex", ".codex-plugin", "plugin.json"), func(value map[string]any) {
+					value["mcpServers"] = "./wrong.json"
+				})
+			},
+		},
+		{
+			name:      "wrong mcp command",
+			wantCheck: "update.candidate_plugin_mcp",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, "plugins", "slidex", ".mcp.json"), func(value map[string]any) {
+					servers := value["mcpServers"].(map[string]any)
+					server := servers["slidex"].(map[string]any)
+					server["command"] = "other-slidex"
+				})
+			},
+		},
+		{
+			name:      "unexpected mcp env",
+			wantCheck: "update.candidate_plugin_mcp",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, "plugins", "slidex", ".mcp.json"), func(value map[string]any) {
+					servers := value["mcpServers"].(map[string]any)
+					server := servers["slidex"].(map[string]any)
+					env := server["env"].(map[string]any)
+					env["SSH_AUTH_SOCK"] = "/tmp/agent.sock"
+				})
+			},
+		},
+		{
+			name:      "misdirected marketplace",
+			wantCheck: "update.candidate_marketplace",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, ".agents", "plugins", "marketplace.json"), func(value map[string]any) {
+					plugins := value["plugins"].([]any)
+					entry := plugins[0].(map[string]any)
+					source := entry["source"].(map[string]any)
+					source["path"] = "./plugins/other"
+				})
+			},
+		},
+		{
+			name:      "duplicate marketplace entry",
+			wantCheck: "update.candidate_marketplace",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, ".agents", "plugins", "marketplace.json"), func(value map[string]any) {
+					value["plugins"] = append(value["plugins"].([]any), map[string]any{
+						"name":   "slidex",
+						"source": map[string]any{"source": "local", "path": "./plugins/slidex"},
+					})
+				})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCandidateBundleForTest(t, root, "0.2.0")
+			tc.mutate(t, root)
+
+			findings := validateCandidateBundleStatic(root, "0.2.0")
+			if !findingCheckPresent(findings, tc.wantCheck) {
+				t.Fatalf("candidate plugin contract drift should fail %s: %#v", tc.wantCheck, findings)
 			}
 		})
 	}
@@ -4054,6 +4212,15 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 		"plugins/slidex/skills/slidex-finalize/SKILL.md":                      "# slidex finalize\n",
 		"plugins/slidex/skills/slidex-run/SKILL.md":                           "# slidex run\n",
 		"plugins/slidex/skills/slidex-start/SKILL.md":                         "# slidex start\n",
+		"plugins/slidex/.mcp.json": `{
+		  "mcpServers":{
+		    "slidex":{
+		      "command":"slidex",
+		      "args":["mcp-server","--stdio"],
+		      "env":{"SLIDEX_BROWSER_OPEN":"agent"}
+		    }
+		  }
+		}`,
 		".slidex/install.json": `{
 		  "schemaVersion":"slidex.install.v1",
 		  "toolName":"slidex",
@@ -4127,6 +4294,26 @@ func copySchemaFixturesForTest(t *testing.T, root string) {
 		if err := os.WriteFile(filepath.Join(destinationRoot, entry.Name()), raw, 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func mutateCandidateJSONForTest(t *testing.T, path string, mutate func(map[string]any)) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	mutate(value)
+	updated, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

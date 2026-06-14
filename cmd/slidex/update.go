@@ -2869,10 +2869,21 @@ func validateInstallMetadataSchema(metadata *installMetadata) error {
 	if metadata == nil {
 		return errors.New("install metadata is missing")
 	}
-	if len(metadata.Raw) > 0 {
-		return validateRawJSONAgainstBundledSchema(metadata.Raw, installMetadataSchemaFile)
+	schemaPath, err := bundledSchemaPathStrict(installMetadataSchemaFile)
+	if err != nil {
+		return err
 	}
-	return validatePayloadAgainstBundledSchema(*metadata, installMetadataSchemaFile)
+	return validateInstallMetadataAgainstSchemaPath(metadata, schemaPath)
+}
+
+func validateInstallMetadataAgainstSchemaPath(metadata *installMetadata, schemaPath string) error {
+	if metadata == nil {
+		return errors.New("install metadata is missing")
+	}
+	if len(metadata.Raw) > 0 {
+		return validateRawJSONAgainstSchema(metadata.Raw, schemaPath)
+	}
+	return validatePayloadAgainstSchema(*metadata, schemaPath)
 }
 
 var resolveExecutableInstallRoot = executableInstallRoot
@@ -3649,22 +3660,9 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 			findings = append(findings, fail("update.candidate_runtime", "missing candidate runtime path: "+err.Error(), filepath.ToSlash(path)))
 		}
 	}
-	requiredFiles := []string{
-		".agents/skills/slidex/SKILL.md",
-		".agents/skills/slidex/references/commands.md",
-		"internal/codex/protocol/codex-cli-0.138.0/protocol_manifest.json",
-		"internal/codex/protocol/codex-cli-0.138.0/schema/ClientRequest.json",
-		"internal/codex/protocol/codex-cli-0.138.0/schema/ServerRequest.json",
-		"plugins/slidex/README.md",
-		"plugins/slidex/hooks/manifest.json",
-		"plugins/slidex/skills/slidex/SKILL.md",
-		"plugins/slidex/skills/slidex-finalize/SKILL.md",
-		"plugins/slidex/skills/slidex-run/SKILL.md",
-		"plugins/slidex/skills/slidex-start/SKILL.md",
-		"schemas/deck_spec.schema.json",
-		"schemas/slidex_install_metadata.schema.json",
-		"schemas/slidex_update_apply_result.schema.json",
-		"schemas/slidex_update_status.schema.json",
+	requiredFiles, requiredFilesErr := requiredCandidateRuntimeFiles()
+	if requiredFilesErr != nil {
+		findings = append(findings, fail("update.candidate_runtime", "trusted candidate runtime file set could not be resolved: "+requiredFilesErr.Error(), filepath.ToSlash(filepath.Join(root, "schemas"))))
 	}
 	for _, rel := range requiredFiles {
 		path := filepath.Join(root, filepath.FromSlash(rel))
@@ -3679,6 +3677,7 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 			findings = append(findings, fail("update.candidate_runtime", "candidate runtime file must be a regular file", filepath.ToSlash(path)))
 		}
 	}
+	findings = append(findings, validateCandidateSchemaFiles(root)...)
 	findings = append(findings, validateCandidateBundleMutableStatePaths(root)...)
 	versionPath := filepath.Join(root, "VERSION")
 	versionRaw, versionErr := readRegularFileWithMaxBytes(versionPath, maxUpdateVersionBytes)
@@ -3693,6 +3692,10 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 	} else {
 		if err := validateInstallMetadataSchema(metadata); err != nil {
 			findings = append(findings, fail("update.candidate_install_metadata", err.Error(), filepath.ToSlash(metadataPath)))
+		}
+		candidateSchemaPath := filepath.Join(root, "schemas", installMetadataSchemaFile)
+		if err := validateInstallMetadataAgainstSchemaPath(metadata, candidateSchemaPath); err != nil {
+			findings = append(findings, fail("update.candidate_install_metadata", "candidate-local schema validation failed: "+err.Error(), filepath.ToSlash(metadataPath)))
 		}
 		if issue := installedReleaseMetadataIssue(metadata); issue != "" {
 			findings = append(findings, fail("update.candidate_install_metadata", issue, filepath.ToSlash(metadataPath)))
@@ -3736,12 +3739,13 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 	if manifest, err := readCandidateJSON(manifestPath); err != nil {
 		findings = append(findings, fail("update.candidate_plugin_manifest", err.Error(), filepath.ToSlash(manifestPath)))
 	} else {
-		if got := metadataString(manifest["name"]); got != toolName {
-			findings = append(findings, fail("update.candidate_plugin_manifest", "plugin manifest name must be "+toolName, filepath.ToSlash(manifestPath)))
-		}
-		if got := pluginVersionBase(metadataString(manifest["version"])); got != expectedBaseVersion {
-			findings = append(findings, fail("update.candidate_plugin_manifest", "plugin manifest version base must be "+expectedBaseVersion+", got "+got, filepath.ToSlash(manifestPath)))
-		}
+		findings = append(findings, validateSlidexPluginManifestContract(manifest, expectedBaseVersion, "update.candidate_plugin_manifest", filepath.ToSlash(manifestPath))...)
+	}
+	mcpPath := filepath.Join(root, "plugins", "slidex", ".mcp.json")
+	if mcpConfig, err := readCandidateJSON(mcpPath); err != nil {
+		findings = append(findings, fail("update.candidate_plugin_mcp", err.Error(), filepath.ToSlash(mcpPath)))
+	} else {
+		findings = append(findings, validateSlidexPluginMCPContract(mcpConfig, "update.candidate_plugin_mcp", filepath.ToSlash(mcpPath))...)
 	}
 	lockPath := filepath.Join(root, "plugins", "slidex", ".codex-plugin", "version-lock.json")
 	if lock, err := readCandidateJSON(lockPath); err != nil {
@@ -3759,8 +3763,8 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 	marketplacePath := filepath.Join(root, ".agents", "plugins", "marketplace.json")
 	if marketplace, err := readCandidateJSON(marketplacePath); err != nil {
 		findings = append(findings, fail("update.candidate_marketplace", err.Error(), filepath.ToSlash(marketplacePath)))
-	} else if !candidateMarketplacePointsToBundledPlugin(marketplace) {
-		findings = append(findings, fail("update.candidate_marketplace", "candidate marketplace must point slidex to ./plugins/slidex", filepath.ToSlash(marketplacePath)))
+	} else {
+		findings = append(findings, validateCandidateMarketplaceContract(marketplace, filepath.ToSlash(marketplacePath))...)
 	}
 	binary := "slidex"
 	if runtime.GOOS == "windows" {
@@ -3777,6 +3781,96 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 		findings = append(findings, fail("update.candidate_binary", "candidate CLI binary must set owner execute permission", filepath.ToSlash(binaryPath)))
 	} else if runtime.GOOS != "windows" && info.Mode().Perm()&0o022 != 0 {
 		findings = append(findings, fail("update.candidate_binary", fmt.Sprintf("candidate CLI binary must not be group/world writable: mode %04o", info.Mode().Perm()), filepath.ToSlash(binaryPath)))
+	}
+	return findings
+}
+
+func requiredCandidateRuntimeFiles() ([]string, error) {
+	files := []string{
+		".agents/skills/slidex/SKILL.md",
+		".agents/skills/slidex/references/commands.md",
+		"internal/codex/protocol/codex-cli-0.138.0/protocol_manifest.json",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ClientRequest.json",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ServerRequest.json",
+		"plugins/slidex/.mcp.json",
+		"plugins/slidex/README.md",
+		"plugins/slidex/hooks/manifest.json",
+		"plugins/slidex/skills/slidex/SKILL.md",
+		"plugins/slidex/skills/slidex-finalize/SKILL.md",
+		"plugins/slidex/skills/slidex-run/SKILL.md",
+		"plugins/slidex/skills/slidex-start/SKILL.md",
+	}
+	schemaFiles, err := requiredCandidateSchemaFiles()
+	if err != nil {
+		return files, err
+	}
+	files = append(files, schemaFiles...)
+	sort.Strings(files)
+	return files, nil
+}
+
+func requiredCandidateSchemaFiles() ([]string, error) {
+	dir, err := trustedBundledSchemaDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
+			continue
+		}
+		files = append(files, filepath.ToSlash(filepath.Join("schemas", entry.Name())))
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no built-in schema files found in %s", filepath.ToSlash(dir))
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func trustedBundledSchemaDir() (string, error) {
+	path, err := bundledSchemaPathStrict(installMetadataSchemaFile)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(path), nil
+}
+
+func validateCandidateSchemaFiles(root string) []qaFinding {
+	required, err := requiredCandidateSchemaFiles()
+	if err != nil {
+		return []qaFinding{fail("update.candidate_schema", "trusted candidate schema set could not be resolved: "+err.Error(), filepath.ToSlash(filepath.Join(root, "schemas")))}
+	}
+	var findings []qaFinding
+	for _, rel := range required {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := readRegularFileWithMaxBytes(path, maxProjectSchemaBytes)
+		if err != nil {
+			findings = append(findings, fail("update.candidate_schema", "candidate schema could not be read safely: "+err.Error(), filepath.ToSlash(path)))
+			continue
+		}
+		if strings.TrimSpace(string(raw)) == "" {
+			findings = append(findings, fail("update.candidate_schema", "candidate schema must not be empty", filepath.ToSlash(path)))
+			continue
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			findings = append(findings, fail("update.candidate_schema", "candidate schema is not valid JSON: "+err.Error(), filepath.ToSlash(path)))
+			continue
+		}
+		if metadataString(schema["$schema"]) == "" {
+			findings = append(findings, fail("update.candidate_schema", "candidate schema must declare $schema", filepath.ToSlash(path)))
+			continue
+		}
+		if _, schemaFindings := compileFullJSONSchema(schema, filepath.ToSlash(path)); hasFailures(schemaFindings) {
+			for _, finding := range schemaFindings {
+				findings = append(findings, fail("update.candidate_schema", finding.Message, filepath.ToSlash(path)))
+			}
+		}
 	}
 	return findings
 }
@@ -3873,17 +3967,30 @@ func readCandidateJSON(path string) (map[string]any, error) {
 	return value, nil
 }
 
-func candidateMarketplacePointsToBundledPlugin(manifest map[string]any) bool {
+func validateCandidateMarketplaceContract(manifest map[string]any, path string) []qaFinding {
 	plugins, _ := manifest["plugins"].([]any)
+	var findings []qaFinding
+	found := 0
 	for _, raw := range plugins {
 		plugin, _ := raw.(map[string]any)
 		if metadataString(plugin["name"]) != toolName {
 			continue
 		}
+		found++
 		source, _ := plugin["source"].(map[string]any)
-		return metadataString(source["source"]) == "local" && metadataString(source["path"]) == "./plugins/slidex"
+		if metadataString(source["source"]) != "local" {
+			findings = append(findings, fail("update.candidate_marketplace", "candidate marketplace slidex source must be local", path))
+		}
+		if metadataString(source["path"]) != "./plugins/slidex" {
+			findings = append(findings, fail("update.candidate_marketplace", "candidate marketplace must point slidex to ./plugins/slidex", path))
+		}
 	}
-	return false
+	if found == 0 {
+		findings = append(findings, fail("update.candidate_marketplace", "candidate marketplace must include slidex plugin entry", path))
+	} else if found > 1 {
+		findings = append(findings, fail("update.candidate_marketplace", "candidate marketplace must not include duplicate slidex plugin entries", path))
+	}
+	return findings
 }
 
 func metadataBool(value any) bool {
