@@ -1293,6 +1293,59 @@ func TestRunUpdateVerifyCandidateDoesNotExecuteBinaryByDefault(t *testing.T) {
 	}
 }
 
+func TestRunUpdateVerifyCandidateRejectsChannelSwitch(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := t.TempDir()
+	writeCandidateBundleForTest(t, candidate, "0.2.0-canary.20260610010000")
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath, "--candidate", candidate, "--target-version", "0.2.0-canary.20260610010000", "--json"})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "candidate bundle validation failed") {
+		t.Fatalf("candidate verify should reject channel switch, err=%v\n%s", runErr, output)
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid candidate verify JSON: %v\n%s", err, output)
+	}
+	if status.Status != "candidate-invalid" || !findingCheckPresent(status.CandidateValidation, "update.candidate_channel") {
+		t.Fatalf("candidate verify should report channel switch as invalid: %#v", status)
+	}
+}
+
+func TestRunUpdateVerifyCandidateRejectsUnsafeTree(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := t.TempDir()
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	large := filepath.Join(candidate, "large.bin")
+	if err := os.WriteFile(large, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(large, maxUpdateArchiveFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateVerify([]string{"--install-root", installRoot, "--metadata", metadataPath, "--candidate", candidate, "--target-version", "0.2.0", "--json"})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "candidate bundle validation failed") {
+		t.Fatalf("candidate verify should reject unsafe tree, err=%v\n%s", runErr, output)
+	}
+	var status updateStatus
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("invalid candidate verify JSON: %v\n%s", err, output)
+	}
+	if status.Status != "candidate-invalid" || !findingCheckPresent(status.CandidateValidation, "update.candidate_tree") {
+		t.Fatalf("candidate verify should report unsafe tree as invalid: %#v", status)
+	}
+}
+
 func TestValidateCandidateBundleStaticRejectsSymlinkedBinary(t *testing.T) {
 	root := t.TempDir()
 	writeCandidateBundleForTest(t, root, "0.2.0")

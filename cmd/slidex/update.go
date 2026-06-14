@@ -665,7 +665,7 @@ func runUpdateVerify(args []string) error {
 		if *targetVersion == "" {
 			return exitCodeError(2, "--target-version is required with --candidate")
 		}
-		status.CandidateValidation = validateCandidateBundleStatic(*candidate, *targetVersion)
+		status.CandidateValidation = validateCandidateBundleForStatus(*candidate, *targetVersion, status.Channel)
 		if *executeCandidateChecks && !hasFailures(status.CandidateValidation) {
 			status.CandidateValidation = append(status.CandidateValidation, validateCandidateBundleDynamicChecks(*candidate, *targetVersion)...)
 		}
