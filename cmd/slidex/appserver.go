@@ -1783,7 +1783,7 @@ func postRestartPluginMetadataStatus(pluginRoot, visiblePluginVersion string) st
 			return "drift"
 		}
 	}
-	if metadataString(lock["requiredCodexCliVersion"]) == "" {
+	if got := metadataString(lock["requiredCodexCliVersion"]); got != requiredCodexVersion {
 		return "drift"
 	}
 	return "verified"

@@ -1559,6 +1559,19 @@ func TestValidateCandidateBundleStaticRejectsPluginContractDrift(t *testing.T) {
 			},
 		},
 		{
+			name:      "extra mcp server",
+			wantCheck: "update.candidate_plugin_mcp",
+			mutate: func(t *testing.T, root string) {
+				mutateCandidateJSONForTest(t, filepath.Join(root, "plugins", "slidex", ".mcp.json"), func(value map[string]any) {
+					servers := value["mcpServers"].(map[string]any)
+					servers["extra"] = map[string]any{
+						"command": "other-command",
+						"args":    []any{"--stdio"},
+					}
+				})
+			},
+		},
+		{
 			name:      "unexpected mcp env",
 			wantCheck: "update.candidate_plugin_mcp",
 			mutate: func(t *testing.T, root string) {
@@ -1605,6 +1618,29 @@ func TestValidateCandidateBundleStaticRejectsPluginContractDrift(t *testing.T) {
 				t.Fatalf("candidate plugin contract drift should fail %s: %#v", tc.wantCheck, findings)
 			}
 		})
+	}
+}
+
+func TestValidatePluginMCPConfigRejectsExtraServer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".mcp.json")
+	if err := writeSourceJSONFile(path, map[string]any{
+		"mcpServers": map[string]any{
+			"slidex": map[string]any{
+				"command": toolName,
+				"args":    []any{"mcp-server", "--stdio"},
+				"env":     map[string]any{"SLIDEX_BROWSER_OPEN": "agent"},
+			},
+			"extra": map[string]any{
+				"command": "other-command",
+				"args":    []any{"--stdio"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	findings := validatePluginMCPConfig(path)
+	if !findingCheckPresent(findings, "doctor.plugin_mcp") {
+		t.Fatalf("extra MCP server should fail doctor plugin MCP validation: %#v", findings)
 	}
 }
 
@@ -2071,6 +2107,56 @@ func TestRunUpdateApplyDoesNotExecuteCandidateBinary(t *testing.T) {
 	}
 }
 
+func TestRunUpdateApplyArchiveRejectsCandidateDoctorFailureBeforeActivation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows update apply stages pending activation instead of directly replacing install root")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	binary := "slidex"
+	if runtime.GOOS == "windows" {
+		binary = "slidex.exe"
+	}
+	writeCandidateBinaryForTestWithDoctorStatus(t, filepath.Join(candidate, binary), "0.2.0", "fail")
+	archivePath, checksumPath := writeCandidateReleaseArchiveForTest(t, parent, candidate, "0.2.0")
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", metadataPath,
+			"--archive", archivePath,
+			"--checksums", checksumPath,
+			"--target-version", "0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "candidate bundle validation failed") {
+		t.Fatalf("archive doctor failure should fail update apply, err=%v\n%s", runErr, output)
+	}
+	var result updateApplyResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid update apply JSON: %v\n%s", err, output)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_doctor") {
+		t.Fatalf("archive doctor failure should be reported before activation: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("archive doctor failure should not replace active install root, VERSION = %q", got)
+	}
+}
+
 func TestRunUpdateApplyRevalidatesStagedCandidateBeforeActivation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows update apply stages pending activation instead of directly replacing install root")
@@ -2120,6 +2206,60 @@ func TestRunUpdateApplyRevalidatesStagedCandidateBeforeActivation(t *testing.T) 
 	}
 	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
 		t.Fatalf("invalid staged candidate should not replace active install root, VERSION = %q", got)
+	}
+}
+
+func TestRunUpdateApplyArchiveRejectsStagedBinaryVersionDriftBeforeActivation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows update apply stages pending activation instead of directly replacing install root")
+	}
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+	archivePath, checksumPath := writeCandidateReleaseArchiveForTest(t, parent, candidate, "0.2.0")
+
+	oldHook := beforeUpdateStagedCandidateValidation
+	beforeUpdateStagedCandidateValidation = func(stagedRoot string) error {
+		writeCandidateBinaryForTest(t, filepath.Join(stagedRoot, "slidex"), "0.1.0")
+		return nil
+	}
+	t.Cleanup(func() {
+		beforeUpdateStagedCandidateValidation = oldHook
+	})
+
+	var runErr error
+	output := captureStdoutForTest(t, func() {
+		runErr = runUpdateApply([]string{
+			"--install-root", installRoot,
+			"--metadata", metadataPath,
+			"--archive", archivePath,
+			"--checksums", checksumPath,
+			"--target-version", "0.2.0",
+			"--yes",
+			"--json",
+		})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "candidate bundle validation failed") {
+		t.Fatalf("staged archive binary drift should fail update apply, err=%v\n%s", runErr, output)
+	}
+	var result updateApplyResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid update apply JSON: %v\n%s", err, output)
+	}
+	if result.Status != "candidate-invalid" || !findingCheckPresent(result.CandidateValidation, "update.candidate_binary_version") {
+		t.Fatalf("staged archive binary drift should be reported before activation: %#v", result)
+	}
+	if got := strings.TrimSpace(readFileOrEmpty(filepath.Join(installRoot, "VERSION"))); got != toolVersion {
+		t.Fatalf("staged archive binary drift should not replace active install root, VERSION = %q", got)
 	}
 }
 
@@ -4643,4 +4783,29 @@ func updateReleaseServerForCandidateForTest(t *testing.T, candidate, version str
 		}
 	}))
 	return server
+}
+
+func writeCandidateReleaseArchiveForTest(t *testing.T, parent, candidate, version string) (archivePath, checksumPath string) {
+	t.Helper()
+	contract, err := releaseAssetContractFor("v"+version, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath = filepath.Join(parent, contract.ArchiveName)
+	topName := strings.TrimSuffix(strings.TrimSuffix(contract.ArchiveName, ".tar.gz"), ".zip")
+	if strings.HasSuffix(contract.ArchiveName, ".zip") {
+		writeZipFromDirForTest(t, archivePath, candidate, topName)
+	} else {
+		writeTarGzFromDirForTest(t, archivePath, candidate, topName)
+	}
+	payload, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksumPath = filepath.Join(parent, contract.ChecksumName)
+	if err := os.WriteFile(checksumPath, []byte(hex.EncodeToString(sum[:])+"  "+contract.ArchiveName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return archivePath, checksumPath
 }

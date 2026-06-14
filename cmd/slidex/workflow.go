@@ -1015,12 +1015,12 @@ const (
 func validateSlidexPluginMCPContract(config map[string]any, check, path string) []qaFinding {
 	var findings []qaFinding
 	servers, _ := config["mcpServers"].(map[string]any)
-	if len(servers) == 0 {
-		return []qaFinding{fail(check, "plugin MCP config must define mcpServers.slidex", path)}
+	if len(servers) != 1 {
+		return []qaFinding{fail(check, "plugin MCP config must define exactly mcpServers.slidex", path)}
 	}
 	server, _ := servers["slidex"].(map[string]any)
 	if len(server) == 0 {
-		return []qaFinding{fail(check, "plugin MCP config must define mcpServers.slidex", path)}
+		return []qaFinding{fail(check, "plugin MCP config must define exactly mcpServers.slidex", path)}
 	}
 	if got := metadataString(server["command"]); got != toolName {
 		findings = append(findings, fail(check, "slidex MCP server command must be "+toolName+", got "+got, path))

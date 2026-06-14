@@ -2335,6 +2335,45 @@ func TestPostRestartPluginVerificationDetectsManifestDrift(t *testing.T) {
 	}
 }
 
+func TestPostRestartPluginVerificationDetectsRequiredCodexVersionDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cachePath bool
+	}{
+		{name: "installed plugin", cachePath: false},
+		{name: "cache skill path", cachePath: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installRoot := t.TempDir()
+			writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+			startSkillRoot := installRoot
+			if tc.cachePath {
+				cacheInstallRoot := t.TempDir()
+				writePostRestartPluginFilesForTest(t, cacheInstallRoot, toolVersion+"+codex.test", toolVersion)
+				startSkillRoot = cacheInstallRoot
+			}
+			lockPath := filepath.Join(startSkillRoot, "plugins", "slidex", ".codex-plugin", "version-lock.json")
+			mutateCandidateJSONForTest(t, lockPath, func(value map[string]any) {
+				value["requiredCodexCliVersion"] = "0.0.0"
+			})
+			result := appServerPluginSmokeResult{
+				Status:                  "pass",
+				PluginReadOK:            true,
+				PluginInstallStateFound: true,
+				PluginInstalled:         true,
+				PluginEnabled:           true,
+				PluginVersion:           toolVersion + "+codex.test",
+				PluginPath:              filepath.ToSlash(filepath.Join(installRoot, "plugins", "slidex")),
+				StartSkillFound:         true,
+				StartSkillPath:          filepath.ToSlash(filepath.Join(startSkillRoot, "plugins", "slidex", "skills", "slidex-start", "SKILL.md")),
+			}
+			if got := postRestartPluginVerificationStatus(result, installRoot); got != "drift" {
+				t.Fatalf("required Codex version drift verification status = %q", got)
+			}
+		})
+	}
+}
+
 func TestAppServerPluginSmokeUsesDocumentedPluginSurfaces(t *testing.T) {
 	root := repoRootForTest(t)
 	oldWD, err := os.Getwd()

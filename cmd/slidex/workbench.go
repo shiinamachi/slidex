@@ -714,7 +714,7 @@ func runWorkbenchAutoUpdatePreflight(ctx context.Context) workbenchAutoUpdateRes
 	}
 	result.TargetVersion = targetVersion
 	result.TargetTag = targetTag
-	applyResult, err := applyCandidateBundle(status, candidateRoot, targetVersion, targetTag)
+	applyResult, err := applyCandidateBundleWithOptions(status, candidateRoot, targetVersion, targetTag, updateApplyOptions{ExecuteCandidateChecks: true})
 	result.ApplyResult = &applyResult
 	if err != nil {
 		result.Status = "apply_failed"

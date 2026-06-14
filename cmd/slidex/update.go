@@ -620,7 +620,10 @@ func runUpdateApply(args []string) error {
 	}
 	*targetVersion = canonicalVersion
 	*targetTag = canonicalTag
-	result, err := applyCandidateBundle(status, candidateRoot, *targetVersion, *targetTag)
+	applyOptions := updateApplyOptions{
+		ExecuteCandidateChecks: *candidate == "",
+	}
+	result, err := applyCandidateBundleWithOptions(status, candidateRoot, *targetVersion, *targetTag, applyOptions)
 	if *jsonOut {
 		if printErr := printJSON(result); printErr != nil && err == nil {
 			err = printErr
@@ -2198,7 +2201,16 @@ func singleExtractedRoot(dest string) string {
 	return filepath.Join(dest, entries[0].Name())
 }
 
+type updateApplyOptions struct {
+	// Explicit --candidate trees remain static-only so update apply does not execute arbitrary local bundles.
+	ExecuteCandidateChecks bool
+}
+
 func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, targetTag string) (updateApplyResult, error) {
+	return applyCandidateBundleWithOptions(status, candidateRoot, targetVersion, targetTag, updateApplyOptions{})
+}
+
+func applyCandidateBundleWithOptions(status updateStatus, candidateRoot, targetVersion, targetTag string, options updateApplyOptions) (updateApplyResult, error) {
 	canonicalVersion, canonicalTag, targetErr := canonicalUpdateTargetInputs(targetVersion, targetTag)
 	if targetErr == nil {
 		targetVersion = canonicalVersion
@@ -2219,7 +2231,7 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		result.CandidateValidation = append(result.CandidateValidation, fail("update.target_identity", targetErr.Error(), filepath.ToSlash(filepath.Join(candidateRoot, ".slidex", "install.json"))))
 		return result, nil
 	}
-	result.CandidateValidation = validateCandidateBundleForStatus(candidateRoot, targetVersion, status.Channel)
+	result.CandidateValidation = validateCandidateBundleForApply(candidateRoot, targetVersion, status.Channel, options.ExecuteCandidateChecks)
 	if hasFailures(result.CandidateValidation) {
 		return result, nil
 	}
@@ -2235,7 +2247,7 @@ func applyCandidateBundle(status updateStatus, candidateRoot, targetVersion, tar
 		result.PluginVerificationStatus = "restart_required"
 		return result, nil
 	}
-	stagedRoot, backupRoot, stagedValidation, err := replaceInstallRootWithCandidate(status.InstallRoot, candidateRoot, targetVersion, status.Channel)
+	stagedRoot, backupRoot, stagedValidation, err := replaceInstallRootWithCandidate(status.InstallRoot, candidateRoot, targetVersion, status.Channel, options)
 	result.StagedRoot = filepath.ToSlash(stagedRoot)
 	result.BackupRoot = filepath.ToSlash(backupRoot)
 	if err != nil {
@@ -2614,7 +2626,7 @@ func isSHA256Hex(value string) bool {
 
 var beforeUpdateStagedCandidateValidation func(stagedRoot string) error
 
-func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion, statusChannel string) (stagedRoot, backupRoot string, findings []qaFinding, err error) {
+func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion, statusChannel string, options updateApplyOptions) (stagedRoot, backupRoot string, findings []qaFinding, err error) {
 	stagedRoot, err = copyCandidateToSiblingStage(installRoot, candidateRoot, targetVersion, "staged")
 	if err != nil {
 		return stagedRoot, backupRoot, findings, err
@@ -2625,7 +2637,7 @@ func replaceInstallRootWithCandidate(installRoot, candidateRoot, targetVersion, 
 			return stagedRoot, backupRoot, findings, err
 		}
 	}
-	findings = validateCandidateBundleForStatus(stagedRoot, targetVersion, statusChannel)
+	findings = validateCandidateBundleForApply(stagedRoot, targetVersion, statusChannel, options.ExecuteCandidateChecks)
 	if hasFailures(findings) {
 		_ = os.RemoveAll(stagedRoot)
 		return stagedRoot, backupRoot, findings, nil
@@ -3618,6 +3630,14 @@ func validateCandidateBundleForStatus(root, expectedVersion, statusChannel strin
 		findings = append(findings, fail("update.candidate_channel", "candidate channel must remain "+statusChannel+", got "+metadata.Channel, filepath.ToSlash(metadataPath)))
 	}
 	return findings
+}
+
+func validateCandidateBundleForApply(root, expectedVersion, statusChannel string, executeCandidateChecks bool) []qaFinding {
+	findings := validateCandidateBundleForStatus(root, expectedVersion, statusChannel)
+	if hasFailures(findings) || !executeCandidateChecks {
+		return findings
+	}
+	return append(findings, validateCandidateBundleDynamicChecks(root, expectedVersion)...)
 }
 
 func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
