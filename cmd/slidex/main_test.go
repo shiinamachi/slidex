@@ -2312,6 +2312,63 @@ func TestPostRestartPluginVerificationRequiresInstalledEnabledPlugin(t *testing.
 	}
 }
 
+func TestPostRestartPluginVerificationRejectsNestedPluginPath(t *testing.T) {
+	installRoot := t.TempDir()
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+	pluginRoot := filepath.Join(installRoot, "plugins", "slidex")
+	result := appServerPluginSmokeResult{
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           true,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(filepath.Join(pluginRoot, "nested")),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(filepath.Join(pluginRoot, "skills", "slidex-start", "SKILL.md")),
+	}
+	if got := postRestartPluginVerificationStatus(result, installRoot); got != "drift" {
+		t.Fatalf("nested plugin path verification status = %q", got)
+	}
+}
+
+func TestPostRestartPluginVerificationRejectsSkillSymlinkAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows test hosts")
+	}
+	installRoot := t.TempDir()
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+	pluginRoot := filepath.Join(installRoot, "plugins", "slidex")
+	skillsLink := filepath.Join(pluginRoot, "skills")
+	if err := os.RemoveAll(skillsLink); err != nil {
+		t.Fatal(err)
+	}
+	externalSkills := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(filepath.Join(externalSkills, "slidex-start"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalSkills, "slidex-start", "SKILL.md"), []byte("# slidex-start\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalSkills, skillsLink); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	result := appServerPluginSmokeResult{
+		Status:                  "pass",
+		PluginReadOK:            true,
+		PluginInstallStateFound: true,
+		PluginInstalled:         true,
+		PluginEnabled:           true,
+		PluginVersion:           toolVersion + "+codex.test",
+		PluginPath:              filepath.ToSlash(pluginRoot),
+		StartSkillFound:         true,
+		StartSkillPath:          filepath.ToSlash(filepath.Join(pluginRoot, "skills", "slidex-start", "SKILL.md")),
+	}
+	if got := postRestartPluginVerificationStatus(result, installRoot); got == "verified" {
+		t.Fatalf("skill symlink ancestor should not verify, got %q", got)
+	}
+}
+
 func TestPostRestartPluginVerificationDetectsManifestDrift(t *testing.T) {
 	installRoot := t.TempDir()
 	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.other", toolVersion)

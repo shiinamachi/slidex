@@ -132,8 +132,8 @@ func TestUpdateStatusDisablesWhenMetadataRootIsStale(t *testing.T) {
 	if status.InstallRoot != filepath.ToSlash(installRoot) {
 		t.Fatalf("status should use resolved install root, got %#v", status)
 	}
-	if status.InstalledMetadata == nil || status.InstalledMetadata.InstallRoot != filepath.ToSlash(staleRoot) {
-		t.Fatalf("installed metadata should remain visible for drift evidence: %#v", status.InstalledMetadata)
+	if status.InstalledMetadata != nil {
+		t.Fatalf("stale install metadata should not be exposed in public status: %#v", status.InstalledMetadata)
 	}
 	if status.Channel != updateChannelLocalDevelopment || status.UpdatesEnabled || status.Status != "disabled" {
 		t.Fatalf("stale metadata root should disable updates: %#v", status)
@@ -315,6 +315,12 @@ func TestUpdateStatusDisablesIncompleteReleaseMetadata(t *testing.T) {
 			if tc.wantCurrent != "" && status.CurrentVersion != tc.wantCurrent {
 				t.Fatalf("current version = %q, want %q", status.CurrentVersion, tc.wantCurrent)
 			}
+			if status.InstalledMetadata != nil {
+				t.Fatalf("incomplete release metadata should not be exposed in public status: %#v", status.InstalledMetadata)
+			}
+			if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
+				t.Fatalf("disabled status with incomplete metadata should remain schema-valid: %v", err)
+			}
 		})
 	}
 }
@@ -352,6 +358,12 @@ func TestUpdateStatusDisablesSchemaInvalidReleaseMetadata(t *testing.T) {
 	}
 	if !strings.Contains(status.Reason, "schema validation failed") {
 		t.Fatalf("schema-invalid metadata reason missing: %#v", status)
+	}
+	if status.InstalledMetadata != nil {
+		t.Fatalf("schema-invalid release metadata should not be exposed in public status: %#v", status.InstalledMetadata)
+	}
+	if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
+		t.Fatalf("disabled status with schema-invalid metadata should remain schema-valid: %v", err)
 	}
 }
 
@@ -4349,6 +4361,99 @@ func TestUpdateStatusRejectsForgedVerifiedStateWithoutPluginEvidence(t *testing.
 	}
 }
 
+func TestCurrentUpdateStatusRejectsNestedVerifiedPluginPath(t *testing.T) {
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
+	state := updateState{
+		SchemaVersion:          updateStateSchemaVersion,
+		ToolName:               toolName,
+		CurrentVersion:         toolVersion,
+		TargetVersion:          "0.2.0",
+		TargetTag:              "v0.2.0",
+		Channel:                updateChannelProduction,
+		RestartRequired:        false,
+		VerificationStatus:     "verified",
+		VerificationCommand:    "slidex update verify --json",
+		VerifiedPluginVersion:  toolVersion + "+codex.test",
+		VerifiedPluginPath:     filepath.ToSlash(filepath.Join(pluginPath, "nested")),
+		VerifiedStartSkillPath: filepath.ToSlash(filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")),
+		PluginUpdatedAt:        "2026-06-10T00:00:00Z",
+		UpdatedAt:              "2026-06-10T00:00:00Z",
+	}
+	if err := writeSourceJSONFile(updateStatePath(installRoot), state); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("nested verified plugin path should fail closed: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "verifiedPluginPath must be") {
+		t.Fatalf("nested verified plugin path reason missing: %#v", status)
+	}
+}
+
+func TestUpdateStatusRejectsVerifiedSkillSymlinkAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows test hosts")
+	}
+	installRoot := t.TempDir()
+	metadataPath := installMetadataPath(installRoot)
+	writeInstallMetadataForTest(t, metadataPath, releaseInstallMetadataForTest(t, toolVersion))
+	writePostRestartPluginFilesForTest(t, installRoot, toolVersion+"+codex.test", toolVersion)
+	pluginPath := filepath.Join(installRoot, "plugins", "slidex")
+	skillsLink := filepath.Join(pluginPath, "skills")
+	if err := os.RemoveAll(skillsLink); err != nil {
+		t.Fatal(err)
+	}
+	externalSkills := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(filepath.Join(externalSkills, "slidex-start"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalSkills, "slidex-start", "SKILL.md"), []byte("# slidex-start\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalSkills, skillsLink); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	state := updateState{
+		SchemaVersion:          updateStateSchemaVersion,
+		ToolName:               toolName,
+		CurrentVersion:         toolVersion,
+		TargetVersion:          "0.2.0",
+		TargetTag:              "v0.2.0",
+		Channel:                updateChannelProduction,
+		RestartRequired:        false,
+		VerificationStatus:     "verified",
+		VerificationCommand:    "slidex update verify --json",
+		VerifiedPluginVersion:  toolVersion + "+codex.test",
+		VerifiedPluginPath:     filepath.ToSlash(pluginPath),
+		VerifiedStartSkillPath: filepath.ToSlash(filepath.Join(pluginPath, "skills", "slidex-start", "SKILL.md")),
+		PluginUpdatedAt:        "2026-06-10T00:00:00Z",
+		UpdatedAt:              "2026-06-10T00:00:00Z",
+	}
+	if err := writeSourceJSONFile(updateStatePath(installRoot), state); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := currentUpdateStatus(installRoot, metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RestartRequired || status.PluginVerificationStatus != "restart_required" {
+		t.Fatalf("verified skill symlink ancestor should fail closed: %#v", status)
+	}
+	if !strings.Contains(status.Reason, "symlinks") && !strings.Contains(status.Reason, "reparse") {
+		t.Fatalf("symlink ancestor reason missing: %#v", status)
+	}
+}
+
 func TestUpdateStatusIgnoresSerializedVerificationCommand(t *testing.T) {
 	installRoot := t.TempDir()
 	metadataPath := installMetadataPath(installRoot)
@@ -4651,9 +4756,29 @@ func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
 	if err := validatePayloadAgainstBundledSchema(status, updateStatusSchemaFile); err != nil {
 		t.Fatalf("update status schema should accept complete pending payload: %v", err)
 	}
+	allowedNextVerificationCommands := []string{
+		"slidex update verify --json",
+		"slidex codex app-server plugin-smoke --json",
+		"slidex update activate-pending --yes --json",
+	}
+	for _, command := range allowedNextVerificationCommands {
+		statusWithCommand := status
+		statusWithCommand.NextVerificationCommand = command
+		if err := validatePayloadAgainstBundledSchema(statusWithCommand, updateStatusSchemaFile); err != nil {
+			t.Fatalf("update status schema should accept nextVerificationCommand %q: %v", command, err)
+		}
+	}
 	statusRaw, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var statusInvalidNextCommand map[string]any
+	if err := json.Unmarshal(statusRaw, &statusInvalidNextCommand); err != nil {
+		t.Fatal(err)
+	}
+	statusInvalidNextCommand["nextVerificationCommand"] = "evil-command --should-not-be-used"
+	if err := validatePayloadAgainstBundledSchema(statusInvalidNextCommand, updateStatusSchemaFile); err == nil {
+		t.Fatal("update status schema should reject unsupported nextVerificationCommand")
 	}
 	var statusMissingActivatorPath map[string]any
 	if err := json.Unmarshal(statusRaw, &statusMissingActivatorPath); err != nil {
@@ -4696,6 +4821,40 @@ func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
 	}
 	if err := validatePayloadAgainstBundledSchema(state, updateStateSchemaFile); err != nil {
 		t.Fatalf("update state schema should accept complete payload: %v", err)
+	}
+	applyResult := updateApplyResult{
+		ToolName:                 toolName,
+		CurrentVersion:           toolVersion,
+		TargetVersion:            "0.2.0",
+		TargetTag:                "v0.2.0",
+		Channel:                  updateChannelProduction,
+		InstallRoot:              pending.InstallRoot,
+		Status:                   "applied",
+		RestartRequired:          true,
+		PluginVerificationStatus: "restart_required",
+		NextVerificationCommand:  "slidex codex app-server plugin-smoke --json",
+	}
+	if err := validatePayloadAgainstBundledSchema(applyResult, updateApplyResultSchemaFile); err != nil {
+		t.Fatalf("update apply result schema should accept complete payload: %v", err)
+	}
+	for _, command := range allowedNextVerificationCommands {
+		applyResultWithCommand := applyResult
+		applyResultWithCommand.NextVerificationCommand = command
+		if err := validatePayloadAgainstBundledSchema(applyResultWithCommand, updateApplyResultSchemaFile); err != nil {
+			t.Fatalf("update apply result schema should accept nextVerificationCommand %q: %v", command, err)
+		}
+	}
+	applyResultRaw, err := json.Marshal(applyResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applyResultInvalidNextCommand map[string]any
+	if err := json.Unmarshal(applyResultRaw, &applyResultInvalidNextCommand); err != nil {
+		t.Fatal(err)
+	}
+	applyResultInvalidNextCommand["nextVerificationCommand"] = "evil-command --should-not-be-used"
+	if err := validatePayloadAgainstBundledSchema(applyResultInvalidNextCommand, updateApplyResultSchemaFile); err == nil {
+		t.Fatal("update apply result schema should reject unsupported nextVerificationCommand")
 	}
 	stateRaw, err := json.Marshal(state)
 	if err != nil {

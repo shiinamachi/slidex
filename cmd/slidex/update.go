@@ -803,12 +803,18 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 
 	metadata, metadataErr := readInstallMetadata(metadataPath)
 	channel, mode, reason := inferUpdateChannel(installRoot, metadata, metadataErr)
+	metadataTrusted := false
+	if metadata != nil {
+		metadataTrusted = validateInstallMetadataSchema(metadata) == nil
+	}
 	if metadata != nil && (channel == updateChannelProduction || channel == updateChannelCanary) {
 		if issue := installedReleaseMetadataIssue(metadata); issue != "" {
+			metadataTrusted = false
 			channel = updateChannelLocalDevelopment
 			mode = firstNonEmpty(metadata.InstallMode, installModeUnknown)
 			reason = "install metadata is inconsistent; update is disabled fail-closed: " + issue
 		} else if issue := installedReleaseMetadataBindingIssue(installRoot, metadataPath, metadata); issue != "" {
+			metadataTrusted = false
 			channel = updateChannelLocalDevelopment
 			mode = firstNonEmpty(metadata.InstallMode, installModeUnknown)
 			reason = "install metadata is not bound to the resolved install root; update is disabled fail-closed: " + issue
@@ -830,7 +836,7 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 		NextVerificationCommand:   "slidex update verify --json",
 		PersistedRestartStatePath: filepath.ToSlash(statePath),
 	}
-	if metadata != nil {
+	if metadataTrusted {
 		status.InstalledMetadata = metadata
 		if metadata.Version != "" {
 			status.CurrentVersion = metadata.Version
@@ -3153,8 +3159,14 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 	if !filepath.IsAbs(pluginPath) {
 		return fmt.Errorf("%s: verifiedPluginPath must be absolute, got %q", path, state.VerifiedPluginPath)
 	}
+	if err := rejectSymlinkAncestors(pluginPath); err != nil {
+		return fmt.Errorf("%s: verifiedPluginPath has unsafe ancestor: %s: %v", path, filepath.ToSlash(pluginPath), err)
+	}
 	if !pathWithin(pluginRoot, pluginPath) {
 		return fmt.Errorf("%s: verifiedPluginPath must be under %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(pluginPath))
+	}
+	if !sameFilesystemPath(pluginPath, pluginRoot) {
+		return fmt.Errorf("%s: verifiedPluginPath must be %s, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(pluginPath))
 	}
 	pluginInfo, err := os.Lstat(pluginPath)
 	if err != nil {
@@ -3173,12 +3185,8 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
 		return fmt.Errorf("%s: verifiedStartSkillPath must end with skills/slidex-start/SKILL.md, got %s", path, filepath.ToSlash(skillPath))
 	}
-	skillInfo, err := os.Lstat(skillPath)
-	if err != nil {
-		return fmt.Errorf("%s: verifiedStartSkillPath must be an existing regular non-symlink file: %s: %v", path, filepath.ToSlash(skillPath), err)
-	}
-	if isSymlinkOrReparsePoint(skillPath, skillInfo) || !skillInfo.Mode().IsRegular() {
-		return fmt.Errorf("%s: verifiedStartSkillPath must be an existing regular non-symlink file: %s", path, filepath.ToSlash(skillPath))
+	if err := validateVerifiedStartSkillFile(skillPath); err != nil {
+		return fmt.Errorf("%s: verifiedStartSkillPath must be a safe regular file: %s: %v", path, filepath.ToSlash(skillPath), err)
 	}
 	if status := postRestartSkillPathStatus(pluginRoot, skillPath, state.VerifiedPluginVersion); status != "verified" {
 		return fmt.Errorf("%s: verifiedStartSkillPath must be under %s or a matching Codex plugin cache, got %s", path, filepath.ToSlash(pluginRoot), filepath.ToSlash(skillPath))
@@ -3187,6 +3195,11 @@ func validateVerifiedUpdateState(installRoot, path string, state updateState) er
 		return fmt.Errorf("%s: verifiedPluginPath metadata must match current slidex plugin contract: %s", path, filepath.ToSlash(pluginPath))
 	}
 	return nil
+}
+
+func validateVerifiedStartSkillFile(skillPath string) error {
+	_, err := regularFileInfoForRead(skillPath)
+	return err
 }
 
 func derivedUpdateStateVerificationCommand(state *updateState) string {

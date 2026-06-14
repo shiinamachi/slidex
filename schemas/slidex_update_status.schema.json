@@ -90,8 +90,7 @@
       "enum": ["not_verified", "restart_required", "verified", "drift"]
     },
     "nextVerificationCommand": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/$defs/nextVerificationCommand"
     },
     "verificationFindings": {
       "type": "array",
@@ -142,6 +141,14 @@
     }
   },
   "$defs": {
+    "nextVerificationCommand": {
+      "type": "string",
+      "enum": [
+        "slidex update verify --json",
+        "slidex codex app-server plugin-smoke --json",
+        "slidex update activate-pending --yes --json"
+      ]
+    },
     "asset": {
       "type": "object",
       "required": ["name", "browserDownloadUrl"],

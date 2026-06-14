@@ -1717,8 +1717,21 @@ func postRestartPluginVerificationStatus(result appServerPluginSmokeResult, inst
 	if !filepath.IsAbs(pluginPath) || !filepath.IsAbs(skillPath) {
 		return "not_verified"
 	}
+	if err := rejectSymlinkAncestors(pluginPath); err != nil {
+		return "not_verified"
+	}
 	if !pathWithin(pluginRoot, pluginPath) {
 		return "drift"
+	}
+	if !sameFilesystemPath(pluginPath, pluginRoot) {
+		return "drift"
+	}
+	pluginInfo, err := os.Lstat(pluginPath)
+	if err != nil {
+		return "not_verified"
+	}
+	if isSymlinkOrReparsePoint(pluginPath, pluginInfo) || !pluginInfo.IsDir() {
+		return "not_verified"
 	}
 	if status := postRestartSkillPathStatus(pluginRoot, skillPath, result.PluginVersion); status != "verified" {
 		return status
@@ -1732,6 +1745,9 @@ func postRestartPluginVerificationStatus(result appServerPluginSmokeResult, inst
 func postRestartSkillPathStatus(pluginRoot, skillPath, visiblePluginVersion string) string {
 	if !strings.HasSuffix(filepath.ToSlash(skillPath), "skills/slidex-start/SKILL.md") {
 		return "drift"
+	}
+	if err := validateVerifiedStartSkillFile(skillPath); err != nil {
+		return "not_verified"
 	}
 	if pathWithin(pluginRoot, skillPath) {
 		return "verified"
