@@ -49,7 +49,9 @@
       "pattern": "^[A-Fa-f0-9]{64}$"
     },
     "activatorPath": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
     },
     "activatorSha256": {
       "type": "string",

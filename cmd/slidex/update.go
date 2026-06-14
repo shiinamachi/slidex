@@ -880,15 +880,18 @@ func currentUpdateStatus(installRootArg, metadataPathArg string) (updateStatus, 
 			status.NextVerificationCommand = "slidex update activate-pending --yes --json"
 			status.Reason = appendReason(status.Reason, "pending update state is invalid and must be repaired before activation: "+err.Error())
 		} else {
+			activationCommand := pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot)
+			safePending := *pending
+			safePending.ActivationCommand = activationCommand
 			status.PendingActivation = true
-			status.PendingUpdate = pending
+			status.PendingUpdate = &safePending
 			status.PendingUpdatePath = filepath.ToSlash(pendingPath)
 			status.Status = "pending-activation"
 			status.TargetVersion = pending.TargetVersion
 			status.TargetTag = pending.TargetTag
 			status.RestartRequired = true
 			status.PluginVerificationStatus = "restart_required"
-			status.PendingActivationCommand = pendingActivationCommand(filepath.FromSlash(pending.ActivatorPath), status.InstallRoot)
+			status.PendingActivationCommand = activationCommand
 		}
 	}
 	return status, nil
@@ -2311,6 +2314,7 @@ func stagePendingUpdateHandoffWithOptions(installRoot, candidateRoot, targetVers
 		return "", "", nil, err
 	}
 	activatorPath := ""
+	pendingPathForCleanup := ""
 	committed := false
 	defer func() {
 		if committed {
@@ -2322,8 +2326,8 @@ func stagePendingUpdateHandoffWithOptions(installRoot, candidateRoot, targetVers
 		if activatorPath != "" {
 			_ = os.RemoveAll(filepath.Dir(activatorPath))
 		}
-		if pendingPath != "" {
-			_ = os.Remove(pendingPath)
+		if pendingPathForCleanup != "" {
+			_ = os.Remove(pendingPathForCleanup)
 		}
 	}()
 	if beforeUpdateStagedCandidateValidation != nil {
@@ -2343,18 +2347,34 @@ func stagePendingUpdateHandoffWithOptions(installRoot, candidateRoot, targetVers
 	if err != nil {
 		return stagedRoot, "", findings, err
 	}
+	pendingPathForCleanup = pendingPath
 	pending, _, err := readPendingUpdate(installRoot)
 	if err != nil {
-		return stagedRoot, pendingPath, findings, err
+		return stagedRoot, "", findings, err
 	}
 	if err := validatePendingUpdate(installRoot, pending); err != nil {
-		return stagedRoot, pendingPath, findings, err
+		return stagedRoot, "", findings, err
+	}
+	if err := validatePendingUpdateAgainstActivatorSchema(pendingPath, activatorPath); err != nil {
+		return stagedRoot, "", findings, err
 	}
 	if err := markPluginRestartRequired(installRoot, targetVersion, targetTag); err != nil {
-		return stagedRoot, pendingPath, findings, err
+		return stagedRoot, "", findings, err
 	}
 	committed = true
 	return stagedRoot, pendingPath, findings, nil
+}
+
+func validatePendingUpdateAgainstActivatorSchema(pendingPath, activatorPath string) error {
+	raw, err := readRegularFileWithMaxBytes(pendingPath, maxUpdateMetadataBytes)
+	if err != nil {
+		return err
+	}
+	schemaPath := filepath.Join(filepath.Dir(activatorPath), "schemas", pendingUpdateSchemaFile)
+	if err := validateRawJSONAgainstSchema(raw, schemaPath); err != nil {
+		return fmt.Errorf("pending update is incompatible with staged activator schema: %w", err)
+	}
+	return nil
 }
 
 func stageCandidateForWindowsHandoff(installRoot, candidateRoot, targetVersion string) (string, error) {

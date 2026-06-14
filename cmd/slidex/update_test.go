@@ -3449,6 +3449,74 @@ func TestStagePendingUpdateHandoffRejectsInvalidStagedCopy(t *testing.T) {
 	}
 }
 
+func TestStagePendingUpdateHandoffRejectsActivatorSchemaIncompatiblePending(t *testing.T) {
+	parent := t.TempDir()
+	installRoot := filepath.Join(parent, "slidex")
+	if err := os.MkdirAll(filepath.Join(installRoot, ".slidex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "VERSION"), []byte(toolVersion), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeInstallMetadataForTest(t, installMetadataPath(installRoot), releaseInstallMetadataForTest(t, toolVersion))
+	candidate := filepath.Join(parent, "candidate")
+	writeCandidateBundleForTest(t, candidate, "0.2.0")
+
+	oldHook := beforeUpdateStagedCandidateValidation
+	beforeUpdateStagedCandidateValidation = func(stagedRoot string) error {
+		schemaPath := filepath.Join(stagedRoot, "schemas", pendingUpdateSchemaFile)
+		raw, err := readRegularFileWithMaxBytes(schemaPath, maxProjectSchemaBytes)
+		if err != nil {
+			return err
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			return err
+		}
+		required, ok := schema["required"].([]any)
+		if !ok {
+			return fmt.Errorf("pending schema required field is not an array")
+		}
+		schema["required"] = append(required, "futureRequired")
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("pending schema properties field is not an object")
+		}
+		properties["futureRequired"] = map[string]any{"type": "string"}
+		updated, err := json.MarshalIndent(schema, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(schemaPath, append(updated, '\n'), 0o644)
+	}
+	t.Cleanup(func() {
+		beforeUpdateStagedCandidateValidation = oldHook
+	})
+
+	stagedRoot, pendingPath, findings, err := stagePendingUpdateHandoffWithOptions(installRoot, candidate, "0.2.0", "v0.2.0", updateChannelProduction, updateApplyOptions{ExecuteCandidateChecks: true})
+	if err == nil {
+		t.Fatal("activator schema-incompatible pending update should fail")
+	}
+	if !strings.Contains(err.Error(), "pending update is incompatible with staged activator schema") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hasFailures(findings) {
+		t.Fatalf("candidate validation should pass before activator schema compatibility check: %#v", findings)
+	}
+	if pendingPath != "" {
+		t.Fatalf("schema-incompatible handoff should not return committed pending path, got %s", pendingPath)
+	}
+	if _, err := os.Stat(stagedRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("schema-incompatible staged copy should be cleaned up, stat err=%v", err)
+	}
+	if _, err := os.Stat(pendingUpdatePath(installRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("schema-incompatible handoff should not leave pending update, stat err=%v", err)
+	}
+	if _, err := os.Stat(updateStatePath(installRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("schema-incompatible handoff should not mark restart required, stat err=%v", err)
+	}
+}
+
 func TestStagePendingUpdateHandoffStagesActivatorFromValidatedCopy(t *testing.T) {
 	parent := t.TempDir()
 	installRoot := filepath.Join(parent, "slidex")
@@ -3531,8 +3599,32 @@ func TestPendingUpdateIgnoresSerializedActivationCommand(t *testing.T) {
 	if strings.Contains(status.PendingActivationCommand, "evil-command") {
 		t.Fatalf("status trusted serialized activation command: %s", status.PendingActivationCommand)
 	}
+	if status.PendingUpdate == nil {
+		t.Fatal("status should include sanitized pending update")
+	}
+	if strings.Contains(status.PendingUpdate.ActivationCommand, "evil-command") {
+		t.Fatalf("nested pending update trusted serialized activation command: %s", status.PendingUpdate.ActivationCommand)
+	}
+	if status.PendingUpdate.ActivationCommand != status.PendingActivationCommand {
+		t.Fatalf("nested activation command = %s, want derived command %s", status.PendingUpdate.ActivationCommand, status.PendingActivationCommand)
+	}
 	if !strings.Contains(status.PendingActivationCommand, filepath.ToSlash(filepath.FromSlash(pending.ActivatorPath))) {
 		t.Fatalf("status command should be derived from activator path, got %s", status.PendingActivationCommand)
+	}
+
+	var statusErr error
+	output := captureStdoutForTest(t, func() {
+		statusErr = runUpdateStatus([]string{
+			"--install-root", installRoot,
+			"--metadata", installMetadataPath(installRoot),
+			"--json",
+		})
+	})
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if strings.Contains(output, "evil-command") {
+		t.Fatalf("JSON status output leaked serialized activation command:\n%s", output)
 	}
 }
 
@@ -4427,6 +4519,16 @@ func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
 	if err := validatePayloadAgainstBundledSchema(pendingMissingActivatorPath, pendingUpdateSchemaFile); err == nil {
 		t.Fatal("pending update schema should require activatorPath")
 	}
+	for _, badActivatorPath := range []string{"", " "} {
+		var pendingBlankActivatorPath map[string]any
+		if err := json.Unmarshal(pendingRaw, &pendingBlankActivatorPath); err != nil {
+			t.Fatal(err)
+		}
+		pendingBlankActivatorPath["activatorPath"] = badActivatorPath
+		if err := validatePayloadAgainstBundledSchema(pendingBlankActivatorPath, pendingUpdateSchemaFile); err == nil {
+			t.Fatalf("pending update schema should reject activatorPath %q", badActivatorPath)
+		}
+	}
 
 	status := updateStatus{
 		ToolName:                 toolName,
@@ -4461,6 +4563,20 @@ func TestUpdateJSONSchemasValidateBookkeepingPayloads(t *testing.T) {
 	delete(nestedPending, "activatorPath")
 	if err := validatePayloadAgainstBundledSchema(statusMissingActivatorPath, updateStatusSchemaFile); err == nil {
 		t.Fatal("update status schema should require nested pending activatorPath")
+	}
+	for _, badActivatorPath := range []string{"", " "} {
+		var statusBlankActivatorPath map[string]any
+		if err := json.Unmarshal(statusRaw, &statusBlankActivatorPath); err != nil {
+			t.Fatal(err)
+		}
+		nestedPending, ok := statusBlankActivatorPath["pendingUpdate"].(map[string]any)
+		if !ok {
+			t.Fatalf("pendingUpdate missing from marshaled status: %#v", statusBlankActivatorPath)
+		}
+		nestedPending["activatorPath"] = badActivatorPath
+		if err := validatePayloadAgainstBundledSchema(statusBlankActivatorPath, updateStatusSchemaFile); err == nil {
+			t.Fatalf("update status schema should reject nested activatorPath %q", badActivatorPath)
+		}
 	}
 
 	state := updateState{
