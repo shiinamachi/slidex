@@ -3314,7 +3314,7 @@ func TestRunMCPServerRejectsExtraOperands(t *testing.T) {
 	}
 }
 
-func TestMCPRenderToolSchemaExposesChromeOptions(t *testing.T) {
+func TestMCPRenderToolSchemaOmitsChromeOptions(t *testing.T) {
 	result, err := handleMCPRequest(map[string]any{"method": "tools/list"})
 	if err != nil {
 		t.Fatal(err)
@@ -3339,17 +3339,49 @@ func TestMCPRenderToolSchemaExposesChromeOptions(t *testing.T) {
 		if !ok {
 			t.Fatalf("render tool properties = %#v", schema["properties"])
 		}
-		chrome, ok := props["chrome"].(map[string]any)
-		if !ok || chrome["type"] != "string" {
-			t.Fatalf("render tool chrome schema = %#v", props["chrome"])
+		if _, ok := props["chrome"]; ok {
+			t.Fatalf("render tool must not expose chrome override schema: %#v", props["chrome"])
 		}
-		chromeNoSandbox, ok := props["chromeNoSandbox"].(map[string]any)
-		if !ok || chromeNoSandbox["type"] != "boolean" {
-			t.Fatalf("render tool chromeNoSandbox schema = %#v", props["chromeNoSandbox"])
+		if _, ok := props["chromeNoSandbox"]; ok {
+			t.Fatalf("render tool must not expose chromeNoSandbox override schema: %#v", props["chromeNoSandbox"])
 		}
 		return
 	}
 	t.Fatal("render MCP tool missing from tools/list")
+}
+
+func TestMCPRenderRejectsBrowserOverrideArgs(t *testing.T) {
+	deck := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "chrome path",
+			args: map[string]any{"chrome": "/tmp/fake-chrome"},
+			want: "chrome browser override",
+		},
+		{
+			name: "chrome no sandbox",
+			args: map[string]any{"chromeNoSandbox": true},
+			want: "chrome sandbox override",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"deck": deck}
+			for key, value := range tc.args {
+				args[key] = value
+			}
+			_, err := callMCPTool("render", args)
+			if err == nil {
+				t.Fatal("expected browser override rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
 }
 
 func TestWorkbenchReadyValidatesSessionDeckAndPID(t *testing.T) {
