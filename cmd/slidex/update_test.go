@@ -1428,6 +1428,28 @@ func TestValidateCandidateBundleStaticRejectsGroupWorldWritableUnixPaths(t *test
 	}
 }
 
+func TestValidateCandidateBundleStaticRejectsMissingRuntimeLeafFiles(t *testing.T) {
+	for _, rel := range []string{
+		".agents/skills/slidex/SKILL.md",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ClientRequest.json",
+		"plugins/slidex/skills/slidex/SKILL.md",
+		"schemas/deck_spec.schema.json",
+	} {
+		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
+			root := t.TempDir()
+			writeCandidateBundleForTest(t, root, "0.2.0")
+			if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+
+			findings := validateCandidateBundleStatic(root, "0.2.0")
+			if !findingCheckPresent(findings, "update.candidate_runtime") {
+				t.Fatalf("missing runtime leaf %s should fail static validation: %#v", rel, findings)
+			}
+		})
+	}
+}
+
 func TestValidateCandidateBundleChecksInstallMetadataFields(t *testing.T) {
 	root := t.TempDir()
 	writeCandidateBundleForTest(t, root, "0.2.0")
@@ -4011,14 +4033,27 @@ func writeCandidateBundleForTest(t *testing.T, root, version string) {
 		binary = "slidex.exe"
 	}
 	files := map[string]string{
-		".mise.toml":              "go = \"1.26.3\"\n",
-		"CODEX_INSTALL_PROMPT.md": "Install slidex.\n",
-		"INSTALL.md":              "Install slidex.\n",
-		"LICENSE":                 "MIT\n",
-		"README.ko.md":            "# slidex\n",
-		"README.md":               "# slidex\n",
-		"VERSIONING.md":           "# slidex Version Management\n",
-		"VERSION":                 baseVersion,
+		".mise.toml":                     "go = \"1.26.3\"\n",
+		"CODEX_INSTALL_PROMPT.md":        "Install slidex.\n",
+		"INSTALL.md":                     "Install slidex.\n",
+		"LICENSE":                        "MIT\n",
+		"README.ko.md":                   "# slidex\n",
+		"README.md":                      "# slidex\n",
+		"VERSIONING.md":                  "# slidex Version Management\n",
+		"VERSION":                        baseVersion,
+		".agents/skills/slidex/SKILL.md": "# slidex skill\n",
+		".agents/skills/slidex/references/commands.md":                        "# commands reference\n",
+		"internal/codex/protocol/codex-cli-0.138.0/method_constants.go":       "package protocol\n",
+		"internal/codex/protocol/codex-cli-0.138.0/generated_types.go":        "package protocol\n",
+		"internal/codex/protocol/codex-cli-0.138.0/protocol_manifest.json":    "{}\n",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ClientRequest.json": "{}\n",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ServerRequest.json": "{}\n",
+		"plugins/slidex/README.md":                                            "# slidex plugin\n",
+		"plugins/slidex/hooks/manifest.json":                                  "{}\n",
+		"plugins/slidex/skills/slidex/SKILL.md":                               "# slidex\n",
+		"plugins/slidex/skills/slidex-finalize/SKILL.md":                      "# slidex finalize\n",
+		"plugins/slidex/skills/slidex-run/SKILL.md":                           "# slidex run\n",
+		"plugins/slidex/skills/slidex-start/SKILL.md":                         "# slidex start\n",
 		".slidex/install.json": `{
 		  "schemaVersion":"slidex.install.v1",
 		  "toolName":"slidex",

@@ -3649,6 +3649,36 @@ func validateCandidateBundleStatic(root, expectedVersion string) []qaFinding {
 			findings = append(findings, fail("update.candidate_runtime", "missing candidate runtime path: "+err.Error(), filepath.ToSlash(path)))
 		}
 	}
+	requiredFiles := []string{
+		".agents/skills/slidex/SKILL.md",
+		".agents/skills/slidex/references/commands.md",
+		"internal/codex/protocol/codex-cli-0.138.0/protocol_manifest.json",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ClientRequest.json",
+		"internal/codex/protocol/codex-cli-0.138.0/schema/ServerRequest.json",
+		"plugins/slidex/README.md",
+		"plugins/slidex/hooks/manifest.json",
+		"plugins/slidex/skills/slidex/SKILL.md",
+		"plugins/slidex/skills/slidex-finalize/SKILL.md",
+		"plugins/slidex/skills/slidex-run/SKILL.md",
+		"plugins/slidex/skills/slidex-start/SKILL.md",
+		"schemas/deck_spec.schema.json",
+		"schemas/slidex_install_metadata.schema.json",
+		"schemas/slidex_update_apply_result.schema.json",
+		"schemas/slidex_update_status.schema.json",
+	}
+	for _, rel := range requiredFiles {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		info, err := os.Lstat(path)
+		if err != nil {
+			findings = append(findings, fail("update.candidate_runtime", "missing candidate runtime file: "+err.Error(), filepath.ToSlash(path)))
+			continue
+		}
+		if isSymlinkOrReparsePoint(path, info) {
+			findings = append(findings, fail("update.candidate_runtime", "candidate runtime file must not be a symlink or reparse point", filepath.ToSlash(path)))
+		} else if !info.Mode().IsRegular() {
+			findings = append(findings, fail("update.candidate_runtime", "candidate runtime file must be a regular file", filepath.ToSlash(path)))
+		}
+	}
 	findings = append(findings, validateCandidateBundleMutableStatePaths(root)...)
 	versionPath := filepath.Join(root, "VERSION")
 	versionRaw, versionErr := readRegularFileWithMaxBytes(versionPath, maxUpdateVersionBytes)
